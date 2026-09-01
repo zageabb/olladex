@@ -9,7 +9,7 @@ import { ProjectPanel } from "../components/ProjectPanel";
 import { TerminalPanel } from "../components/TerminalPanel";
 import { request } from "../lib/api";
 
-type Project = { id: number; name: string; path: string; model: string; approval_mode: "review" | "assisted" | "autonomous"; instructions: string; git_author_name: string; git_author_email: string };
+type Project = { id: number; name: string; path: string; model: string; approval_mode: "review" | "assisted" | "autonomous"; instructions: string; git_author_name: string; git_author_email: string; model_profile_id?: number; profile_name?: string; profile_chat_model?: string; profile_embedding_model?: string; profile_temperature?: number; profile_max_steps?: number; profile_context_files?: number; profile_context_chars?: number };
 type Session = { id: number; project_id: number; title: string; updated_at: string; summary: string };
 type Activity = { tool: string; summary: string; arguments?: Record<string, unknown>; result?: Record<string, any> };
 type Message = { id?: number; role: "user" | "assistant"; content: string; activities?: Activity[] };
@@ -18,7 +18,7 @@ type Hunk = { index: number; header: string; lines: string[]; changes: number };
 type Change = { id: number; path: string; diff: string; hunks: Hunk[]; status: "proposed" | "applied" | "rejected" | "reverted"; created_at: string; updated_at: string };
 type Tab = "files" | "changes" | "terminal" | "diagrams" | "office" | "project";
 
-const WELCOME: Message = { role: "assistant", content: "Welcome to Olladex. Open a local repository, then ask me to inspect, change and test it. Repository tools, Bash, diagrams and Office files stay on your machine." };
+const WELCOME: Message = { role: "assistant", content: "Welcome to Olladex. Open a local repository, then ask me to inspect, change and test it. Repository tools, your local shell, diagrams and Office files stay on your machine." };
 
 export default function Home() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -164,10 +164,10 @@ export default function Home() {
 
   return <main className="app-shell">
     <header className="topbar">
-      <div className="brand"><span className="brand-mark">O</span><span>Olladex</span><em>v0.4</em></div>
+      <div className="brand"><span className="brand-mark">O</span><span>Olladex</span><em>v0.5</em></div>
       <div className="project-selector"><span>Repository</span><select value={project?.id || ""} onChange={(e) => setProject(projects.find((p) => p.id === Number(e.target.value)) || null)}><option value="">Open a repository</option>{projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
       <button className="global-search" onClick={() => setTab("files")}>⌕ Search this repository <kbd>⌘ K</kbd></button>
-      <div className={`connection ${status?.ollama.connected ? "online" : ""}`}><i />{status?.ollama.connected ? `${project?.model || status.ollama.models[0] || "Ollama"}` : "Ollama offline"}</div>
+      <div className={`connection ${status?.ollama.connected ? "online" : ""}`}><i />{status?.ollama.connected ? `${project?.profile_chat_model || project?.model || status.ollama.models[0] || "Ollama"}` : "Ollama offline"}</div>
       <button className="avatar">GA</button>
     </header>
 
@@ -196,7 +196,7 @@ export default function Home() {
           {messages.map((message, index) => <article className={`message ${message.role}`} key={`${message.role}-${message.id || index}`}><div className="message-avatar">{message.role === "assistant" ? "O" : "G"}</div><div className="message-stack"><div className="bubble">{message.content}</div>{message.activities?.map((activity, i) => <details className="activity-card" key={i}><summary><span>{activityIcon(activity.tool)}</span><div><strong>{activity.tool.replaceAll("_", " ")}</strong><small>{activity.summary}</small></div><b>⌄</b></summary><pre>{JSON.stringify(activity.result || activity.arguments, null, 2)}</pre>{activity.tool === "run_command" && activity.result?.status === "pending" && <div className="activity-actions"><button className="primary" onClick={() => approveCommand(activity)}>Approve command</button><button onClick={() => setTab("terminal")}>Open terminal</button></div>}{activity.tool === "write_file" && activity.result?.change_id && <div className="activity-actions"><button className="primary" onClick={() => setTab("changes")}>Review proposed change</button></div>}</details>)}</div></article>)}
           {busy && <article className="message assistant"><div className="message-avatar">O</div><div className="typing"><i/><i/><i/></div></article>}
         </div>
-        <form className="composer" onSubmit={send}><textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder={project ? "Ask Olladex to inspect, change or test this repository…" : "Open a repository to begin…"} disabled={!project || !session} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} /><div className="composer-actions"><div><button type="button" onClick={() => setTab("files")}>＋ Context</button><button type="button" onClick={() => setTab("terminal")}>⌘ Bash</button></div><div className="model-chip">{project?.model || "qwen3:14b"}</div><button className="send primary" disabled={busy || !prompt.trim()}>➤</button></div></form>
+        <form className="composer" onSubmit={send}><textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder={project ? "Ask Olladex to inspect, change or test this repository…" : "Open a repository to begin…"} disabled={!project || !session} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} /><div className="composer-actions"><div><button type="button" onClick={() => setTab("files")}>＋ Context</button><button type="button" onClick={() => setTab("terminal")}>⌘ Shell</button></div><div className="model-chip">{project?.profile_chat_model || project?.model || "qwen3:14b"}</div><button className="send primary" disabled={busy || !prompt.trim()}>➤</button></div></form>
       </section>
 
       <section className="inspector-panel">

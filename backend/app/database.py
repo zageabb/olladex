@@ -19,8 +19,21 @@ CREATE TABLE IF NOT EXISTS projects (
   instructions TEXT NOT NULL DEFAULT '',
   git_author_name TEXT NOT NULL DEFAULT 'Olladex User',
   git_author_email TEXT NOT NULL DEFAULT 'olladex@local',
+  model_profile_id INTEGER REFERENCES model_profiles(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL,
   last_opened_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS model_profiles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  chat_model TEXT NOT NULL,
+  embedding_model TEXT NOT NULL DEFAULT '',
+  temperature REAL NOT NULL DEFAULT 0.2,
+  max_steps INTEGER NOT NULL DEFAULT 8,
+  context_files INTEGER NOT NULL DEFAULT 8,
+  context_chars INTEGER NOT NULL DEFAULT 32000,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,6 +89,17 @@ CREATE TABLE IF NOT EXISTS git_operations (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS repository_index (
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  path TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  mtime_ns INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  vector TEXT NOT NULL DEFAULT '',
+  embedding_model TEXT NOT NULL DEFAULT '',
+  indexed_at TEXT NOT NULL,
+  PRIMARY KEY(project_id,path)
+);
 """
 
 ADDITIVE_COLUMNS = {
@@ -84,6 +108,7 @@ ADDITIVE_COLUMNS = {
         "instructions": "TEXT NOT NULL DEFAULT ''",
         "git_author_name": "TEXT NOT NULL DEFAULT 'Olladex User'",
         "git_author_email": "TEXT NOT NULL DEFAULT 'olladex@local'",
+        "model_profile_id": "INTEGER REFERENCES model_profiles(id) ON DELETE SET NULL",
     },
     "sessions": {
         "summary": "TEXT NOT NULL DEFAULT ''",
@@ -117,6 +142,14 @@ def init_db() -> None:
             for name, definition in columns.items():
                 if name not in existing:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+        stamp = now()
+        defaults = [
+            ("Balanced local", settings.ollama_model, settings.ollama_embedding_model, 0.2, 8, 8, 32000),
+            ("Fast review", settings.ollama_model, settings.ollama_embedding_model, 0.1, 6, 6, 20000),
+            ("Deep implementation", settings.ollama_model, settings.ollama_embedding_model, 0.15, 12, 12, 48000),
+        ]
+        for profile in defaults:
+            conn.execute("INSERT OR IGNORE INTO model_profiles(name,chat_model,embedding_model,temperature,max_steps,context_files,context_chars,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)", (*profile, stamp, stamp))
 
 
 @contextmanager

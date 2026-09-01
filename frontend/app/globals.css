@@ -1,3 +1,5 @@
+@import "@xterm/xterm/css/xterm.css";
+
 :root {
   --navy: #071a38;
   --navy-2: #06152e;
@@ -189,18 +191,16 @@ button.primary:hover { background: var(--blue-2); }
 .change-actions { padding: 9px 11px; display: flex; gap: 7px; background: #fff; border-top: 1px solid var(--line); }
 .change-actions button { padding: 6px 9px; font-size: 9px; }
 
-.terminal-panel { min-height: 0; display: grid; grid-template-rows: 1fr auto auto; color: #dbe7f8; background: var(--terminal); }
-.terminal-output { overflow: auto; padding: 15px; font-family: "SFMono-Regular", Consolas, monospace; font-size: 10px; line-height: 1.55; }
-.terminal-welcome { margin-bottom: 15px; color: #7085a3; }
-.terminal-run { position: relative; margin-bottom: 14px; }
-.terminal-run pre { margin: 4px 0; color: #b7c7dc; font: inherit; white-space: pre-wrap; }
-.terminal-run small { padding: 2px 5px; color: #ff948b; background: #ff5d5219; border-radius: 5px; }
-.terminal-run small.ok { color: #57d297; background: #42c58a18; }
+.terminal-panel { min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto auto; color: #dbe7f8; background: var(--terminal); }
+.xterm-host { min-height: 0; overflow: hidden; padding: 12px 8px 6px 12px; cursor: text; }
+.xterm-host .xterm { height: 100%; }
+.xterm-host .xterm-viewport { scrollbar-color: #314766 #0c1728; scrollbar-width: thin; }
 .prompt { color: #57d297; font-weight: 800; }
 .terminal-input { padding: 9px 12px; display: flex; align-items: center; gap: 8px; border-top: 1px solid #ffffff13; }
 .terminal-input input { flex: 1; color: #fff; background: transparent; border: 0; outline: 0; font-family: "SFMono-Regular", Consolas, monospace; font-size: 10px; }
 .terminal-input button { padding: 5px 10px; color: #dce9f8; background: #ffffff0b; border-color: #ffffff18; font-size: 9px; }
-.terminal-controls { padding: 6px 12px; display: flex; justify-content: flex-end; gap: 4px; border-top: 1px solid #ffffff0e; }
+.terminal-controls { min-height: 31px; padding: 6px 12px; display: flex; align-items: center; justify-content: flex-end; gap: 4px; border-top: 1px solid #ffffff0e; }
+.terminal-controls span { margin-right: auto; color: #7085a3; font-family: "SFMono-Regular", Consolas, monospace; font-size: 8px; }
 .terminal-controls button { padding: 4px 7px; color: #90a4bf; background: #ffffff08; border-color: #ffffff12; font-family: "SFMono-Regular", Consolas, monospace; font-size: 8px; }
 
 .diagram-studio { min-height: 0; display: grid; grid-template-rows: auto 1fr; background: #f4f7fb; }
@@ -239,11 +239,15 @@ button.primary:hover { background: var(--blue-2); }
 .project-columns { margin: 12px 0; display: grid; grid-template-columns: 1fr 1.1fr; gap: 12px; }
 .project-columns section, .symbol-map { padding: 16px; }
 .context-lens { margin-bottom: 12px; padding: 16px; }
+.context-head { margin: 0 0 12px!important; display: flex!important; align-items: center; justify-content: space-between; gap: 12px; }
+.context-head > div:last-child { display: flex; align-items: center; gap: 6px; }
+.context-head span { padding: 4px 7px; color: #547caf; background: #edf4ff; border-radius: 7px; font-size: 8px; }
+.context-head button { padding: 6px 8px; font-size: 8px; }
 .context-lens h3 { margin: 2px 0 12px; font-size: 14px; }
 .context-lens form { display: flex; gap: 7px; }
 .context-lens form input { min-width: 0; flex: 1; padding: 8px 9px; border: 1px solid var(--line); border-radius: 7px; font-size: 9px; }
 .context-lens form button { padding: 7px 10px; font-size: 9px; }
-.context-lens > div { margin-top: 10px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+.context-lens > div:not(.context-head) { margin-top: 10px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
 .context-lens article { padding: 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; background: #f7f9fc; border-radius: 7px; }
 .context-lens article span { min-width: 0; display: flex; flex-direction: column; }
 .context-lens article strong { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
@@ -262,6 +266,12 @@ button.primary:hover { background: var(--blue-2); }
 .project-columns form > div button { padding: 6px 9px; font-size: 9px; }
 .project-columns form > div span { color: var(--muted); font-size: 8px; }
 .project-columns form > .git-identity { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.profile-builder { padding: 9px; background: #f7f9fc; border: 1px solid var(--line); border-radius: 8px; }
+.profile-builder summary { color: #315d98; cursor: pointer; font-size: 9px; font-weight: 750; }
+.profile-builder[open] summary { margin-bottom: 9px; }
+.profile-builder > div { margin-top: 8px; display: grid!important; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start!important; gap: 8px!important; }
+.profile-builder > div:nth-of-type(2) { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.profile-builder > button { margin-top: 9px; padding: 6px 9px; font-size: 8px; }
 .symbol-map > div { max-height: 280px; overflow: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
 .symbol-map article { min-width: 0; padding: 7px 8px; display: flex; flex-direction: column; background: #f7f9fc; border-radius: 6px; }
 .symbol-map article strong { font-size: 9px; }

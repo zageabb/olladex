@@ -1,13 +1,14 @@
 {
   "name": "olladex-desktop",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "description": "Desktop shell for the local Olladex development agent",
   "main": "main.cjs",
   "scripts": {
+    "build:api": "node scripts/build-api.mjs",
     "prepare:app": "node scripts/prepare.mjs",
     "start": "npm run prepare:app && electron .",
-    "dist": "bash build-backend.sh && npm run prepare:app && electron-builder",
+    "dist": "npm run build:api && npm run prepare:app && electron-builder",
     "portable:linux": "bash build-portable-linux.sh"
   },
   "devDependencies": {

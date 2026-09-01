@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 import os
-import pty
 import select
 import signal
-import struct
 import subprocess
 import threading
 import time
-import fcntl
-import termios
+
+if os.name != "nt":
+    import fcntl
+    import pty
+    import struct
+    import termios
 
 from ..database import connect, now
-from .terminal import blocked
+from .terminal import blocked, shell_command
 from .workspace import project_root
 
 
@@ -25,20 +27,23 @@ def start(project: dict, run_id: int, command: str, timeout_seconds: int = 600) 
         with connect() as conn:
             conn.execute("UPDATE command_runs SET output=?,exit_code=?,status=?,updated_at=? WHERE id=?", ("Command blocked by Olladex safety policy.", 126, "blocked", now(), run_id))
         return status(run_id)
-    master, slave = pty.openpty()
     env = os.environ.copy()
-    env["TERM"] = "dumb"
-    process = subprocess.Popen(
-        ["/bin/bash", "-lc", command],
-        cwd=project_root(project),
-        env=env,
-        stdin=slave,
-        stdout=slave,
-        stderr=slave,
-        start_new_session=True,
-        close_fds=True,
-    )
-    os.close(slave)
+    env["TERM"] = "xterm-256color"
+    if os.name == "nt":
+        process = subprocess.Popen(
+            shell_command(command), cwd=project_root(project), env=env,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+        )
+        master = None
+    else:
+        master, slave = pty.openpty()
+        process = subprocess.Popen(
+            shell_command(command), cwd=project_root(project), env=env,
+            stdin=slave, stdout=slave, stderr=slave,
+            start_new_session=True, close_fds=True,
+        )
+        os.close(slave)
     job = {"process": process, "master": master, "output": "", "status": "running", "exit_code": -1, "started": time.monotonic(), "timeout": timeout_seconds}
     with _lock:
         _jobs[run_id] = job
@@ -52,8 +57,22 @@ def _collect(run_id: int) -> None:
     with _lock:
         job = _jobs[run_id]
     process = job["process"]
-    master = job["master"]
     timed_out = False
+    if os.name == "nt":
+        reader = _collect_windows_output(job)
+        while process.poll() is None:
+            if time.monotonic() - job["started"] > job["timeout"]:
+                timed_out = True
+                process.terminate()
+                break
+            time.sleep(0.05)
+        process.wait()
+        reader.join(timeout=1)
+        _finish(run_id, job, timed_out)
+        return
+
+    master = job["master"]
+    eof = False
     while True:
         if time.monotonic() - job["started"] > job["timeout"] and process.poll() is None:
             timed_out = True
@@ -68,14 +87,42 @@ def _collect(run_id: int) -> None:
                 if chunk:
                     with _lock:
                         job["output"] = (job["output"] + chunk.decode("utf-8", errors="replace"))[-500_000:]
+                else:
+                    eof = True
             except OSError:
-                pass
+                eof = True
         if process.poll() is not None:
-            break
+            # A child may exit before its final PTY bytes become readable.
+            # Wait briefly and drain them instead of truncating fast commands.
+            trailing, _, _ = select.select([master], [], [], 0.05)
+            if eof or not trailing:
+                break
     try:
         os.close(master)
     except OSError:
         pass
+    _finish(run_id, job, timed_out)
+
+
+def _collect_windows_output(job: dict) -> threading.Thread:
+    def read_pipe() -> None:
+        stream = job["process"].stdout
+        if stream is None:
+            return
+        while True:
+            chunk = stream.read(65536)
+            if not chunk:
+                return
+            with _lock:
+                job["output"] = (job["output"] + chunk.decode("utf-8", errors="replace"))[-500_000:]
+
+    reader = threading.Thread(target=read_pipe, daemon=True)
+    reader.start()
+    return reader
+
+
+def _finish(run_id: int, job: dict, timed_out: bool) -> None:
+    process = job["process"]
     exit_code = process.returncode if process.returncode is not None else 1
     final_status = "timed_out" if timed_out else ("cancelled" if job.get("cancelled") else "completed")
     with _lock:
@@ -104,7 +151,10 @@ def cancel(run_id: int) -> dict:
         job["cancelled"] = True
         process = job["process"]
     try:
-        os.killpg(process.pid, signal.SIGTERM)
+        if os.name == "nt":
+            process.terminate()
+        else:
+            os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
         pass
     return status(run_id)
@@ -116,7 +166,14 @@ def write_input(run_id: int, data: str) -> dict:
         if not job or job["status"] != "running":
             raise ValueError("The command is not running or no longer accepts input")
         master = job["master"]
-    os.write(master, data.encode("utf-8"))
+        process = job["process"]
+    if os.name == "nt":
+        if process.stdin is None:
+            raise ValueError("The command does not accept input")
+        process.stdin.write(data.encode("utf-8"))
+        process.stdin.flush()
+    else:
+        os.write(master, data.encode("utf-8"))
     return status(run_id)
 
 
@@ -126,5 +183,6 @@ def resize(run_id: int, columns: int, rows: int) -> dict:
         if not job or job["status"] != "running":
             raise ValueError("The command is not running or no longer accepts terminal resize events")
         master = job["master"]
-    fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
+    if os.name != "nt":
+        fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
     return status(run_id)

@@ -1,4 +1,4 @@
-# Olladex v0.4.0
+# Olladex v0.5.0
 
 **Local AI development agent for Ollama**  
 *Code locally. Build autonomously.*
@@ -16,7 +16,7 @@ The interface follows the navy, blue, white and split-workspace design language 
 - Repository tree, UTF-8 file viewer/editor and text/code search.
 - Review-first agent file proposals with selectable diff hunks, apply, reject and conflict-safe revert.
 - Project-scoped manual file writes with unified diffs and timestamped `.olladex/history` backups.
-- PTY-backed local `/bin/bash` terminal with live output, cancellation, history, timeouts and destructive-command blocks.
+- ANSI-capable xterm terminal backed by a real local PTY on Linux/macOS, with streamed keyboard input, live output, cancellation, history, resizing, timeouts and destructive-command blocks.
 - Interactive terminal input for prompts and long-running processes after a PTY command starts.
 - PTY resize events and shortcut controls for Ctrl-C, Tab, Escape and command history navigation.
 - Review, Assisted and Autonomous command-approval modes.
@@ -24,13 +24,14 @@ The interface follows the navy, blue, white and split-workspace design language 
 - Two-step Git fetch, fast-forward pull and push proposals showing the exact command before explicit approval.
 - Project instructions automatically supplied to the Ollama agent.
 - Tree-sitter repository intelligence covering languages, frameworks, scripts and detected symbols, with a portable fallback parser.
-- Hybrid lexical and Ollama-embedding repository excerpts automatically supplied to the agent, with transparent lexical fallback.
+- Persistent incremental repository index with hybrid lexical/Ollama-embedding ranking, cached vectors, automatic stale-file cleanup and transparent lexical fallback.
+- Reusable local model profiles controlling chat model, embedding model, temperature, tool-step budget and context limits.
 - Persistent compact session summaries carried into future model requests.
 - Mermaid and Graphviz/DOT live editors with SVG preview and export.
 - DOCX, XLSX, PPTX and PDF inspection.
 - Create basic Word documents, Excel workbooks and PowerPoint presentations.
 - Responsive Context Studio-style three-pane interface.
-- Hardened Electron desktop shell and per-platform PyInstaller/Electron Builder packaging pipeline.
+- Hardened Electron desktop shell and automated Linux, macOS and Windows PyInstaller/Electron Builder release pipeline.
 - Recoverable tool errors and repeated-call guards that help local models correct failed agent steps.
 
 ## Architecture
@@ -99,7 +100,9 @@ npm --prefix desktop install
 npm --prefix desktop run dist
 ```
 
-The packaging pipeline builds the production Next.js application, freezes the FastAPI service with PyInstaller, and creates an AppImage/DEB, DMG or NSIS installer with Electron Builder. Native installers should be built on their target operating system.
+The packaging pipeline builds the production Next.js application, freezes the FastAPI service with PyInstaller, and creates an AppImage/DEB, DMG or NSIS installer with Electron Builder. Native installers should be built on their target operating system. Tags matching `v*` also trigger `.github/workflows/release-desktop.yml`, which builds all three platforms and attaches the artifacts to a GitHub release.
+
+macOS and Windows signing is optional. Configure `CSC_LINK` and `CSC_KEY_PASSWORD` as repository secrets; for Apple notarization also configure `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID`. Unsigned artifacts are produced when those credentials are absent.
 
 A portable Linux x64 ZIP can be built with `npm --prefix desktop run portable:linux`.
 
@@ -135,15 +138,15 @@ npm --prefix frontend run build
 
 Olladex resolves every agent file path against the selected repository and rejects traversal outside it. Agent edits are proposals and do not touch the repository until approved. File writes retain timestamped previous versions under `.olladex/history`. Bash commands run with the same operating-system permissions as the Olladex process; approval modes and a blocklist reduce risk, but Olladex is intended for a trusted local machine or trusted LAN only. Do not expose it directly to the public Internet.
 
-## v0.4 limitations
+## v0.5 limitations
 
 - Office editing is structured and practical, not a pixel-perfect replacement for Word, Excel or PowerPoint.
-- Desktop installers are unsigned; OS signing and automated updates are not configured yet.
+- Desktop installers are unsigned unless signing credentials are configured; automatic application updates are not implemented yet.
 - Git remote commands inherit credentials already configured on the machine; Olladex does not store Git credentials.
-- Semantic retrieval is applied to a bounded candidate set rather than a persistent repository-wide vector index.
-- Terminal shortcuts and resize are supported, but ANSI screen emulation is still simpler than a full xterm implementation.
+- Repository content and embedding vectors are stored in Olladex's local SQLite data directory; the first semantic index may take time on large repositories and is capped at 500 new embeddings per refresh.
+- Windows uses Git Bash when available, then PowerShell, then Command Prompt; native ConPTY screen semantics are not yet implemented.
 - Session summaries are deterministic and local rather than generated by a second model call.
 
 ## Next release direction
 
-v0.5 should focus on incremental repository indexing, richer model profiles, full terminal emulation, signed desktop releases and optional GitHub issue/pull-request workflows.
+v0.6 should focus on GitHub issue/pull-request workflows, background task queues, model-profile editing, native Windows ConPTY support, auto-update metadata and broader desktop release validation.

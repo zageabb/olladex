@@ -8,7 +8,8 @@ import httpx
 
 from ..config import settings
 from . import workspace
-from .context_engine import format_context, ranked_context
+from .context_engine import format_context
+from .repository_index import ranked_context
 from .terminal import requires_approval, run as run_command
 
 
@@ -37,11 +38,12 @@ def status() -> dict:
         return {"connected": False, "url": settings.ollama_url, "models": [], "embedding_model": settings.ollama_embedding_model, "embedding_available": False, "error": str(exc)}
 
 
-def embed_texts(texts: list[str]) -> list[list[float]]:
-    if not settings.ollama_embedding_model:
+def embed_texts(texts: list[str], model: str | None = None) -> list[list[float]]:
+    embedding_model = model or settings.ollama_embedding_model
+    if not embedding_model:
         raise ValueError("No Ollama embedding model is configured")
     with client(httpx.Timeout(90, connect=3)) as http:
-        response = http.post("/api/embed", json={"model": settings.ollama_embedding_model, "input": texts, "truncate": True})
+        response = http.post("/api/embed", json={"model": embedding_model, "input": texts, "truncate": True})
         response.raise_for_status()
         vectors = response.json().get("embeddings") or []
     if len(vectors) != len(texts):
@@ -99,11 +101,12 @@ def summarize(name: str, result: Any) -> str:
     return "Complete"
 
 
-def chat(project: dict, history: list[dict], model: str | None = None, max_steps: int = 8, session_summary: str = "") -> tuple[str, list[dict]]:
+def chat(project: dict, history: list[dict], model: str | None = None, max_steps: int | None = None, session_summary: str = "") -> tuple[str, list[dict]]:
     request = next((message.get("content", "") for message in reversed(history) if message.get("role") == "user"), "")
     intelligence = workspace.repository_intelligence(project)
     intelligence["symbols"] = intelligence.get("symbols", [])[:40]
-    selected_context = ranked_context(project, request, embedder=embed_texts)
+    embedding_model = project.get("profile_embedding_model") or settings.ollama_embedding_model
+    selected_context = ranked_context(project, request, embedder=lambda texts: embed_texts(texts, embedding_model), embedding_model=embedding_model, max_files=project.get("profile_context_files") or 8, max_chars=project.get("profile_context_chars") or 32000)
     system = (
         "You are Olladex, a careful local software-development agent. Work only inside the selected repository. "
         "Use tools to inspect evidence before answering. Keep the user informed in concise language. "
@@ -118,8 +121,8 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
     activities: list[dict] = []
     tool_attempts: dict[str, int] = {}
     with client() as http:
-        for _ in range(max_steps):
-            response = http.post("/api/chat", json={"model": model or project.get("model") or settings.ollama_model, "messages": messages, "tools": TOOLS, "stream": False, "options": {"temperature": 0.2}})
+        for _ in range(max_steps or project.get("profile_max_steps") or 8):
+            response = http.post("/api/chat", json={"model": model or project.get("profile_chat_model") or project.get("model") or settings.ollama_model, "messages": messages, "tools": TOOLS, "stream": False, "options": {"temperature": project.get("profile_temperature") if project.get("profile_temperature") is not None else 0.2}})
             response.raise_for_status()
             message = response.json().get("message", {})
             messages.append(message)

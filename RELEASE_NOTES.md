@@ -1,5 +1,28 @@
 # Olladex release notes
 
+## v0.5.0
+
+Olladex v0.5 makes repository context persistent, upgrades the local terminal to a full ANSI surface and automates native desktop release builds.
+
+### Added
+
+- Incremental SQLite repository index that updates changed files, removes deleted entries and reuses cached Ollama embeddings.
+- Hybrid indexed context selection with per-profile file and character budgets and a lexical fallback when embeddings are unavailable.
+- Three seeded model profiles plus creation and project selection of reusable custom profiles.
+- Profile controls for chat model, embedding model, temperature, maximum agent steps and context size.
+- xterm-based ANSI rendering, direct keyboard streaming and exact PTY resize forwarding.
+- Cross-platform API sidecar builder and GitHub Actions matrix for Linux AppImage/DEB, macOS DMG and Windows NSIS artifacts.
+- Optional macOS/Windows signing and Apple notarization through repository secrets.
+- Windows shell fallback through Git Bash, PowerShell or Command Prompt when packaged on Windows.
+- PTY final-output draining to prevent fast commands from losing their last output bytes.
+
+### Verification
+
+- Seventeen backend tests cover incremental indexing, cached semantic ranking, model-profile APIs and all earlier safety, Git, Office and terminal workflows.
+- The interactive PTY workflow passes repeatedly, including input, resize and final-output capture.
+- Production Next.js compilation and strict TypeScript checking pass with the xterm integration.
+- Python compilation, workflow parsing, frozen API health and Linux portable desktop smoke checks are included in the release pass.
+
 ## v0.4.0
 
 Olladex v0.4 adds a real desktop distribution path and strengthens the context, terminal and Git workflows used by the local agent.

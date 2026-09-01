@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 
 from ..config import settings
@@ -13,6 +14,19 @@ ASSISTED_PREFIXES = (
     "npm run lint", "pnpm test", "pnpm build", "yarn test", "yarn build",
     "ls", "find ", "rg ", "grep ", "pwd", "cat ", "sed ", "head ", "tail ",
 )
+
+
+def shell_command(command: str) -> list[str]:
+    """Return the closest local interactive shell for the host platform."""
+    if os.name != "nt":
+        return ["/bin/bash", "-lc", command]
+    bash = shutil.which("bash.exe")
+    if bash:
+        return [bash, "-lc", command]
+    powershell = shutil.which("pwsh.exe") or shutil.which("powershell.exe")
+    if powershell:
+        return [powershell, "-NoLogo", "-NoProfile", "-Command", command]
+    return ["cmd.exe", "/d", "/s", "/c", command]
 
 
 def blocked(command: str) -> bool:
@@ -37,7 +51,7 @@ def run(project: dict, command: str, timeout: int | None = None) -> dict:
     env["TERM"] = "xterm-256color"
     try:
         completed = subprocess.run(
-            ["/bin/bash", "-lc", command],
+            shell_command(command),
             cwd=project_root(project),
             env=env,
             text=True,

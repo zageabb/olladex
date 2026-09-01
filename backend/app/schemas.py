@@ -46,6 +46,17 @@ class ProjectSettingsRequest(BaseModel):
     instructions: str | None = Field(default=None, max_length=100_000)
     git_author_name: str | None = Field(default=None, min_length=1, max_length=200)
     git_author_email: str | None = Field(default=None, min_length=3, max_length=320)
+    model_profile_id: int | None = Field(default=None, ge=1)
+
+
+class ModelProfileRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    chat_model: str = Field(min_length=1, max_length=200)
+    embedding_model: str = Field(default="", max_length=200)
+    temperature: float = Field(default=0.2, ge=0, le=2)
+    max_steps: int = Field(default=8, ge=1, le=30)
+    context_files: int = Field(default=8, ge=1, le=30)
+    context_chars: int = Field(default=32000, ge=4000, le=200000)
 
 
 class GitPathsRequest(BaseModel):

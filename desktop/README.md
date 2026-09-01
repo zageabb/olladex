@@ -15,7 +15,9 @@ npm --prefix desktop install
 npm --prefix desktop run dist
 ```
 
-The build prepares the standalone frontend and freezes the Python API with PyInstaller before Electron Builder creates AppImage/DEB, DMG or NSIS output. Build each target on its native operating system.
+The build prepares the standalone frontend and freezes the Python API with PyInstaller before Electron Builder creates AppImage/DEB, DMG or NSIS output. Build each target on its native operating system. Pushing a `v*` tag runs the cross-platform GitHub Actions release workflow.
+
+For signed builds, configure `CSC_LINK` and `CSC_KEY_PASSWORD` as repository secrets. Apple notarization additionally uses `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID`. The workflow remains usable without these secrets and produces unsigned installers.
 
 For a Linux x64 bundle that does not require AppImage tooling:
 

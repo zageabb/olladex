@@ -23,6 +23,21 @@ def test_v03_git_terminal_and_summary_workflow(tmp_path, monkeypatch):
         project = client.post("/api/projects", json={"path": str(repository)}).json()
         project_id = project["id"]
 
+        profiles = client.get("/api/model-profiles").json()
+        assert len(profiles) >= 3
+        custom = client.post("/api/model-profiles", json={"name": "API test", "chat_model": "qwen-test", "embedding_model": "", "temperature": 0.3, "max_steps": 5, "context_files": 4, "context_chars": 12000})
+        assert custom.status_code == 200
+        configured = client.patch(f"/api/projects/{project_id}/settings", json={"model_profile_id": custom.json()["id"]}).json()
+        assert configured["profile_name"] == "API test"
+        cleared = client.patch(f"/api/projects/{project_id}/settings", json={"model_profile_id": None}).json()
+        assert cleared["model_profile_id"] is None
+        client.patch(f"/api/projects/{project_id}/settings", json={"model_profile_id": custom.json()["id"]})
+
+        indexed = client.post(f"/api/projects/{project_id}/index").json()
+        assert indexed["files"] == 1
+        assert indexed["changed"] == 1
+        assert client.post(f"/api/projects/{project_id}/index").json()["changed"] == 0
+
         staged = client.post(f"/api/projects/{project_id}/git/stage", json={"paths": ["README.md"]})
         assert staged.status_code == 200
         assert staged.json()["changes"][0]["staged"] is True

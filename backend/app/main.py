@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -9,9 +10,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import __version__
 from .config import settings
 from .database import connect, decode_json, init_db, now, rows
-from .schemas import ChangeApplyRequest, ChatRequest, CommandRequest, FileWriteRequest, GitBranchRequest, GitCheckoutRequest, GitCommitRequest, GitPathsRequest, GitRemoteOperationRequest, OfficeCreateRequest, ProjectCreate, ProjectSettingsRequest, SessionCreate, TerminalInputRequest, TerminalResizeRequest
+from .schemas import ChangeApplyRequest, ChatRequest, CommandRequest, FileWriteRequest, GitBranchRequest, GitCheckoutRequest, GitCommitRequest, GitPathsRequest, GitRemoteOperationRequest, ModelProfileRequest, OfficeCreateRequest, ProjectCreate, ProjectSettingsRequest, SessionCreate, TerminalInputRequest, TerminalResizeRequest
 from .services import changes as change_service
-from .services import git, office, ollama, terminal, terminal_jobs, workspace
+from .services import git, office, ollama, repository_index, terminal, terminal_jobs, workspace
 from .services.session_summary import build as build_session_summary
 
 
@@ -26,7 +27,7 @@ def startup() -> None:
 
 def get_project(project_id: int) -> dict:
     with connect() as conn:
-        row = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        row = conn.execute("SELECT p.*,mp.name AS profile_name,mp.chat_model AS profile_chat_model,mp.embedding_model AS profile_embedding_model,mp.temperature AS profile_temperature,mp.max_steps AS profile_max_steps,mp.context_files AS profile_context_files,mp.context_chars AS profile_context_chars FROM projects p LEFT JOIN model_profiles mp ON mp.id=p.model_profile_id WHERE p.id=?", (project_id,)).fetchone()
     if not row:
         raise HTTPException(404, "Project not found")
     return dict(row)
@@ -63,13 +64,13 @@ def health():
 
 @app.get("/api/status")
 def api_status():
-    return {"version": __version__, "ollama": ollama.status(), "shell": "/bin/bash"}
+    return {"version": __version__, "ollama": ollama.status(), "shell": terminal.shell_command("")[0]}
 
 
 @app.get("/api/projects")
 def list_projects():
     with connect() as conn:
-        return rows(conn.execute("SELECT * FROM projects ORDER BY last_opened_at DESC"))
+        return rows(conn.execute("SELECT p.*,mp.name AS profile_name,mp.chat_model AS profile_chat_model,mp.embedding_model AS profile_embedding_model,mp.temperature AS profile_temperature,mp.max_steps AS profile_max_steps,mp.context_files AS profile_context_files,mp.context_chars AS profile_context_chars FROM projects p LEFT JOIN model_profiles mp ON mp.id=p.model_profile_id ORDER BY p.last_opened_at DESC"))
 
 
 @app.post("/api/projects")
@@ -84,7 +85,8 @@ def create_project(body: ProjectCreate):
             conn.execute("UPDATE projects SET last_opened_at=? WHERE id=?", (stamp, existing["id"]))
             project_id = existing["id"]
         else:
-            cursor = conn.execute("INSERT INTO projects(name,path,model,created_at,last_opened_at) VALUES(?,?,?,?,?)", (body.name or path.name, str(path), body.model or settings.ollama_model, stamp, stamp))
+            default_profile = conn.execute("SELECT id FROM model_profiles WHERE name='Balanced local'").fetchone()
+            cursor = conn.execute("INSERT INTO projects(name,path,model,model_profile_id,created_at,last_opened_at) VALUES(?,?,?,?,?,?)", (body.name or path.name, str(path), body.model or settings.ollama_model, default_profile["id"] if default_profile else None, stamp, stamp))
             project_id = cursor.lastrowid
             conn.execute("INSERT INTO sessions(project_id,title,created_at,updated_at) VALUES(?,?,?,?)", (project_id, "Welcome to Olladex", stamp, stamp))
     return get_project(project_id)
@@ -98,13 +100,33 @@ def project_settings(project_id: int):
 @app.patch("/api/projects/{project_id}/settings")
 def update_project_settings(project_id: int, body: ProjectSettingsRequest):
     get_project(project_id)
-    updates = body.model_dump(exclude_none=True)
+    updates = body.model_dump(exclude_unset=True)
     if not updates:
         return get_project(project_id)
     assignments = ",".join(f"{name}=?" for name in updates)
     with connect() as conn:
+        if updates.get("model_profile_id") is not None and not conn.execute("SELECT id FROM model_profiles WHERE id=?", (updates["model_profile_id"],)).fetchone():
+            raise HTTPException(400, "Model profile not found")
         conn.execute(f"UPDATE projects SET {assignments} WHERE id=?", (*updates.values(), project_id))
     return get_project(project_id)
+
+
+@app.get("/api/model-profiles")
+def model_profiles():
+    with connect() as conn:
+        return rows(conn.execute("SELECT * FROM model_profiles ORDER BY name"))
+
+
+@app.post("/api/model-profiles")
+def create_model_profile(body: ModelProfileRequest):
+    stamp = now()
+    try:
+        with connect() as conn:
+            cursor = conn.execute("INSERT INTO model_profiles(name,chat_model,embedding_model,temperature,max_steps,context_files,context_chars,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)", (body.name, body.chat_model, body.embedding_model, body.temperature, body.max_steps, body.context_files, body.context_chars, stamp, stamp))
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(409, "A model profile with that name already exists") from exc
+    with connect() as conn:
+        return dict(conn.execute("SELECT * FROM model_profiles WHERE id=?", (cursor.lastrowid,)).fetchone())
 
 
 @app.get("/api/projects/{project_id}/intelligence")
@@ -112,11 +134,23 @@ def project_intelligence(project_id: int):
     return workspace.repository_intelligence(get_project(project_id))
 
 
+@app.get("/api/projects/{project_id}/index")
+def repository_index_status(project_id: int):
+    return repository_index.status(get_project(project_id))
+
+
+@app.post("/api/projects/{project_id}/index")
+def refresh_repository_index(project_id: int):
+    project = get_project(project_id)
+    embedding_model = project.get("profile_embedding_model") or settings.ollama_embedding_model
+    return repository_index.refresh(project, embedder=lambda texts: ollama.embed_texts(texts, embedding_model), embedding_model=embedding_model)
+
+
 @app.get("/api/projects/{project_id}/context-preview")
 def context_preview(project_id: int, q: str):
-    from .services.context_engine import ranked_context
     project = get_project(project_id)
-    return ranked_context(project, q, embedder=ollama.embed_texts)
+    embedding_model = project.get("profile_embedding_model") or settings.ollama_embedding_model
+    return repository_index.ranked_context(project, q, embedder=lambda texts: ollama.embed_texts(texts, embedding_model), embedding_model=embedding_model, max_files=project.get("profile_context_files") or 8, max_chars=project.get("profile_context_chars") or 32000)
 
 
 @app.get("/api/projects/{project_id}/tree")
