@@ -8,6 +8,7 @@ import httpx
 
 from ..config import settings
 from . import workspace
+from .context_engine import format_context, ranked_context
 from .terminal import requires_approval, run as run_command
 
 
@@ -77,14 +78,20 @@ def summarize(name: str, result: Any) -> str:
     return "Complete"
 
 
-def chat(project: dict, history: list[dict], model: str | None = None, max_steps: int = 8) -> tuple[str, list[dict]]:
+def chat(project: dict, history: list[dict], model: str | None = None, max_steps: int = 8, session_summary: str = "") -> tuple[str, list[dict]]:
+    request = next((message.get("content", "") for message in reversed(history) if message.get("role") == "user"), "")
+    intelligence = workspace.repository_intelligence(project)
+    intelligence["symbols"] = intelligence.get("symbols", [])[:40]
+    selected_context = ranked_context(project, request)
     system = (
         "You are Olladex, a careful local software-development agent. Work only inside the selected repository. "
         "Use tools to inspect evidence before answering. Keep the user informed in concise language. "
         "Do not invent file contents or command results. When asked to change code, make focused edits, run appropriate checks, and summarize changes.\n\n"
         + workspace.project_summary(project)
         + ("\n\nProject instructions:\n" + project.get("instructions", "") if project.get("instructions", "").strip() else "")
-        + "\n\nRepository intelligence:\n" + json.dumps(workspace.repository_intelligence(project), default=str)[:20_000]
+        + "\n\nRepository intelligence:\n" + json.dumps(intelligence, default=str)[:20_000]
+        + ("\n\nPersistent session summary:\n" + session_summary if session_summary else "")
+        + "\n\nAutomatically ranked repository context:\n" + format_context(selected_context)
     )
     messages: list[dict] = [{"role": "system", "content": system}, *history[-30:]]
     activities: list[dict] = []

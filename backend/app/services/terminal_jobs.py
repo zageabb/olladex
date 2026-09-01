@@ -106,3 +106,12 @@ def cancel(run_id: int) -> dict:
         pass
     return status(run_id)
 
+
+def write_input(run_id: int, data: str) -> dict:
+    with _lock:
+        job = _jobs.get(run_id)
+        if not job or job["status"] != "running":
+            raise ValueError("The command is not running or no longer accepts input")
+        master = job["master"]
+    os.write(master, data.encode("utf-8"))
+    return status(run_id)

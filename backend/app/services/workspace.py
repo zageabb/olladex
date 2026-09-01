@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import difflib
 import os
-import re
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -139,6 +138,7 @@ def project_summary(project: dict) -> str:
 
 
 def repository_intelligence(project: dict) -> dict:
+    from .symbols import extract
     root = project_root(project)
     extensions: dict[str, int] = {}
     symbols: list[dict] = []
@@ -159,19 +159,12 @@ def repository_intelligence(project: dict) -> dict:
                 pass
             suffix = path.suffix.lower() or "[none]"
             extensions[suffix] = extensions.get(suffix, 0) + 1
-            if len(symbols) >= 250 or suffix not in {".py", ".js", ".jsx", ".ts", ".tsx"}:
+            if len(symbols) >= 250:
                 continue
             try:
-                content = path.read_text(encoding="utf-8", errors="ignore")
+                symbols.extend(extract(path, rel, 250 - len(symbols)))
             except OSError:
                 continue
-            pattern = r"^(?:export\s+)?(?:async\s+)?(?:def|class|function|const|let|var)\s+([A-Za-z_$][\w$]*)"
-            for number, line in enumerate(content.splitlines(), 1):
-                match = re.match(pattern, line.strip())
-                if match:
-                    symbols.append({"name": match.group(1), "path": rel, "line": number})
-                    if len(symbols) >= 250:
-                        break
     package = root / "package.json"
     if package.exists():
         try:

@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS projects (
   model TEXT NOT NULL,
   approval_mode TEXT NOT NULL DEFAULT 'assisted',
   instructions TEXT NOT NULL DEFAULT '',
+  git_author_name TEXT NOT NULL DEFAULT 'Olladex User',
+  git_author_email TEXT NOT NULL DEFAULT 'olladex@local',
   created_at TEXT NOT NULL,
   last_opened_at TEXT NOT NULL
 );
@@ -24,6 +26,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  last_summarized_message_id INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -65,6 +69,12 @@ ADDITIVE_COLUMNS = {
     "projects": {
         "approval_mode": "TEXT NOT NULL DEFAULT 'assisted'",
         "instructions": "TEXT NOT NULL DEFAULT ''",
+        "git_author_name": "TEXT NOT NULL DEFAULT 'Olladex User'",
+        "git_author_email": "TEXT NOT NULL DEFAULT 'olladex@local'",
+    },
+    "sessions": {
+        "summary": "TEXT NOT NULL DEFAULT ''",
+        "last_summarized_message_id": "INTEGER NOT NULL DEFAULT 0",
     },
     "file_changes": {
         "hunks": "TEXT NOT NULL DEFAULT '[]'",

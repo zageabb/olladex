@@ -3,19 +3,19 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { DiagramStudio } from "../components/DiagramStudio";
 import { FileTree, TreeNode } from "../components/FileTree";
+import { GitControls, GitSummary } from "../components/GitControls";
 import { OfficePanel } from "../components/OfficePanel";
 import { ProjectPanel } from "../components/ProjectPanel";
 import { TerminalPanel } from "../components/TerminalPanel";
 import { request } from "../lib/api";
 
-type Project = { id: number; name: string; path: string; model: string; approval_mode: "review" | "assisted" | "autonomous"; instructions: string };
-type Session = { id: number; project_id: number; title: string; updated_at: string };
+type Project = { id: number; name: string; path: string; model: string; approval_mode: "review" | "assisted" | "autonomous"; instructions: string; git_author_name: string; git_author_email: string };
+type Session = { id: number; project_id: number; title: string; updated_at: string; summary: string };
 type Activity = { tool: string; summary: string; arguments?: Record<string, unknown>; result?: Record<string, any> };
 type Message = { id?: number; role: "user" | "assistant"; content: string; activities?: Activity[] };
 type Status = { version: string; shell: string; ollama: { connected: boolean; url: string; models: string[]; error?: string } };
 type Hunk = { index: number; header: string; lines: string[]; changes: number };
 type Change = { id: number; path: string; diff: string; hunks: Hunk[]; status: "proposed" | "applied" | "rejected" | "reverted"; created_at: string; updated_at: string };
-type GitSummary = { repository: boolean; branch: string; changes: { status: string; path: string }[]; recent: { sha: string; subject: string; age: string }[] };
 type Tab = "files" | "changes" | "terminal" | "diagrams" | "office" | "project";
 
 const WELCOME: Message = { role: "assistant", content: "Welcome to Olladex. Open a local repository, then ask me to inspect, change and test it. Repository tools, Bash, diagrams and Office files stay on your machine." };
@@ -53,8 +53,7 @@ export default function Home() {
     refreshTree();
     request<Session[]>(`/projects/${project.id}/sessions`).then((data) => { setSessions(data); setSession(data[0] || null); });
     refreshChanges(project.id);
-    request<GitSummary>(`/projects/${project.id}/git`).then(setGit).catch(() => setGit(null));
-    request<{ diff: string }>(`/projects/${project.id}/git/diff`).then((data) => setGitDiff(data.diff)).catch(() => setGitDiff(""));
+    refreshGit(project.id);
   }, [project?.id]);
 
   useEffect(() => {
@@ -75,6 +74,15 @@ export default function Home() {
       for (const change of data) if (change.status === "proposed" && next[change.id] === undefined) next[change.id] = change.hunks.map((hunk) => hunk.index);
       return next;
     });
+  }
+
+  async function refreshGit(projectId = project?.id) {
+    if (!projectId) return;
+    const [summary, currentDiff] = await Promise.all([
+      request<GitSummary>(`/projects/${projectId}/git`),
+      request<{ diff: string }>(`/projects/${projectId}/git/diff`),
+    ]);
+    setGit(summary); setGitDiff(currentDiff.diff);
   }
 
   async function openProject(event: FormEvent) {
@@ -117,6 +125,10 @@ export default function Home() {
     try {
       const answer = await request<Message>(`/sessions/${session.id}/messages`, { method: "POST", body: JSON.stringify({ content }) });
       setMessages((current) => [...current, answer]); await refreshTree();
+      request<{ summary: string }>(`/sessions/${session.id}/summary`).then((summary) => {
+        setSession((current) => current ? { ...current, summary: summary.summary } : current);
+        setSessions((current) => current.map((item) => item.id === session.id ? { ...item, summary: summary.summary } : item));
+      }).catch(() => {});
       if (answer.activities?.some((a) => a.tool === "write_file")) { await refreshChanges(project.id); setTab("changes"); }
     } catch (error) { setMessages((current) => [...current, { role: "assistant", content: `I couldn't complete that request: ${error instanceof Error ? error.message : String(error)}` }]); }
     finally { setBusy(false); }
@@ -137,8 +149,7 @@ export default function Home() {
     try {
       await request(`/projects/${project.id}/changes/${change.id}/${action}`, options);
       await Promise.all([refreshChanges(project.id), refreshTree()]);
-      request<GitSummary>(`/projects/${project.id}/git`).then(setGit);
-      request<{ diff: string }>(`/projects/${project.id}/git/diff`).then((data) => setGitDiff(data.diff));
+      refreshGit(project.id);
       setNotice(`${change.path} ${action === "apply" ? "applied" : action === "reject" ? "rejected" : "reverted"}`);
     } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); }
   }
@@ -153,7 +164,7 @@ export default function Home() {
 
   return <main className="app-shell">
     <header className="topbar">
-      <div className="brand"><span className="brand-mark">O</span><span>Olladex</span><em>v0.2</em></div>
+      <div className="brand"><span className="brand-mark">O</span><span>Olladex</span><em>v0.3</em></div>
       <div className="project-selector"><span>Repository</span><select value={project?.id || ""} onChange={(e) => setProject(projects.find((p) => p.id === Number(e.target.value)) || null)}><option value="">Open a repository</option>{projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
       <button className="global-search" onClick={() => setTab("files")}>⌕ Search this repository <kbd>⌘ K</kbd></button>
       <div className={`connection ${status?.ollama.connected ? "online" : ""}`}><i />{status?.ollama.connected ? `${project?.model || status.ollama.models[0] || "Ollama"}` : "Ollama offline"}</div>
@@ -181,6 +192,7 @@ export default function Home() {
       <section className="conversation-panel">
         <div className="panel-head"><div><p className="eyebrow">Local development agent</p><h1>{session?.title || "Start a task"}</h1></div><button className="approval-mode" onClick={() => setTab("project")}><span>Mode</span><strong>{project?.approval_mode || "assisted"}</strong></button></div>
         <div className="messages">
+          {session?.summary && <details className="session-summary"><summary><span>✦</span><div><strong>Persistent session context</strong><small>Compact memory carried into the next Ollama request</small></div><b>⌄</b></summary><pre>{session.summary}</pre></details>}
           {messages.map((message, index) => <article className={`message ${message.role}`} key={`${message.role}-${message.id || index}`}><div className="message-avatar">{message.role === "assistant" ? "O" : "G"}</div><div className="message-stack"><div className="bubble">{message.content}</div>{message.activities?.map((activity, i) => <details className="activity-card" key={i}><summary><span>{activityIcon(activity.tool)}</span><div><strong>{activity.tool.replaceAll("_", " ")}</strong><small>{activity.summary}</small></div><b>⌄</b></summary><pre>{JSON.stringify(activity.result || activity.arguments, null, 2)}</pre>{activity.tool === "run_command" && activity.result?.status === "pending" && <div className="activity-actions"><button className="primary" onClick={() => approveCommand(activity)}>Approve command</button><button onClick={() => setTab("terminal")}>Open terminal</button></div>}{activity.tool === "write_file" && activity.result?.change_id && <div className="activity-actions"><button className="primary" onClick={() => setTab("changes")}>Review proposed change</button></div>}</details>)}</div></article>)}
           {busy && <article className="message assistant"><div className="message-avatar">O</div><div className="typing"><i/><i/><i/></div></article>}
         </div>
@@ -192,7 +204,7 @@ export default function Home() {
         {project ? <>
           {tab === "files" && <div className="file-workspace"><aside className="file-sidebar"><div className="file-search"><span>⌕</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter files" /></div><FileTree items={filteredTree} selected={selected?.path} onSelect={selectFile} /></aside><div className="editor-pane">{selected?.type === "file" ? <><div className="editor-head"><div><span className="file-icon">□</span><strong>{selected.path}</strong>{fileDraft !== fileContent && <i>Modified</i>}</div><button className="primary" onClick={saveFile} disabled={fileDraft === fileContent}>Save</button></div><textarea className="code-editor" value={fileDraft} onChange={(e) => setFileDraft(e.target.value)} spellCheck={false} /></> : <EmptyWorkspace onOpen={() => setShowOpen(true)} />}</div></div>}
           {tab === "changes" && <div className="changes-panel">
-            <div className="git-card"><div><p className="eyebrow">Git repository</p><h3>{git?.repository ? git.branch : "Not initialised"}</h3></div><span>{git?.changes.length || 0} working changes</span></div>
+            <GitControls projectId={project.id} git={git} onRefresh={() => refreshGit(project.id)} />
             {gitDiff && <article><header><div><strong>Current Git diff</strong><small>Working tree and staged changes</small></div><span>git</span></header><pre>{gitDiff}</pre></article>}
             {changes.length ? changes.map((change) => <article className={change.status === "proposed" ? "proposed-change" : ""} key={change.id}><header><div><strong>{change.path}</strong><small>{new Date(change.created_at).toLocaleString()}</small></div><span className={`change-status ${change.status}`}>{change.status}</span></header>{change.status === "proposed" ? <div className="hunk-list">{change.hunks.map((hunk) => <label className="diff-hunk" key={hunk.index}><div><input type="checkbox" checked={(selectedHunks[change.id] || []).includes(hunk.index)} onChange={() => toggleHunk(change.id, hunk.index)} /><strong>{hunk.header}</strong><span>{hunk.changes} changed lines</span></div><pre>{hunk.lines.join("\n")}</pre></label>)}<div className="change-actions"><button className="primary" disabled={!(selectedHunks[change.id] || []).length} onClick={() => changeAction(change, "apply")}>Apply selected hunks</button><button onClick={() => changeAction(change, "reject")}>Reject proposal</button></div></div> : <><pre>{change.diff || "No textual diff"}</pre>{change.status === "applied" && <div className="change-actions"><button onClick={() => changeAction(change, "revert")}>Revert safely</button></div>}</>}</article>) : !gitDiff && <div className="empty-panel"><span>◫</span><h3>No changes yet</h3><p>Edits made by you or Olladex will appear here for review.</p></div>}
           </div>}

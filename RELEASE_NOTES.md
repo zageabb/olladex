@@ -1,5 +1,26 @@
 # Olladex release notes
 
+## v0.3.0
+
+Olladex v0.3 deepens the local development loop with controlled Git writes, interactive terminal sessions and a more selective context engine.
+
+### Added
+
+- Create and switch branches from the Changes panel.
+- Stage and unstage individual files, then commit staged work using per-project author settings.
+- Send interactive input to running PTY commands and stop them without leaving the workspace.
+- Tree-sitter symbol extraction for common languages with a regex fallback when a parser is unavailable.
+- Lexically ranked repository excerpts selected from the current task and supplied to Ollama within a fixed context budget.
+- Deterministic persistent session summaries that retain recent tasks, outcomes, tool activity and touched files.
+- Session-memory UI and richer repository-map metadata showing symbol kind and parser source.
+- Additive SQLite migrations for Git identity and session-summary state.
+
+### Verification
+
+- Twelve backend tests cover context ranking, summaries, controlled Git workflows, review-safe changes, terminal policy, repository intelligence, Office files and path confinement.
+- Production Next.js compilation and strict TypeScript checking pass.
+- Manual service-level smoke checks cover live PTY input, Git stage/commit/branch actions and summary persistence.
+
 ## v0.2.0
 
 Olladex v0.2 turns the initial repository agent into a review-first development workspace.
@@ -28,4 +49,3 @@ Olladex v0.2 turns the initial repository agent into a review-first development 
 ## v0.1.0
 
 Initial local-first release with Ollama chat, repository tools, file editing, Bash, Git status/diffs, Mermaid, Graphviz/DOT and Office-file workflows.
-

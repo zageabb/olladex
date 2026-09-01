@@ -8,6 +8,7 @@ type Run = { id: number; command: string; output: string; exit_code: number; sta
 export function TerminalPanel({ projectId }: { projectId: number }) {
   const [runs, setRuns] = useState<Run[]>([]);
   const [command, setCommand] = useState("");
+  const [liveInput, setLiveInput] = useState("");
   const [runningId, setRunningId] = useState<number | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -56,12 +57,21 @@ export function TerminalPanel({ projectId }: { projectId: number }) {
     poll(runningId);
   }
 
+  async function sendInput(event: FormEvent) {
+    event.preventDefault();
+    if (!runningId || !liveInput) return;
+    const data = liveInput.endsWith("\n") ? liveInput : `${liveInput}\n`;
+    setLiveInput("");
+    try { await request(`/terminal/${runningId}/input`, { method: "POST", body: JSON.stringify({ data }) }); }
+    catch (error) { setRuns((items) => items.map((item) => item.id === runningId ? { ...item, output: `${item.output}\n${error instanceof Error ? error.message : String(error)}` } : item)); }
+  }
+
   return <div className="terminal-panel">
     <div className="terminal-output">
       <div className="terminal-welcome">Olladex local terminal · /bin/bash · commands run in the selected repository</div>
       {runs.map((run) => <div className="terminal-run" key={run.id}><div><span className="prompt">$</span> {run.command}</div><pre>{run.output || (run.status === "running" ? "Running…" : `(completed with exit code ${run.exit_code})`)}</pre><small className={run.exit_code === 0 ? "ok" : "failed"}>{run.status}{run.exit_code >= 0 ? ` · exit ${run.exit_code}` : ""}</small></div>)}
       <div ref={endRef} />
     </div>
-    <form className="terminal-input" onSubmit={execute}><span className="prompt">$</span><input value={command} onChange={(e) => setCommand(e.target.value)} placeholder="Enter a bash command" autoComplete="off" disabled={Boolean(runningId)} />{runningId ? <button type="button" onClick={cancel}>Stop</button> : <button>Run</button>}</form>
+    <form className="terminal-input" onSubmit={runningId ? sendInput : execute}><span className="prompt">{runningId ? "›" : "$"}</span><input value={runningId ? liveInput : command} onChange={(e) => runningId ? setLiveInput(e.target.value) : setCommand(e.target.value)} placeholder={runningId ? "Send input to the running command" : "Enter a bash command"} autoComplete="off" />{runningId ? <><button>Send</button><button type="button" onClick={cancel}>Stop</button></> : <button>Run</button>}</form>
   </div>;
 }

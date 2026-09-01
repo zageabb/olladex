@@ -9,9 +9,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import __version__
 from .config import settings
 from .database import connect, decode_json, init_db, now, rows
-from .schemas import ChangeApplyRequest, ChatRequest, CommandRequest, FileWriteRequest, OfficeCreateRequest, ProjectCreate, ProjectSettingsRequest, SessionCreate
+from .schemas import ChangeApplyRequest, ChatRequest, CommandRequest, FileWriteRequest, GitBranchRequest, GitCheckoutRequest, GitCommitRequest, GitPathsRequest, OfficeCreateRequest, ProjectCreate, ProjectSettingsRequest, SessionCreate, TerminalInputRequest
 from .services import changes as change_service
 from .services import git, office, ollama, terminal, terminal_jobs, workspace
+from .services.session_summary import build as build_session_summary
 
 
 app = FastAPI(title="Olladex API", version=__version__)
@@ -142,7 +143,7 @@ def create_session(project_id: int, body: SessionCreate):
     stamp = now()
     with connect() as conn:
         cursor = conn.execute("INSERT INTO sessions(project_id,title,created_at,updated_at) VALUES(?,?,?,?)", (project_id, body.title, stamp, stamp))
-    return {"id": cursor.lastrowid, "project_id": project_id, "title": body.title, "created_at": stamp, "updated_at": stamp}
+    return {"id": cursor.lastrowid, "project_id": project_id, "title": body.title, "summary": "", "last_summarized_message_id": 0, "created_at": stamp, "updated_at": stamp}
 
 
 @app.get("/api/sessions/{session_id}/messages")
@@ -164,7 +165,7 @@ def chat_message(session_id: int, body: ChatRequest):
         conn.execute("INSERT INTO messages(session_id,role,content,created_at) VALUES(?,?,?,?)", (session_id, "user", body.content, now()))
     project = get_project(session["project_id"])
     try:
-        answer, activities = ollama.chat(project, [*history, {"role": "user", "content": body.content}])
+        answer, activities = ollama.chat(project, [*history, {"role": "user", "content": body.content}], session_summary=session["summary"] or "")
     except Exception as exc:
         raise HTTPException(502, f"Ollama request failed: {exc}") from exc
     stamp = now()
@@ -190,6 +191,10 @@ def chat_message(session_id: int, body: ChatRequest):
                 result["command_run_id"] = command_cursor.lastrowid
         cursor = conn.execute("INSERT INTO messages(session_id,role,content,activities,created_at) VALUES(?,?,?,?,?)", (session_id, "assistant", answer, json.dumps(activities, default=str), stamp))
         conn.execute("UPDATE sessions SET updated_at=? WHERE id=?", (stamp, session_id))
+        last_message_id = cursor.lastrowid
+        summary_messages = rows(conn.execute("SELECT role,content,activities FROM messages WHERE session_id=? ORDER BY id", (session_id,)))
+        summary = build_session_summary(summary_messages)
+        conn.execute("UPDATE sessions SET summary=?,last_summarized_message_id=? WHERE id=?", (summary, last_message_id, session_id))
     return {"id": cursor.lastrowid, "role": "assistant", "content": answer, "activities": activities, "created_at": stamp}
 
 
@@ -228,6 +233,15 @@ def cancel_terminal(run_id: int):
             conn.execute("UPDATE command_runs SET status='cancelled',updated_at=? WHERE id=?", (now(), run_id))
         return get_command(run_id)
     return terminal_jobs.cancel(run_id)
+
+
+@app.post("/api/terminal/{run_id}/input")
+def terminal_input(run_id: int, body: TerminalInputRequest):
+    get_command(run_id)
+    try:
+        return terminal_jobs.write_input(run_id, body.data)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @app.post("/api/projects/{project_id}/terminal/{run_id}/approve")
@@ -303,6 +317,68 @@ def git_summary(project_id: int):
 @app.get("/api/projects/{project_id}/git/diff")
 def git_diff(project_id: int):
     return {"diff": git.diff(get_project(project_id))}
+
+
+@app.post("/api/projects/{project_id}/git/stage")
+def git_stage(project_id: int, body: GitPathsRequest):
+    try:
+        return git.stage(get_project(project_id), body.paths)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/projects/{project_id}/git/unstage")
+def git_unstage(project_id: int, body: GitPathsRequest):
+    try:
+        return git.unstage(get_project(project_id), body.paths)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/projects/{project_id}/git/branches")
+def git_create_branch(project_id: int, body: GitBranchRequest):
+    try:
+        return git.create_branch(get_project(project_id), body.name, body.checkout)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/projects/{project_id}/git/checkout")
+def git_checkout(project_id: int, body: GitCheckoutRequest):
+    try:
+        return git.checkout(get_project(project_id), body.name)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/projects/{project_id}/git/commit")
+def git_commit(project_id: int, body: GitCommitRequest):
+    try:
+        return git.commit(get_project(project_id), body.message)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.get("/api/sessions/{session_id}/summary")
+def session_summary(session_id: int):
+    with connect() as conn:
+        session = conn.execute("SELECT id,summary,last_summarized_message_id FROM sessions WHERE id=?", (session_id,)).fetchone()
+    if not session:
+        raise HTTPException(404, "Session not found")
+    return dict(session)
+
+
+@app.post("/api/sessions/{session_id}/summary")
+def rebuild_session_summary(session_id: int):
+    with connect() as conn:
+        session = conn.execute("SELECT id FROM sessions WHERE id=?", (session_id,)).fetchone()
+        if not session:
+            raise HTTPException(404, "Session not found")
+        messages = rows(conn.execute("SELECT id,role,content,activities FROM messages WHERE session_id=? ORDER BY id", (session_id,)))
+        summary = build_session_summary(messages)
+        last_id = messages[-1]["id"] if messages else 0
+        conn.execute("UPDATE sessions SET summary=?,last_summarized_message_id=? WHERE id=?", (summary, last_id, session_id))
+    return {"id": session_id, "summary": summary, "last_summarized_message_id": last_id}
 
 
 @app.get("/api/projects/{project_id}/office")
