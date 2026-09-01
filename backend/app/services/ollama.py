@@ -21,22 +21,35 @@ TOOLS = [
 ]
 
 
-def client() -> httpx.Client:
-    return httpx.Client(base_url=settings.ollama_url.rstrip("/"), timeout=300)
+def client(timeout: float | httpx.Timeout = 300) -> httpx.Client:
+    return httpx.Client(base_url=settings.ollama_url.rstrip("/"), timeout=timeout)
 
 
 def status() -> dict:
     try:
-        with client() as http:
+        with client(5) as http:
             response = http.get("/api/tags")
             response.raise_for_status()
             data = response.json()
-        return {"connected": True, "url": settings.ollama_url, "models": [m.get("name") or m.get("model") for m in data.get("models", [])]}
+        models = [m.get("name") or m.get("model") for m in data.get("models", [])]
+        return {"connected": True, "url": settings.ollama_url, "models": models, "embedding_model": settings.ollama_embedding_model, "embedding_available": settings.ollama_embedding_model in models}
     except Exception as exc:
-        return {"connected": False, "url": settings.ollama_url, "models": [], "error": str(exc)}
+        return {"connected": False, "url": settings.ollama_url, "models": [], "embedding_model": settings.ollama_embedding_model, "embedding_available": False, "error": str(exc)}
 
 
-def execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
+def embed_texts(texts: list[str]) -> list[list[float]]:
+    if not settings.ollama_embedding_model:
+        raise ValueError("No Ollama embedding model is configured")
+    with client(httpx.Timeout(90, connect=3)) as http:
+        response = http.post("/api/embed", json={"model": settings.ollama_embedding_model, "input": texts, "truncate": True})
+        response.raise_for_status()
+        vectors = response.json().get("embeddings") or []
+    if len(vectors) != len(texts):
+        raise ValueError("Ollama returned an incomplete embedding response")
+    return vectors
+
+
+def _execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
     if name == "get_project_tree":
         result = workspace.tree(project, max_items=350)
     elif name == "read_file":
@@ -62,6 +75,14 @@ def execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
     return result, activity
 
 
+def execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
+    try:
+        return _execute_tool(project, name, args)
+    except Exception as exc:
+        result = {"error": str(exc), "recoverable": True}
+        return result, {"tool": name, "arguments": args, "summary": f"Tool failed: {exc}", "result": result}
+
+
 def summarize(name: str, result: Any) -> str:
     if isinstance(result, dict) and result.get("error"):
         return str(result["error"])
@@ -82,7 +103,7 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
     request = next((message.get("content", "") for message in reversed(history) if message.get("role") == "user"), "")
     intelligence = workspace.repository_intelligence(project)
     intelligence["symbols"] = intelligence.get("symbols", [])[:40]
-    selected_context = ranked_context(project, request)
+    selected_context = ranked_context(project, request, embedder=embed_texts)
     system = (
         "You are Olladex, a careful local software-development agent. Work only inside the selected repository. "
         "Use tools to inspect evidence before answering. Keep the user informed in concise language. "
@@ -95,6 +116,7 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
     )
     messages: list[dict] = [{"role": "system", "content": system}, *history[-30:]]
     activities: list[dict] = []
+    tool_attempts: dict[str, int] = {}
     with client() as http:
         for _ in range(max_steps):
             response = http.post("/api/chat", json={"model": model or project.get("model") or settings.ollama_model, "messages": messages, "tools": TOOLS, "stream": False, "options": {"temperature": 0.2}})
@@ -113,7 +135,13 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
                         args = json.loads(args)
                     except json.JSONDecodeError:
                         args = {}
-                result, activity = execute_tool(project, name, args)
+                fingerprint = f"{name}:{json.dumps(args, sort_keys=True, default=str)}"
+                tool_attempts[fingerprint] = tool_attempts.get(fingerprint, 0) + 1
+                if tool_attempts[fingerprint] > 2:
+                    result = {"error": "Repeated identical tool call blocked. Inspect the previous result and choose a different action.", "recoverable": True}
+                    activity = {"tool": name, "arguments": args, "summary": "Repeated tool call blocked", "result": result}
+                else:
+                    result, activity = execute_tool(project, name, args)
                 activities.append(activity)
                 messages.append({"role": "tool", "tool_name": name, "content": json.dumps(result, default=str)[:180_000]})
     return "I reached the tool-step limit. Review the activity and ask me to continue.", activities

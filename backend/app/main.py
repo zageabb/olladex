@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import __version__
 from .config import settings
 from .database import connect, decode_json, init_db, now, rows
-from .schemas import ChangeApplyRequest, ChatRequest, CommandRequest, FileWriteRequest, GitBranchRequest, GitCheckoutRequest, GitCommitRequest, GitPathsRequest, OfficeCreateRequest, ProjectCreate, ProjectSettingsRequest, SessionCreate, TerminalInputRequest
+from .schemas import ChangeApplyRequest, ChatRequest, CommandRequest, FileWriteRequest, GitBranchRequest, GitCheckoutRequest, GitCommitRequest, GitPathsRequest, GitRemoteOperationRequest, OfficeCreateRequest, ProjectCreate, ProjectSettingsRequest, SessionCreate, TerminalInputRequest, TerminalResizeRequest
 from .services import changes as change_service
 from .services import git, office, ollama, terminal, terminal_jobs, workspace
 from .services.session_summary import build as build_session_summary
@@ -45,6 +45,14 @@ def get_command(run_id: int) -> dict:
         row = conn.execute("SELECT * FROM command_runs WHERE id=?", (run_id,)).fetchone()
     if not row:
         raise HTTPException(404, "Command run not found")
+    return dict(row)
+
+
+def get_git_operation(operation_id: int) -> dict:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM git_operations WHERE id=?", (operation_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Git operation not found")
     return dict(row)
 
 
@@ -102,6 +110,13 @@ def update_project_settings(project_id: int, body: ProjectSettingsRequest):
 @app.get("/api/projects/{project_id}/intelligence")
 def project_intelligence(project_id: int):
     return workspace.repository_intelligence(get_project(project_id))
+
+
+@app.get("/api/projects/{project_id}/context-preview")
+def context_preview(project_id: int, q: str):
+    from .services.context_engine import ranked_context
+    project = get_project(project_id)
+    return ranked_context(project, q, embedder=ollama.embed_texts)
 
 
 @app.get("/api/projects/{project_id}/tree")
@@ -244,6 +259,15 @@ def terminal_input(run_id: int, body: TerminalInputRequest):
         raise HTTPException(409, str(exc)) from exc
 
 
+@app.post("/api/terminal/{run_id}/resize")
+def terminal_resize(run_id: int, body: TerminalResizeRequest):
+    get_command(run_id)
+    try:
+        return terminal_jobs.resize(run_id, body.columns, body.rows)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 @app.post("/api/projects/{project_id}/terminal/{run_id}/approve")
 def approve_terminal(project_id: int, run_id: int):
     project = get_project(project_id)
@@ -357,6 +381,61 @@ def git_commit(project_id: int, body: GitCommitRequest):
         return git.commit(get_project(project_id), body.message)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
+
+
+@app.get("/api/projects/{project_id}/git/operations")
+def git_operations(project_id: int):
+    get_project(project_id)
+    with connect() as conn:
+        return rows(conn.execute("SELECT * FROM git_operations WHERE project_id=? ORDER BY id DESC LIMIT 20", (project_id,)))
+
+
+@app.post("/api/projects/{project_id}/git/operations")
+def propose_git_operation(project_id: int, body: GitRemoteOperationRequest):
+    project = get_project(project_id)
+    try:
+        prepared = git.remote_operation(project, body.action, body.remote, body.branch)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    stamp = now()
+    with connect() as conn:
+        cursor = conn.execute(
+            "INSERT INTO git_operations(project_id,action,remote,remote_url,branch,command,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (project_id, prepared["action"], prepared["remote"], prepared["remote_url"], prepared["branch"], prepared["command"], "pending", stamp, stamp),
+        )
+    return get_git_operation(cursor.lastrowid)
+
+
+@app.post("/api/projects/{project_id}/git/operations/{operation_id}/approve")
+def approve_git_operation(project_id: int, operation_id: int):
+    project = get_project(project_id)
+    operation = get_git_operation(operation_id)
+    if operation["project_id"] != project_id:
+        raise HTTPException(404, "Git operation not found in this project")
+    if operation["status"] != "pending":
+        raise HTTPException(409, "Only pending Git operations can be approved")
+    try:
+        result = git.execute_remote_operation(project, operation)
+    except ValueError as exc:
+        with connect() as conn:
+            conn.execute("UPDATE git_operations SET status='failed',output=?,updated_at=? WHERE id=?", (str(exc), now(), operation_id))
+        raise HTTPException(409, str(exc)) from exc
+    with connect() as conn:
+        conn.execute("UPDATE git_operations SET status='completed',output=?,updated_at=? WHERE id=?", (result["output"], now(), operation_id))
+    return {**get_git_operation(operation_id), "summary": result["summary"]}
+
+
+@app.post("/api/projects/{project_id}/git/operations/{operation_id}/reject")
+def reject_git_operation(project_id: int, operation_id: int):
+    get_project(project_id)
+    operation = get_git_operation(operation_id)
+    if operation["project_id"] != project_id:
+        raise HTTPException(404, "Git operation not found in this project")
+    if operation["status"] != "pending":
+        raise HTTPException(409, "Only pending Git operations can be rejected")
+    with connect() as conn:
+        conn.execute("UPDATE git_operations SET status='rejected',updated_at=? WHERE id=?", (now(), operation_id))
+    return get_git_operation(operation_id)
 
 
 @app.get("/api/sessions/{session_id}/summary")

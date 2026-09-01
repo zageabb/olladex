@@ -26,6 +26,11 @@ class TerminalInputRequest(BaseModel):
     data: str = Field(min_length=1, max_length=10_000)
 
 
+class TerminalResizeRequest(BaseModel):
+    columns: int = Field(ge=20, le=500)
+    rows: int = Field(ge=5, le=200)
+
+
 class FileWriteRequest(BaseModel):
     content: str
     session_id: int | None = None
@@ -58,6 +63,12 @@ class GitCheckoutRequest(BaseModel):
 
 class GitCommitRequest(BaseModel):
     message: str = Field(min_length=1, max_length=5_000)
+
+
+class GitRemoteOperationRequest(BaseModel):
+    action: Literal["fetch", "pull", "push"]
+    remote: str = Field(default="origin", min_length=1, max_length=120)
+    branch: str | None = Field(default=None, max_length=120)
 
 
 class DiagramRequest(BaseModel):

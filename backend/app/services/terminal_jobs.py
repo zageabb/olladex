@@ -4,9 +4,12 @@ import os
 import pty
 import select
 import signal
+import struct
 import subprocess
 import threading
 import time
+import fcntl
+import termios
 
 from ..database import connect, now
 from .terminal import blocked
@@ -114,4 +117,14 @@ def write_input(run_id: int, data: str) -> dict:
             raise ValueError("The command is not running or no longer accepts input")
         master = job["master"]
     os.write(master, data.encode("utf-8"))
+    return status(run_id)
+
+
+def resize(run_id: int, columns: int, rows: int) -> dict:
+    with _lock:
+        job = _jobs.get(run_id)
+        if not job or job["status"] != "running":
+            raise ValueError("The command is not running or no longer accepts terminal resize events")
+        master = job["master"]
+    fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
     return status(run_id)

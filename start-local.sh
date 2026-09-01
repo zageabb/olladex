@@ -9,7 +9,8 @@ if [[ ! -d .venv ]]; then
 fi
 
 .venv/bin/pip install -r backend/requirements.txt
-npm_config_cache="${OLLADEX_NPM_CACHE:-/tmp/olladex-npm-cache}" npm --prefix frontend install
+npm_cache_dir="${OLLADEX_NPM_CACHE:-/tmp/olladex-npm-cache}"
+npm --prefix frontend install --cache "$npm_cache_dir"
 mkdir -p data
 
 OLLADEX_DATA_ROOT="${OLLADEX_DATA_ROOT:-$project_root/data}" \
@@ -18,5 +19,4 @@ backend_pid=$!
 trap 'kill "$backend_pid" 2>/dev/null || true' EXIT
 
 NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-http://localhost:${OLLADEX_API_PORT:-8001}/api}" \
-  npm_config_cache="${OLLADEX_NPM_CACHE:-/tmp/olladex-npm-cache}" \
   npm --prefix frontend run dev -- --hostname 0.0.0.0 --port "${OLLADEX_PORT:-5081}"

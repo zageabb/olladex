@@ -18,3 +18,14 @@ def test_ranked_context_ignores_lock_files(tmp_path):
     (tmp_path / "package-lock.json").write_text("authentication " * 100, encoding="utf-8")
     assert ranked_context(project(tmp_path), "authentication") == []
 
+
+def test_hybrid_context_uses_embedding_similarity(tmp_path):
+    (tmp_path / "battery.py").write_text("def state_of_charge():\n    return 80\n", encoding="utf-8")
+    (tmp_path / "weather.py").write_text("def forecast():\n    return 'sunny'\n", encoding="utf-8")
+
+    def embedder(texts):
+        return [[1.0, 0.0] if "energy reserve" in text or "battery.py" in text else [0.0, 1.0] for text in texts]
+
+    result = ranked_context(project(tmp_path), "energy reserve", embedder=embedder)
+    assert result[0]["path"] == "battery.py"
+    assert result[0]["strategy"] == "hybrid"

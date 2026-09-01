@@ -63,6 +63,19 @@ CREATE TABLE IF NOT EXISTS command_runs (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS git_operations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  action TEXT NOT NULL,
+  remote TEXT NOT NULL,
+  remote_url TEXT NOT NULL,
+  branch TEXT NOT NULL,
+  command TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  output TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 """
 
 ADDITIVE_COLUMNS = {
@@ -84,6 +97,9 @@ ADDITIVE_COLUMNS = {
     "command_runs": {
         "status": "TEXT NOT NULL DEFAULT 'completed'",
         "updated_at": "TEXT NOT NULL DEFAULT ''",
+    },
+    "git_operations": {
+        "remote_url": "TEXT NOT NULL DEFAULT ''",
     },
 }
 

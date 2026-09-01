@@ -1,5 +1,30 @@
 # Olladex release notes
 
+## v0.4.0
+
+Olladex v0.4 adds a real desktop distribution path and strengthens the context, terminal and Git workflows used by the local agent.
+
+### Added
+
+- Electron desktop shell with context isolation, sandboxing, disabled Node integration and external-navigation protection.
+- PyInstaller and Electron Builder pipeline for AppImage/DEB, DMG and NSIS builds.
+- OS-local desktop data storage and loopback-only desktop services.
+- Hybrid context ranking using Ollama embeddings plus the existing lexical scorer.
+- Automatic lexical fallback when the configured embedding model is unavailable.
+- A Context Lens in the Project panel showing selected files, ranking strategy and semantic score.
+- Persisted Git remote-operation proposals for fetch, fast-forward pull and push.
+- Exact-command review with separate approve and reject actions before any remote Git operation runs.
+- Remote/upstream and ahead/behind visibility in the Changes panel.
+- PTY resize support and Ctrl-C, Tab, Escape and history shortcut controls.
+- Recoverable tool-error observations and a guard against repeated identical tool calls.
+
+### Verification
+
+- Sixteen backend tests cover hybrid retrieval, Git remote preparation/execution, API approvals, PTY resize, recoverable tool failures and all earlier safety workflows.
+- Production Next.js compilation and strict TypeScript checking pass.
+- The standalone frontend and PyInstaller-frozen API both pass loopback health smoke tests.
+- Electron 39 is installed and its shell scripts pass syntax validation; native packaging is exercised on Linux.
+
 ## v0.3.0
 
 Olladex v0.3 deepens the local development loop with controlled Git writes, interactive terminal sessions and a more selective context engine.

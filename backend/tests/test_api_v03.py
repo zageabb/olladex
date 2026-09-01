@@ -13,6 +13,9 @@ def test_v03_git_terminal_and_summary_workflow(tmp_path, monkeypatch):
     repository = tmp_path / "repository"
     repository.mkdir()
     subprocess.run(["git", "init", "-b", "main"], cwd=repository, check=True, capture_output=True)
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=repository, check=True)
     (repository / "README.md").write_text("# Local project\n", encoding="utf-8")
     monkeypatch.setattr(settings, "data_root", data_root)
 
@@ -28,8 +31,17 @@ def test_v03_git_terminal_and_summary_workflow(tmp_path, monkeypatch):
         branched = client.post(f"/api/projects/{project_id}/git/branches", json={"name": "feature/v03", "checkout": True})
         assert branched.json()["branch"] == "feature/v03"
 
+        proposed = client.post(f"/api/projects/{project_id}/git/operations", json={"action": "push", "remote": "origin", "branch": "feature/v03"})
+        assert proposed.status_code == 200
+        assert proposed.json()["status"] == "pending"
+        approved = client.post(f"/api/projects/{project_id}/git/operations/{proposed.json()['id']}/approve")
+        assert approved.status_code == 200
+        assert approved.json()["status"] == "completed"
+
         started = client.post(f"/api/projects/{project_id}/terminal/start", json={"command": "read value; printf 'received:%s' \"$value\""}).json()
         run_id = started["id"]
+        resized = client.post(f"/api/terminal/{run_id}/resize", json={"columns": 100, "rows": 30})
+        assert resized.status_code == 200
         sent = client.post(f"/api/terminal/{run_id}/input", json={"data": "hello\n"})
         assert sent.status_code == 200
         terminal_state = {}

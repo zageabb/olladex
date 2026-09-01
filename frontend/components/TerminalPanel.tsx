@@ -11,6 +11,7 @@ export function TerminalPanel({ projectId }: { projectId: number }) {
   const [liveInput, setLiveInput] = useState("");
   const [runningId, setRunningId] = useState<number | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     request<Run[]>(`/projects/${projectId}/terminal`).then((data) => {
@@ -21,6 +22,16 @@ export function TerminalPanel({ projectId }: { projectId: number }) {
     }).catch(() => {});
   }, [projectId]);
   useEffect(() => endRef.current?.scrollIntoView(), [runs]);
+  useEffect(() => {
+    if (!runningId || !panelRef.current) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const columns = Math.max(20, Math.min(500, Math.floor(entry.contentRect.width / 8)));
+      const rows = Math.max(5, Math.min(200, Math.floor(entry.contentRect.height / 18)));
+      request(`/terminal/${runningId}/resize`, { method: "POST", body: JSON.stringify({ columns, rows }) }).catch(() => {});
+    });
+    observer.observe(panelRef.current);
+    return () => observer.disconnect();
+  }, [runningId]);
 
   async function execute(event: FormEvent) {
     event.preventDefault();
@@ -66,12 +77,19 @@ export function TerminalPanel({ projectId }: { projectId: number }) {
     catch (error) { setRuns((items) => items.map((item) => item.id === runningId ? { ...item, output: `${item.output}\n${error instanceof Error ? error.message : String(error)}` } : item)); }
   }
 
-  return <div className="terminal-panel">
+  async function sendControl(data: string) {
+    if (!runningId) return;
+    try { await request(`/terminal/${runningId}/input`, { method: "POST", body: JSON.stringify({ data }) }); }
+    catch (error) { setRuns((items) => items.map((item) => item.id === runningId ? { ...item, output: `${item.output}\n${error instanceof Error ? error.message : String(error)}` } : item)); }
+  }
+
+  return <div className="terminal-panel" ref={panelRef}>
     <div className="terminal-output">
       <div className="terminal-welcome">Olladex local terminal · /bin/bash · commands run in the selected repository</div>
       {runs.map((run) => <div className="terminal-run" key={run.id}><div><span className="prompt">$</span> {run.command}</div><pre>{run.output || (run.status === "running" ? "Running…" : `(completed with exit code ${run.exit_code})`)}</pre><small className={run.exit_code === 0 ? "ok" : "failed"}>{run.status}{run.exit_code >= 0 ? ` · exit ${run.exit_code}` : ""}</small></div>)}
       <div ref={endRef} />
     </div>
-    <form className="terminal-input" onSubmit={runningId ? sendInput : execute}><span className="prompt">{runningId ? "›" : "$"}</span><input value={runningId ? liveInput : command} onChange={(e) => runningId ? setLiveInput(e.target.value) : setCommand(e.target.value)} placeholder={runningId ? "Send input to the running command" : "Enter a bash command"} autoComplete="off" />{runningId ? <><button>Send</button><button type="button" onClick={cancel}>Stop</button></> : <button>Run</button>}</form>
+    <div className="terminal-controls">{runningId && <><button onClick={() => sendControl("\u0003")}>Ctrl-C</button><button onClick={() => sendControl("\t")}>Tab</button><button onClick={() => sendControl("\u001b[A")}>↑</button><button onClick={() => sendControl("\u001b[B")}>↓</button><button onClick={() => sendControl("\u001b")}>Esc</button></>}<button onClick={() => setRuns([])}>Clear view</button></div>
+    <form className="terminal-input" onSubmit={runningId ? sendInput : execute}><span className="prompt">{runningId ? "›" : "$"}</span><input value={runningId ? liveInput : command} onChange={(e) => runningId ? setLiveInput(e.target.value) : setCommand(e.target.value)} onKeyDown={(event) => { if (runningId && event.ctrlKey && event.key.toLowerCase() === "c") { event.preventDefault(); sendControl("\u0003"); } else if (runningId && event.key === "Tab") { event.preventDefault(); sendControl("\t"); } }} placeholder={runningId ? "Send input to the running command" : "Enter a bash command"} autoComplete="off" />{runningId ? <><button>Send</button><button type="button" onClick={cancel}>Stop</button></> : <button>Run</button>}</form>
   </div>;
 }

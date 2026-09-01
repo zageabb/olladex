@@ -164,7 +164,7 @@ export default function Home() {
 
   return <main className="app-shell">
     <header className="topbar">
-      <div className="brand"><span className="brand-mark">O</span><span>Olladex</span><em>v0.3</em></div>
+      <div className="brand"><span className="brand-mark">O</span><span>Olladex</span><em>v0.4</em></div>
       <div className="project-selector"><span>Repository</span><select value={project?.id || ""} onChange={(e) => setProject(projects.find((p) => p.id === Number(e.target.value)) || null)}><option value="">Open a repository</option>{projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
       <button className="global-search" onClick={() => setTab("files")}>⌕ Search this repository <kbd>⌘ K</kbd></button>
       <div className={`connection ${status?.ollama.connected ? "online" : ""}`}><i />{status?.ollama.connected ? `${project?.model || status.ollama.models[0] || "Ollama"}` : "Ollama offline"}</div>

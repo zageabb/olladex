@@ -1,0 +1,34 @@
+{
+  "name": "olladex-desktop",
+  "version": "0.4.0",
+  "private": true,
+  "description": "Desktop shell for the local Olladex development agent",
+  "main": "main.cjs",
+  "scripts": {
+    "prepare:app": "node scripts/prepare.mjs",
+    "start": "npm run prepare:app && electron .",
+    "dist": "bash build-backend.sh && npm run prepare:app && electron-builder",
+    "portable:linux": "bash build-portable-linux.sh"
+  },
+  "devDependencies": {
+    "electron": "^39.0.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "local.olladex.desktop",
+    "productName": "Olladex",
+    "artifactName": "Olladex-${version}-${os}-${arch}.${ext}",
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "package.json"
+    ],
+    "extraResources": [
+      { "from": "../frontend/.next/standalone", "to": "frontend" },
+      { "from": "dist-api/olladex-api", "to": "api" }
+    ],
+    "linux": { "target": ["AppImage", "deb"], "category": "Development" },
+    "mac": { "target": ["dmg"], "category": "public.app-category.developer-tools" },
+    "win": { "target": ["nsis"] }
+  }
+}

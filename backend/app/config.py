@@ -9,9 +9,11 @@ class Settings(BaseSettings):
     data_root: Path = Path("data")
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen3:14b"
+    ollama_embedding_model: str = "nomic-embed-text"
     cors_origins: str = "http://localhost:5081,http://127.0.0.1:5081"
     command_timeout_seconds: int = 120
     max_file_bytes: int = 2_000_000
+    context_candidate_files: int = 24
 
     @property
     def database_path(self) -> Path:
@@ -19,4 +21,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-
