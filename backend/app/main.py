@@ -9,8 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import __version__
 from .config import settings
 from .database import connect, decode_json, init_db, now, rows
-from .schemas import ChatRequest, CommandRequest, FileWriteRequest, OfficeCreateRequest, ProjectCreate, SessionCreate
-from .services import git, office, ollama, terminal, workspace
+from .schemas import ChangeApplyRequest, ChatRequest, CommandRequest, FileWriteRequest, OfficeCreateRequest, ProjectCreate, ProjectSettingsRequest, SessionCreate
+from .services import changes as change_service
+from .services import git, office, ollama, terminal, terminal_jobs, workspace
 
 
 app = FastAPI(title="Olladex API", version=__version__)
@@ -27,6 +28,22 @@ def get_project(project_id: int) -> dict:
         row = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
     if not row:
         raise HTTPException(404, "Project not found")
+    return dict(row)
+
+
+def get_change(change_id: int) -> dict:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM file_changes WHERE id=?", (change_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Change not found")
+    return dict(row)
+
+
+def get_command(run_id: int) -> dict:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM command_runs WHERE id=?", (run_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Command run not found")
     return dict(row)
 
 
@@ -56,11 +73,34 @@ def create_project(body: ProjectCreate):
         existing = conn.execute("SELECT * FROM projects WHERE path=?", (str(path),)).fetchone()
         if existing:
             conn.execute("UPDATE projects SET last_opened_at=? WHERE id=?", (stamp, existing["id"]))
-            return dict(existing)
-        cursor = conn.execute("INSERT INTO projects(name,path,model,created_at,last_opened_at) VALUES(?,?,?,?,?)", (body.name or path.name, str(path), body.model or settings.ollama_model, stamp, stamp))
-        project_id = cursor.lastrowid
-        conn.execute("INSERT INTO sessions(project_id,title,created_at,updated_at) VALUES(?,?,?,?)", (project_id, "Welcome to Olladex", stamp, stamp))
+            project_id = existing["id"]
+        else:
+            cursor = conn.execute("INSERT INTO projects(name,path,model,created_at,last_opened_at) VALUES(?,?,?,?,?)", (body.name or path.name, str(path), body.model or settings.ollama_model, stamp, stamp))
+            project_id = cursor.lastrowid
+            conn.execute("INSERT INTO sessions(project_id,title,created_at,updated_at) VALUES(?,?,?,?)", (project_id, "Welcome to Olladex", stamp, stamp))
     return get_project(project_id)
+
+
+@app.get("/api/projects/{project_id}/settings")
+def project_settings(project_id: int):
+    return get_project(project_id)
+
+
+@app.patch("/api/projects/{project_id}/settings")
+def update_project_settings(project_id: int, body: ProjectSettingsRequest):
+    get_project(project_id)
+    updates = body.model_dump(exclude_none=True)
+    if not updates:
+        return get_project(project_id)
+    assignments = ",".join(f"{name}=?" for name in updates)
+    with connect() as conn:
+        conn.execute(f"UPDATE projects SET {assignments} WHERE id=?", (*updates.values(), project_id))
+    return get_project(project_id)
+
+
+@app.get("/api/projects/{project_id}/intelligence")
+def project_intelligence(project_id: int):
+    return workspace.repository_intelligence(get_project(project_id))
 
 
 @app.get("/api/projects/{project_id}/tree")
@@ -77,8 +117,10 @@ def read_file(project_id: int, path: str = Query(...)):
 def write_file(project_id: int, path: str, body: FileWriteRequest):
     project = get_project(project_id)
     before, after, diff = workspace.write_text(project, path, body.content)
+    hunks = change_service.build_hunks(before, after)
+    stamp = now()
     with connect() as conn:
-        cursor = conn.execute("INSERT INTO file_changes(project_id,session_id,path,before_content,after_content,diff,created_at) VALUES(?,?,?,?,?,?,?)", (project_id, body.session_id, path, before, after, diff, now()))
+        cursor = conn.execute("INSERT INTO file_changes(project_id,session_id,path,before_content,after_content,diff,hunks,applied_content,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)", (project_id, body.session_id, path, before, after, diff, json.dumps(hunks), after, "applied", stamp, stamp))
     return {"id": cursor.lastrowid, "path": path, "diff": diff}
 
 
@@ -127,15 +169,27 @@ def chat_message(session_id: int, body: ChatRequest):
         raise HTTPException(502, f"Ollama request failed: {exc}") from exc
     stamp = now()
     with connect() as conn:
-        cursor = conn.execute("INSERT INTO messages(session_id,role,content,activities,created_at) VALUES(?,?,?,?,?)", (session_id, "assistant", answer, json.dumps(activities, default=str), stamp))
-        conn.execute("UPDATE sessions SET updated_at=? WHERE id=?", (stamp, session_id))
         for activity in activities:
             if activity.get("tool") == "write_file" and isinstance(activity.get("result"), dict):
                 result = activity["result"]
-                conn.execute(
-                    "INSERT INTO file_changes(project_id,session_id,path,before_content,after_content,diff,created_at) VALUES(?,?,?,?,?,?,?)",
-                    (project["id"], session_id, result.get("path", ""), result.get("before", ""), result.get("after", ""), result.get("diff", ""), stamp),
+                hunks = change_service.build_hunks(result.get("before", ""), result.get("after", ""))
+                change_cursor = conn.execute(
+                    "INSERT INTO file_changes(project_id,session_id,path,before_content,after_content,diff,hunks,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (project["id"], session_id, result.get("path", ""), result.get("before", ""), result.get("after", ""), result.get("diff", ""), json.dumps(hunks), "proposed", stamp, stamp),
                 )
+                result["change_id"] = change_cursor.lastrowid
+                result["hunks"] = hunks
+                result.pop("before", None)
+                result.pop("after", None)
+            if activity.get("tool") == "run_command" and isinstance(activity.get("result"), dict):
+                result = activity["result"]
+                command_cursor = conn.execute(
+                    "INSERT INTO command_runs(project_id,command,output,exit_code,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                    (project["id"], result.get("command", ""), result.get("output", ""), result.get("exit_code", -1), result.get("status", "completed"), stamp, stamp),
+                )
+                result["command_run_id"] = command_cursor.lastrowid
+        cursor = conn.execute("INSERT INTO messages(session_id,role,content,activities,created_at) VALUES(?,?,?,?,?)", (session_id, "assistant", answer, json.dumps(activities, default=str), stamp))
+        conn.execute("UPDATE sessions SET updated_at=? WHERE id=?", (stamp, session_id))
     return {"id": cursor.lastrowid, "role": "assistant", "content": answer, "activities": activities, "created_at": stamp}
 
 
@@ -143,8 +197,48 @@ def chat_message(session_id: int, body: ChatRequest):
 def run_terminal(project_id: int, body: CommandRequest):
     result = terminal.run(get_project(project_id), body.command, body.timeout_seconds)
     with connect() as conn:
-        cursor = conn.execute("INSERT INTO command_runs(project_id,command,output,exit_code,created_at) VALUES(?,?,?,?,?)", (project_id, body.command, result["output"], result["exit_code"], now()))
-    return {"id": cursor.lastrowid, **result}
+        stamp = now()
+        cursor = conn.execute("INSERT INTO command_runs(project_id,command,output,exit_code,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", (project_id, body.command, result["output"], result["exit_code"], "completed", stamp, stamp))
+    return {"id": cursor.lastrowid, "status": "completed", **result}
+
+
+@app.post("/api/projects/{project_id}/terminal/start")
+def start_terminal(project_id: int, body: CommandRequest):
+    project = get_project(project_id)
+    stamp = now()
+    with connect() as conn:
+        cursor = conn.execute("INSERT INTO command_runs(project_id,command,output,exit_code,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", (project_id, body.command, "", -1, "pending", stamp, stamp))
+        run_id = cursor.lastrowid
+    return {"command": body.command, **terminal_jobs.start(project, run_id, body.command, body.timeout_seconds or 600)}
+
+
+@app.get("/api/terminal/{run_id}")
+def terminal_status(run_id: int):
+    result = terminal_jobs.status(run_id)
+    if not result:
+        raise HTTPException(404, "Command run not found")
+    return result
+
+
+@app.delete("/api/terminal/{run_id}")
+def cancel_terminal(run_id: int):
+    command = get_command(run_id)
+    if command["status"] == "pending":
+        with connect() as conn:
+            conn.execute("UPDATE command_runs SET status='cancelled',updated_at=? WHERE id=?", (now(), run_id))
+        return get_command(run_id)
+    return terminal_jobs.cancel(run_id)
+
+
+@app.post("/api/projects/{project_id}/terminal/{run_id}/approve")
+def approve_terminal(project_id: int, run_id: int):
+    project = get_project(project_id)
+    command = get_command(run_id)
+    if command["project_id"] != project_id:
+        raise HTTPException(404, "Command run not found in this project")
+    if command["status"] != "pending":
+        raise HTTPException(409, "Only pending commands can be approved")
+    return {"command": command["command"], **terminal_jobs.start(project, run_id, command["command"])}
 
 
 @app.get("/api/projects/{project_id}/terminal")
@@ -158,7 +252,47 @@ def terminal_history(project_id: int):
 def changes(project_id: int):
     get_project(project_id)
     with connect() as conn:
-        return rows(conn.execute("SELECT id,path,diff,status,created_at FROM file_changes WHERE project_id=? ORDER BY id DESC LIMIT 100", (project_id,)))
+        result = rows(conn.execute("SELECT id,path,diff,hunks,status,created_at,updated_at FROM file_changes WHERE project_id=? ORDER BY id DESC LIMIT 100", (project_id,)))
+    for item in result:
+        item["hunks"] = decode_json(item.get("hunks"))
+    return result
+
+
+@app.post("/api/projects/{project_id}/changes/{change_id}/apply")
+def apply_change(project_id: int, change_id: int, body: ChangeApplyRequest):
+    project = get_project(project_id)
+    change = get_change(change_id)
+    if change["project_id"] != project_id:
+        raise HTTPException(404, "Change not found in this project")
+    content = change_service.apply(project, change, body.hunk_indexes)
+    stamp = now()
+    with connect() as conn:
+        conn.execute("UPDATE file_changes SET status='applied',applied_content=?,updated_at=? WHERE id=?", (content, stamp, change_id))
+    return {"id": change_id, "status": "applied", "path": change["path"], "applied_hunks": body.hunk_indexes}
+
+
+@app.post("/api/projects/{project_id}/changes/{change_id}/reject")
+def reject_change(project_id: int, change_id: int):
+    change = get_change(change_id)
+    if change["project_id"] != project_id:
+        raise HTTPException(404, "Change not found in this project")
+    if change["status"] != "proposed":
+        raise HTTPException(409, "Only proposed changes can be rejected")
+    with connect() as conn:
+        conn.execute("UPDATE file_changes SET status='rejected',updated_at=? WHERE id=?", (now(), change_id))
+    return {"id": change_id, "status": "rejected"}
+
+
+@app.post("/api/projects/{project_id}/changes/{change_id}/revert")
+def revert_change(project_id: int, change_id: int):
+    project = get_project(project_id)
+    change = get_change(change_id)
+    if change["project_id"] != project_id:
+        raise HTTPException(404, "Change not found in this project")
+    change_service.revert(project, change)
+    with connect() as conn:
+        conn.execute("UPDATE file_changes SET status='reverted',updated_at=? WHERE id=?", (now(), change_id))
+    return {"id": change_id, "status": "reverted", "path": change["path"]}
 
 
 @app.get("/api/projects/{project_id}/git")

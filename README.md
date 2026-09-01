@@ -1,22 +1,26 @@
-# Olladex v0.1.0
+# Olladex v0.2.0
 
 **Local AI development agent for Ollama**  
 *Code locally. Build autonomously.*
 
 Olladex is a Codex-style, repository-first development workspace powered by models running through Ollama. It combines a conversational coding agent with visible repository tools, local Bash, Git diffs, Mermaid and Graphviz/DOT diagrams, and practical Office-file workflows.
 
-The v0.1 interface follows the navy, blue, white and split-workspace design language established in Context Studio while focusing specifically on software-development work.
+The interface follows the navy, blue, white and split-workspace design language established in Context Studio while focusing specifically on software-development work.
 
-## v0.1 capabilities
+## Core capabilities
 
 - Open and persist local repositories.
 - Connect to local or network-hosted Ollama and discover installed models.
 - Persistent projects, task sessions, messages and activity records in SQLite.
 - Bounded Ollama tool loop with visible tool activity.
 - Repository tree, UTF-8 file viewer/editor and text/code search.
-- Project-scoped file writes with unified diffs and `.olladex/history` backups.
-- Local `/bin/bash` terminal with command history, timeouts and initial destructive-command blocks.
+- Review-first agent file proposals with selectable diff hunks, apply, reject and conflict-safe revert.
+- Project-scoped manual file writes with unified diffs and timestamped `.olladex/history` backups.
+- PTY-backed local `/bin/bash` terminal with live output, cancellation, history, timeouts and destructive-command blocks.
+- Review, Assisted and Autonomous command-approval modes.
 - Git branch, working-tree status, recent commits and staged/unstaged diff view.
+- Project instructions automatically supplied to the Ollama agent.
+- Repository intelligence covering languages, frameworks, scripts and detected symbols.
 - Mermaid and Graphviz/DOT live editors with SVG preview and export.
 - DOCX, XLSX, PPTX and PDF inspection.
 - Create basic Word documents, Excel workbooks and PowerPoint presentations.
@@ -95,17 +99,16 @@ npm --prefix frontend run build
 
 ## Safety boundary
 
-Olladex resolves every agent file path against the selected repository and rejects traversal outside it. File writes retain the previous version under `.olladex/history`. Bash commands run with the same operating-system permissions as the Olladex process; an initial blocklist rejects obvious disk/system destruction, but v0.1 is intended for a trusted local machine or trusted LAN only. Do not expose it directly to the public Internet.
+Olladex resolves every agent file path against the selected repository and rejects traversal outside it. Agent edits are proposals and do not touch the repository until approved. File writes retain timestamped previous versions under `.olladex/history`. Bash commands run with the same operating-system permissions as the Olladex process; approval modes and a blocklist reduce risk, but Olladex is intended for a trusted local machine or trusted LAN only. Do not expose it directly to the public Internet.
 
-## v0.1 limitations
+## v0.2 limitations
 
-- The first release is a local web application with a desktop-style interface, not yet a packaged native desktop binary.
-- Long-running commands return after completion rather than using a full interactive PTY stream.
+- Olladex is currently a local web application with a desktop-style interface, not yet a packaged native desktop binary.
+- The terminal streams PTY output and supports cancellation, but does not yet accept interactive stdin after a command starts.
 - Office editing is structured and practical, not a pixel-perfect replacement for Word, Excel or PowerPoint.
-- The agent applies workspace-scoped file edits directly and records their diffs; per-hunk approval and revert controls are planned next.
 - Git commit, branch creation, push and pull actions are not yet exposed in the interface.
-- Repository symbol indexing and semantic search are later context-engine work.
+- Repository symbols use lightweight language-aware pattern extraction; tree-sitter and semantic ranking are later context-engine work.
 
 ## Next release direction
 
-v0.2 should focus on review-first file change proposals, per-hunk accept/reject/revert, true PTY streaming and cancellation, project instruction files, and a richer repository map before adding more integrations.
+v0.3 should focus on controlled Git write actions, interactive terminal input, tree-sitter symbol indexing, ranked context assembly, session summarisation and native desktop packaging.

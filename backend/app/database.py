@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS projects (
   name TEXT NOT NULL,
   path TEXT NOT NULL UNIQUE,
   model TEXT NOT NULL,
+  approval_mode TEXT NOT NULL DEFAULT 'assisted',
+  instructions TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   last_opened_at TEXT NOT NULL
 );
@@ -41,8 +43,11 @@ CREATE TABLE IF NOT EXISTS file_changes (
   before_content TEXT NOT NULL,
   after_content TEXT NOT NULL,
   diff TEXT NOT NULL,
+  hunks TEXT NOT NULL DEFAULT '[]',
+  applied_content TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'applied',
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS command_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,9 +55,27 @@ CREATE TABLE IF NOT EXISTS command_runs (
   command TEXT NOT NULL,
   output TEXT NOT NULL,
   exit_code INTEGER NOT NULL,
-  created_at TEXT NOT NULL
+  status TEXT NOT NULL DEFAULT 'completed',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT ''
 );
 """
+
+ADDITIVE_COLUMNS = {
+    "projects": {
+        "approval_mode": "TEXT NOT NULL DEFAULT 'assisted'",
+        "instructions": "TEXT NOT NULL DEFAULT ''",
+    },
+    "file_changes": {
+        "hunks": "TEXT NOT NULL DEFAULT '[]'",
+        "applied_content": "TEXT NOT NULL DEFAULT ''",
+        "updated_at": "TEXT NOT NULL DEFAULT ''",
+    },
+    "command_runs": {
+        "status": "TEXT NOT NULL DEFAULT 'completed'",
+        "updated_at": "TEXT NOT NULL DEFAULT ''",
+    },
+}
 
 
 def now() -> str:
@@ -63,6 +86,11 @@ def init_db() -> None:
     settings.data_root.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(settings.database_path) as conn:
         conn.executescript(SCHEMA)
+        for table, columns in ADDITIVE_COLUMNS.items():
+            existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+            for name, definition in columns.items():
+                if name not in existing:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
 
 @contextmanager
@@ -86,4 +114,3 @@ def decode_json(value: str | None, fallback=None):
         return json.loads(value or "")
     except (TypeError, json.JSONDecodeError):
         return [] if fallback is None else fallback
-

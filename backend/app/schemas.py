@@ -27,6 +27,16 @@ class FileWriteRequest(BaseModel):
     session_id: int | None = None
 
 
+class ChangeApplyRequest(BaseModel):
+    hunk_indexes: list[int] | None = None
+
+
+class ProjectSettingsRequest(BaseModel):
+    model: str | None = None
+    approval_mode: Literal["review", "assisted", "autonomous"] | None = None
+    instructions: str | None = Field(default=None, max_length=100_000)
+
+
 class DiagramRequest(BaseModel):
     engine: Literal["mermaid", "dot"]
     source: str = Field(min_length=1, max_length=200_000)
@@ -38,4 +48,3 @@ class OfficeCreateRequest(BaseModel):
     title: str = "Untitled"
     content: str = ""
     data: list[list[Any]] = []
-

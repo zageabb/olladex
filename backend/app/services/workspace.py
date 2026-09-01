@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import difflib
 import os
+import re
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -80,7 +81,9 @@ def read_text(project: dict, relative: str) -> str:
 def write_text(project: dict, relative: str, content: str) -> tuple[str, str, str]:
     path = safe_path(project, relative)
     before = path.read_text(encoding="utf-8") if path.exists() else ""
-    backup_root = project_root(project) / ".olladex" / "history"
+    from datetime import UTC, datetime
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+    backup_root = project_root(project) / ".olladex" / "history" / stamp
     backup = backup_root / relative
     backup.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
@@ -134,3 +137,76 @@ def project_summary(project: dict) -> str:
     top = [p.name for p in sorted(root.iterdir()) if p.name not in IGNORED][:40]
     return f"Project: {project['name']}\nPath: {root}\nDetected: {', '.join(signals) or 'general repository'}\nTop-level: {', '.join(top)}"
 
+
+def repository_intelligence(project: dict) -> dict:
+    root = project_root(project)
+    extensions: dict[str, int] = {}
+    symbols: list[dict] = []
+    file_count = 0
+    total_bytes = 0
+    frameworks: set[str] = set()
+    test_commands: list[str] = []
+    build_commands: list[str] = []
+    for base, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in IGNORED]
+        for name in files:
+            path = Path(base) / name
+            rel = path.relative_to(root).as_posix()
+            file_count += 1
+            try:
+                total_bytes += path.stat().st_size
+            except OSError:
+                pass
+            suffix = path.suffix.lower() or "[none]"
+            extensions[suffix] = extensions.get(suffix, 0) + 1
+            if len(symbols) >= 250 or suffix not in {".py", ".js", ".jsx", ".ts", ".tsx"}:
+                continue
+            try:
+                content = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            pattern = r"^(?:export\s+)?(?:async\s+)?(?:def|class|function|const|let|var)\s+([A-Za-z_$][\w$]*)"
+            for number, line in enumerate(content.splitlines(), 1):
+                match = re.match(pattern, line.strip())
+                if match:
+                    symbols.append({"name": match.group(1), "path": rel, "line": number})
+                    if len(symbols) >= 250:
+                        break
+    package = root / "package.json"
+    if package.exists():
+        try:
+            import json
+            data = json.loads(package.read_text(encoding="utf-8"))
+            dependencies = {**data.get("dependencies", {}), **data.get("devDependencies", {})}
+            for dependency, label in {"next": "Next.js", "react": "React", "vite": "Vite", "vue": "Vue", "svelte": "Svelte", "express": "Express"}.items():
+                if dependency in dependencies:
+                    frameworks.add(label)
+            scripts = data.get("scripts", {})
+            test_commands.extend(f"npm run {name}" for name in scripts if "test" in name)
+            build_commands.extend(f"npm run {name}" for name in scripts if name in {"build", "check", "lint"})
+        except Exception:
+            pass
+    requirements = root / "requirements.txt"
+    pyproject = root / "pyproject.toml"
+    dependency_text = ""
+    for candidate in (requirements, pyproject):
+        if candidate.exists():
+            dependency_text += candidate.read_text(encoding="utf-8", errors="ignore").lower()
+    for needle, label in {"fastapi": "FastAPI", "django": "Django", "flask": "Flask", "pytest": "Pytest"}.items():
+        if needle in dependency_text:
+            frameworks.add(label)
+    if "pytest" in dependency_text:
+        test_commands.append("pytest -q")
+    languages = sorted(extensions.items(), key=lambda item: item[1], reverse=True)[:12]
+    return {
+        "name": project["name"],
+        "path": str(root),
+        "file_count": file_count,
+        "total_bytes": total_bytes,
+        "languages": [{"extension": ext, "files": count} for ext, count in languages],
+        "frameworks": sorted(frameworks),
+        "test_commands": list(dict.fromkeys(test_commands)),
+        "build_commands": list(dict.fromkeys(build_commands)),
+        "symbols": symbols,
+        "instructions_configured": bool(project.get("instructions", "").strip()),
+    }

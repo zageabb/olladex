@@ -8,14 +8,14 @@ import httpx
 
 from ..config import settings
 from . import workspace
-from .terminal import run as run_command
+from .terminal import requires_approval, run as run_command
 
 
 TOOLS = [
     {"type": "function", "function": {"name": "get_project_tree", "description": "List the repository tree", "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "read_file", "description": "Read a UTF-8 repository file", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
     {"type": "function", "function": {"name": "search_code", "description": "Search filenames and text", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
-    {"type": "function", "function": {"name": "write_file", "description": "Write a complete UTF-8 file. Use only when the user asks for changes.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
+    {"type": "function", "function": {"name": "write_file", "description": "Propose a complete UTF-8 file change for user review. Use only when the user asks for changes.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
     {"type": "function", "function": {"name": "run_command", "description": "Run a bash command in the project", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
 ]
 
@@ -43,10 +43,18 @@ def execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
     elif name == "search_code":
         result = workspace.search(project, args.get("query", ""))
     elif name == "write_file":
-        before, after, diff = workspace.write_text(project, args.get("path", ""), args.get("content", ""))
-        result = {"path": args.get("path"), "diff": diff, "before": before, "after": after}
+        path = args.get("path", "")
+        try:
+            before = workspace.read_text(project, path)
+        except Exception:
+            before = ""
+        after = args.get("content", "")
+        import difflib
+        diff = "".join(difflib.unified_diff(before.splitlines(True), after.splitlines(True), fromfile=f"a/{path}", tofile=f"b/{path}"))
+        result = {"path": path, "diff": diff, "before": before, "after": after, "status": "proposed"}
     elif name == "run_command":
-        result = run_command(project, args.get("command", ""))
+        command = args.get("command", "")
+        result = {"command": command, "output": "Awaiting approval", "exit_code": -1, "status": "pending"} if requires_approval(project, command) else {**run_command(project, command), "status": "completed"}
     else:
         result = {"error": f"Unknown tool: {name}"}
     activity = {"tool": name, "arguments": args, "summary": summarize(name, result), "result": result}
@@ -63,9 +71,9 @@ def summarize(name: str, result: Any) -> str:
     if name == "get_project_tree":
         return "Mapped repository"
     if name == "write_file":
-        return f"Updated {result.get('path')}"
+        return f"Proposed {result.get('path')} for review"
     if name == "run_command":
-        return f"Exited with code {result.get('exit_code')}"
+        return "Awaiting command approval" if result.get("status") == "pending" else f"Exited with code {result.get('exit_code')}"
     return "Complete"
 
 
@@ -75,6 +83,8 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
         "Use tools to inspect evidence before answering. Keep the user informed in concise language. "
         "Do not invent file contents or command results. When asked to change code, make focused edits, run appropriate checks, and summarize changes.\n\n"
         + workspace.project_summary(project)
+        + ("\n\nProject instructions:\n" + project.get("instructions", "") if project.get("instructions", "").strip() else "")
+        + "\n\nRepository intelligence:\n" + json.dumps(workspace.repository_intelligence(project), default=str)[:20_000]
     )
     messages: list[dict] = [{"role": "system", "content": system}, *history[-30:]]
     activities: list[dict] = []
@@ -100,4 +110,3 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
                 activities.append(activity)
                 messages.append({"role": "tool", "tool_name": name, "content": json.dumps(result, default=str)[:180_000]})
     return "I reached the tool-step limit. Review the activity and ask me to continue.", activities
-
