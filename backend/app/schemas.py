@@ -104,11 +104,11 @@ class DiagramRequest(BaseModel):
 
 
 class OfficeCreateRequest(BaseModel):
-    kind: Literal["docx", "xlsx", "pptx"]
+    kind: Literal["docx", "xlsx", "pptx", "preview", "edit"]
     path: str
     title: str = "Untitled"
     content: str = ""
-    data: list[list[Any]] = []
+    data: list[Any] = []
 
 
 class OfficeEditRequest(BaseModel):
