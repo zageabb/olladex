@@ -42,6 +42,20 @@ def test_word_preview_does_not_modify_then_apply_creates_backup(tmp_path):
     assert inspect(item, "report.docx")["paragraphs"][-1]["text"] == "Added by Olladex"
 
 
+def test_existing_office_post_contract_can_preview_and_apply_edits(tmp_path):
+    item = project(tmp_path)
+    create(item, "docx", "report.docx", "Report", "Original paragraph", [])
+    operations = [{"action": "set_paragraph", "paragraph_index": 1, "text": "Changed through Office POST"}]
+
+    preview = create(item, "preview", "report.docx", "", "", operations)
+    assert preview["status"] == "preview"
+    assert inspect(item, "report.docx")["paragraphs"][1]["text"] == "Original paragraph"
+
+    applied = create(item, "edit", "report.docx", "", "", operations)
+    assert applied["status"] == "applied"
+    assert inspect(item, "report.docx")["paragraphs"][1]["text"] == "Changed through Office POST"
+
+
 def test_excel_structured_edit_supports_cells_and_sheets(tmp_path):
     item = project(tmp_path)
     create(item, "xlsx", "book.xlsx", "Data", "", [["Name", "Value"], ["A", 2]])
