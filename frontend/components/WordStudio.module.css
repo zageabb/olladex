@@ -1,0 +1,167 @@
+.studio {
+  display: grid;
+  gap: 12px;
+}
+
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  background: #f7f9fc;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+
+.toolbar select,
+.toolbar input {
+  min-height: 31px;
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 9px;
+}
+
+.toolbar input[type="number"] { width: 68px; }
+.toolbar input[type="color"] { width: 38px; padding: 3px; }
+.toolbar button { min-width: 31px; padding: 6px 8px; font-size: 9px; }
+.toolbar button.active { color: var(--blue); background: var(--blue-soft); border-color: #b9d2f8; }
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 235px;
+  gap: 12px;
+  align-items: start;
+}
+
+.canvas {
+  min-width: 0;
+  overflow: auto;
+  padding: 18px;
+  background: #e9edf3;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.page {
+  width: min(100%, 720px);
+  min-height: 900px;
+  margin: 0 auto;
+  padding: 72px 78px;
+  background: #fff;
+  box-shadow: 0 8px 25px #182c4818;
+}
+
+.paragraph {
+  width: 100%;
+  margin: 0 0 10px;
+  padding: 2px 5px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #202124;
+  text-align: left;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.paragraph:hover { border-color: #cdd8e8; background: #f8fbff; }
+.paragraph.selected { border-color: #8ab5f2; background: #edf5ff; }
+.heading1 { margin-top: 17px; font-size: 24px; font-weight: 700; }
+.heading2 { margin-top: 14px; font-size: 19px; font-weight: 700; }
+.heading3 { margin-top: 12px; font-size: 16px; font-weight: 700; }
+.title { margin-bottom: 20px; font-size: 30px; font-weight: 700; }
+.subtitle { margin-bottom: 18px; color: #637085; font-size: 18px; }
+.list { padding-left: 24px; }
+
+.sidebar {
+  display: grid;
+  gap: 10px;
+}
+
+.card {
+  padding: 11px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+
+.card h4 {
+  margin: 0 0 8px;
+  font-size: 10px;
+}
+
+.card label {
+  margin-top: 7px;
+  display: grid;
+  gap: 4px;
+  color: #66768b;
+  font-size: 8px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.card input,
+.card textarea,
+.card select {
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 9px;
+  text-transform: none;
+}
+
+.card textarea { min-height: 72px; resize: vertical; }
+.card button { margin-top: 7px; padding: 6px 8px; font-size: 8px; }
+
+.editor {
+  display: grid;
+  gap: 6px;
+}
+
+.editor textarea {
+  min-height: 90px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  resize: vertical;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.actions span { color: var(--muted); font-size: 9px; }
+
+.tablePreview {
+  margin-top: 12px;
+  overflow: auto;
+}
+
+.tablePreview table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 9px;
+}
+
+.tablePreview td {
+  padding: 5px 7px;
+  border: 1px solid #d8dee8;
+}
+
+@media (max-width: 900px) {
+  .workspace { grid-template-columns: 1fr; }
+  .page { min-height: 700px; padding: 48px 42px; }
+}
