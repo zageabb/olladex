@@ -8,12 +8,13 @@ from pathlib import Path
 from typing import Any
 
 from docx import Document
-from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 from pptx import Presentation
 from pypdf import PdfReader
 
+from .office_excel import inspect_xlsx, mutate_xlsx
 from .office_word import inspect_docx, mutate_docx
 from .workspace import project_root, safe_path
 
@@ -31,33 +32,7 @@ def _inspect_path(path: Path) -> dict:
     if suffix == ".docx":
         return inspect_docx(path)
     if suffix == ".xlsx":
-        book = load_workbook(path, read_only=False, data_only=False)
-        sheets = []
-        for sheet in book.worksheets:
-            rows = []
-            formulas = []
-            for row in list(sheet.iter_rows())[:200]:
-                values = []
-                for cell in row[:100]:
-                    values.append(cell.value)
-                    if isinstance(cell.value, str) and cell.value.startswith("="):
-                        formulas.append({"cell": cell.coordinate, "formula": cell.value})
-                rows.append(values)
-            sheets.append(
-                {
-                    "name": sheet.title,
-                    "rows": rows,
-                    "max_row": sheet.max_row,
-                    "max_column": sheet.max_column,
-                    "formulas": formulas[:500],
-                    "merged_ranges": [str(value) for value in sheet.merged_cells.ranges],
-                    "freeze_panes": str(sheet.freeze_panes or ""),
-                    "auto_filter": sheet.auto_filter.ref or "",
-                }
-            )
-        defined_names = [name for name in book.defined_names]
-        book.close()
-        return {"kind": "excel", "sheets": sheets, "defined_names": defined_names}
+        return inspect_xlsx(path)
     if suffix == ".pptx":
         deck = Presentation(path)
         slides = []
@@ -224,42 +199,11 @@ def _mutate(project: dict, path: Path, operations: list[dict[str, Any]]) -> None
     if suffix == ".docx":
         mutate_docx(project, path, operations)
     elif suffix == ".xlsx":
-        _mutate_xlsx(path, operations)
+        mutate_xlsx(path, operations)
     elif suffix == ".pptx":
         _mutate_pptx(path, operations)
     else:
         raise ValueError("Structured editing supports DOCX, XLSX and PPTX")
-
-
-def _mutate_xlsx(path: Path, operations: list[dict[str, Any]]) -> None:
-    book = load_workbook(path, read_only=False, data_only=False)
-    try:
-        for operation in operations:
-            action = operation.get("action")
-            if action == "set_cell":
-                sheet = _sheet(book, operation.get("sheet"))
-                cell = str(operation.get("cell", "")).strip().upper()
-                if not cell:
-                    raise ValueError("set_cell requires a cell address")
-                sheet[cell] = operation.get("value")
-            elif action == "add_sheet":
-                name = str(operation.get("name", "")).strip()
-                if not name:
-                    raise ValueError("add_sheet requires a name")
-                if name in book.sheetnames:
-                    raise ValueError(f"Worksheet already exists: {name}")
-                book.create_sheet(title=name[:31])
-            elif action == "rename_sheet":
-                sheet = _sheet(book, operation.get("sheet"))
-                name = str(operation.get("name", "")).strip()
-                if not name:
-                    raise ValueError("rename_sheet requires a name")
-                sheet.title = name[:31]
-            else:
-                raise ValueError(f"Unsupported XLSX edit action: {action}")
-        book.save(path)
-    finally:
-        book.close()
 
 
 def _mutate_pptx(path: Path, operations: list[dict[str, Any]]) -> None:
@@ -302,12 +246,3 @@ def _index(operation: dict[str, Any], key: str, length: int) -> int:
     if index < 0 or index >= length:
         raise ValueError(f"{key} is out of range")
     return index
-
-
-def _sheet(book, requested: Any):
-    name = str(requested or "").strip()
-    if not name:
-        return book.active
-    if name not in book.sheetnames:
-        raise ValueError(f"Worksheet not found: {name}")
-    return book[name]
