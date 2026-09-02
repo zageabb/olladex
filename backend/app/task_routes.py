@@ -25,6 +25,10 @@ class TaskPullRequestRequest(BaseModel):
     base: str = Field(default="main", min_length=1, max_length=200)
 
 
+class TaskCleanupRequest(BaseModel):
+    force: bool = False
+
+
 def _project(project_id: int) -> dict:
     with connect() as conn:
         row = conn.execute(
@@ -86,3 +90,20 @@ def create_task_pull_request(task_id: int, body: TaskPullRequestRequest):
         return {"task_id": task_id, "branch": task.get("worktree_branch", ""), **result}
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/{task_id}/worktree/cleanup")
+def cleanup_task_worktree(task_id: int, body: TaskCleanupRequest):
+    task, project = _task(task_id)
+    if task.get("status") in {"queued", "running"}:
+        raise HTTPException(409, "Running or queued task worktrees cannot be removed")
+    try:
+        summary = worktrees.summary(project, task["worktree_path"])
+        if not body.force and summary.get("changes"):
+            raise ValueError("Task worktree still has uncommitted changes; commit them or use force cleanup")
+        result = worktrees.remove(project, task["worktree_path"], task.get("worktree_branch", ""), force=body.force)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    with connect() as conn:
+        conn.execute("UPDATE background_tasks SET worktree_path='',worktree_branch='' WHERE id=?", (task_id,))
+    return {"task_id": task_id, **result}
