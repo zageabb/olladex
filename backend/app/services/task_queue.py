@@ -14,6 +14,7 @@ _stop = threading.Event()
 _wake = threading.Event()
 _lock = threading.Lock()
 _local = threading.local()
+_fallback_project_locks: dict[int, threading.Lock] = {}
 
 
 def _worker_count() -> int:
@@ -112,6 +113,14 @@ def set_worktree(task_id: int, path: str, branch: str) -> None:
         )
 
 
+def current_worktree_path() -> str:
+    task_id = current_task_id()
+    if not task_id:
+        return ""
+    task = get(task_id)
+    return task.get("worktree_path", "") if task else ""
+
+
 def _claim_next() -> dict | None:
     with connect() as conn:
         candidates = [dict(row) for row in conn.execute("SELECT * FROM background_tasks WHERE status='queued' ORDER BY id LIMIT 50")]
@@ -125,6 +134,27 @@ def _claim_next() -> dict | None:
     return None
 
 
+def _prepare_isolation(task: dict) -> threading.Lock | None:
+    from . import worktrees
+
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM projects WHERE id=?", (task["project_id"],)).fetchone()
+    if not row:
+        raise ValueError("Project not found")
+    project = dict(row)
+    try:
+        isolated = worktrees.create_for_task(project, task["id"])
+        set_worktree(task["id"], isolated["path"], isolated["branch"])
+        task["worktree_path"] = isolated["path"]
+        task["worktree_branch"] = isolated["branch"]
+        return None
+    except ValueError:
+        with _lock:
+            fallback = _fallback_project_locks.setdefault(task["project_id"], threading.Lock())
+        fallback.acquire()
+        return fallback
+
+
 def run_once() -> bool:
     handler = _handler
     if handler is None:
@@ -133,7 +163,9 @@ def run_once() -> bool:
     if not task:
         return False
     _local.task_id = task["id"]
+    fallback_lock: threading.Lock | None = None
     try:
+        fallback_lock = _prepare_isolation(task)
         if cancel_requested():
             with connect() as conn:
                 conn.execute("UPDATE background_tasks SET status='cancelled',completed_at=? WHERE id=?", (now(), task["id"]))
@@ -152,6 +184,8 @@ def run_once() -> bool:
                 conn.execute("UPDATE background_tasks SET status='failed',error=?,completed_at=? WHERE id=?", (str(exc)[:20_000], now(), task["id"]))
     finally:
         _local.task_id = None
+        if fallback_lock:
+            fallback_lock.release()
     return True
 
 
