@@ -88,6 +88,13 @@ export default function Home() {
     setGit(summary); setGitDiff(currentDiff.diff);
   }
 
+  async function refreshSessions(projectId = project?.id) {
+    if (!projectId) return [];
+    const data = await request<Session[]>(`/projects/${projectId}/sessions`);
+    setSessions(data);
+    return data;
+  }
+
   async function openProject(event: FormEvent) {
     event.preventDefault();
     try {
@@ -98,8 +105,24 @@ export default function Home() {
 
   async function createSession() {
     if (!project) return;
-    const created = await request<Session>(`/projects/${project.id}/sessions`, { method: "POST", body: JSON.stringify({ title: "New task" }) });
-    setSessions((current) => [created, ...current]); setSession(created); setMessages([WELCOME]);
+    try {
+      const created = await request<Session>(`/projects/${project.id}/sessions`, { method: "POST", body: JSON.stringify({ title: "New chat" }) });
+      setSessions((current) => [created, ...current]); setSession(created); setMessages([WELCOME]); setPrompt("");
+    } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); }
+  }
+
+  async function clearChat() {
+    if (!project) return;
+    await createSession();
+    setNotice("Started a new chat. The previous conversation is saved in Chat history.");
+  }
+
+  async function renameSession(sessionId: number, title: string) {
+    try {
+      const updated = await request<Session>(`/sessions/${sessionId}`, { method: "PATCH", body: JSON.stringify({ title }) });
+      setSessions((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setSession((current) => current?.id === updated.id ? { ...current, ...updated } : current);
+    } catch {}
   }
 
   async function selectFile(item: TreeNode) {
@@ -124,14 +147,19 @@ export default function Home() {
   async function send(event: FormEvent) {
     event.preventDefault();
     if (!prompt.trim() || !session || !project || busy) return;
-    const content = prompt; setPrompt(""); setBusy(true); setMessages((current) => [...current, { role: "user", content }]);
+    const content = prompt; const currentSession = session; setPrompt(""); setBusy(true); setMessages((current) => [...current, { role: "user", content }]);
     try {
-      const answer = await request<Message>(`/sessions/${session.id}/messages`, { method: "POST", body: JSON.stringify({ content }) });
+      const answer = await request<Message>(`/sessions/${currentSession.id}/messages`, { method: "POST", body: JSON.stringify({ content }) });
       setMessages((current) => [...current, answer]); await refreshTree();
-      request<{ summary: string }>(`/sessions/${session.id}/summary`).then((summary) => {
-        setSession((current) => current ? { ...current, summary: summary.summary } : current);
-        setSessions((current) => current.map((item) => item.id === session.id ? { ...item, summary: summary.summary } : item));
+      if (currentSession.title === "New chat" || currentSession.title === "New task") {
+        const title = content.trim().split(/\r?\n/)[0].replace(/\s+/g, " ").slice(0, 72) || "Chat";
+        await renameSession(currentSession.id, title);
+      }
+      request<{ summary: string }>(`/sessions/${currentSession.id}/summary`).then((summary) => {
+        setSession((current) => current?.id === currentSession.id ? { ...current, summary: summary.summary } : current);
+        setSessions((current) => current.map((item) => item.id === currentSession.id ? { ...item, summary: summary.summary } : item));
       }).catch(() => {});
+      refreshSessions(project.id).catch(() => {});
       if (answer.activities?.some((a) => a.tool === "write_file")) { await refreshChanges(project.id); setTab("changes"); }
     } catch (error) { setMessages((current) => [...current, { role: "assistant", content: `I couldn't complete that request: ${error instanceof Error ? error.message : String(error)}` }]); }
     finally { setBusy(false); }
@@ -148,8 +176,7 @@ export default function Home() {
 
   async function openTaskSession(sessionId: number) {
     if (!project) return;
-    const data = await request<Session[]>(`/projects/${project.id}/sessions`);
-    setSessions(data);
+    const data = await refreshSessions(project.id);
     const selectedSession = data.find((item) => item.id === sessionId);
     if (selectedSession) { setSession(selectedSession); setTab("files"); }
   }
@@ -204,21 +231,21 @@ export default function Home() {
 
     <div className="workspace">
       <aside className="task-sidebar">
-        <div className="task-actions"><button className="primary" onClick={createSession} disabled={!project}>＋ New task</button><button onClick={() => setShowOpen(true)}>Open</button></div>
+        <div className="task-actions"><button className="primary" onClick={createSession} disabled={!project}>＋ New chat</button><button onClick={() => setShowOpen(true)}>Open</button></div>
         <div className="section-label">Projects</div>
         {projects.map((item) => <button key={item.id} className={`project-row ${project?.id === item.id ? "selected" : ""}`} onClick={() => setProject(item)}><span>▣</span><div><strong>{item.name}</strong><small>{item.path}</small></div></button>)}
-        <div className="section-label sessions-label">Recent tasks</div>
-        {sessions.map((item) => <button key={item.id} className={`session-row ${session?.id === item.id ? "selected" : ""}`} onClick={() => setSession(item)}><span>⌁</span><div><strong>{item.title}</strong><small>{new Date(item.updated_at).toLocaleDateString()}</small></div></button>)}
+        <div className="section-label sessions-label">Chat history</div>
+        {sessions.map((item) => <button key={item.id} className={`session-row ${session?.id === item.id ? "selected" : ""}`} onClick={() => setSession(item)} title={item.title}><span>⌁</span><div><strong>{item.title}</strong><small>{new Date(item.updated_at).toLocaleString()}</small></div></button>)}
       </aside>
 
       <section className="conversation-panel">
-        <div className="panel-head"><div><p className="eyebrow">Local development agent</p><h1>{session?.title || "Start a task"}</h1></div><button className="approval-mode" onClick={() => setTab("project")}><span>Mode</span><strong>{project?.approval_mode || "assisted"}</strong></button></div>
+        <div className="panel-head"><div><p className="eyebrow">Local development agent</p><h1>{session?.title || "Start a chat"}</h1></div><div className="chat-head-actions"><button onClick={clearChat} disabled={!project || busy}>Clear chat</button><button className="approval-mode" onClick={() => setTab("project")}><span>Mode</span><strong>{project?.approval_mode || "assisted"}</strong></button></div></div>
         <div className="messages">
           {session?.summary && <details className="session-summary"><summary><span>✦</span><div><strong>Persistent session context</strong><small>Compact memory carried into the next Ollama request</small></div><b>⌄</b></summary><pre>{session.summary}</pre></details>}
           {messages.map((message, index) => <article className={`message ${message.role}`} key={`${message.role}-${message.id || index}`}><div className="message-avatar">{message.role === "assistant" ? "O" : "G"}</div><div className="message-stack"><div className="bubble">{message.content}</div>{message.activities?.map((activity, i) => <details className="activity-card" key={i}><summary><span>{activityIcon(activity.tool)}</span><div><strong>{activity.tool.replaceAll("_", " ")}</strong><small>{activity.summary}</small></div><b>⌄</b></summary><pre>{JSON.stringify(activity.result || activity.arguments, null, 2)}</pre>{activity.tool === "run_command" && activity.result?.status === "pending" && <div className="activity-actions"><button className="primary" onClick={() => approveCommand(activity)}>Approve command</button><button onClick={() => setTab("terminal")}>Open terminal</button></div>}{activity.tool === "write_file" && activity.result?.change_id && <div className="activity-actions"><button className="primary" onClick={() => setTab("changes")}>Review proposed change</button></div>}</details>)}</div></article>)}
           {busy && <article className="message assistant"><div className="message-avatar">O</div><div className="typing"><i/><i/><i/></div></article>}
         </div>
-        <form className="composer" onSubmit={send}><textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder={project ? "Ask Olladex to inspect, change or test this repository…" : "Open a repository to begin…"} disabled={!project || !session} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} /><div className="composer-actions"><div><button type="button" onClick={() => setTab("files")}>＋ Context</button><button type="button" onClick={() => setTab("terminal")}>⌘ Shell</button><button type="button" onClick={queuePrompt} disabled={!prompt.trim()}>◷ Queue</button></div><div className="model-chip">{project?.profile_chat_model || project?.model || "qwen3:14b"}</div><button className="send primary" disabled={busy || !prompt.trim()}>➤</button></div></form>
+        <form className="composer" onSubmit={send}><textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder={project ? "Ask Olladex to inspect, change or test this repository…" : "Open a repository to begin…"} disabled={!project || !session} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} /><div className="composer-actions"><div><button type="button" onClick={() => setTab("files")}>＋ Context</button><button type="button" onClick={() => setTab("terminal")}>⌘ Shell</button><button type="button" onClick={queuePrompt} disabled={!prompt.trim()}>◷ Queue</button></div><div className="model-chip">{project?.profile_chat_model || project?.model || status?.ollama.models[0] || "Ollama"}</div><button className="send primary" disabled={busy || !prompt.trim()}>➤</button></div></form>
       </section>
 
       <section className="inspector-panel">
