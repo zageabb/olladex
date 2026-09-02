@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Callable
 
@@ -56,12 +57,21 @@ def stop() -> None:
     _threads = []
 
 
-def enqueue(project_id: int, session_id: int, title: str, prompt: str, source_kind: str = "manual", source_ref: str = "") -> dict:
+def enqueue(project_id: int, session_id: int, title: str, prompt: str, source_kind: str = "manual", source_ref: str = "", parent_task_id: int | None = None, depends_on: list[int] | None = None, agent_role: str = "worker") -> dict:
     stamp = now()
+    dependency_ids = [int(item) for item in (depends_on or []) if int(item) > 0]
     with connect() as conn:
+        if parent_task_id is not None:
+            parent = conn.execute("SELECT id,project_id FROM background_tasks WHERE id=?", (parent_task_id,)).fetchone()
+            if not parent or parent["project_id"] != project_id:
+                raise ValueError("Parent task must exist in the same project")
+        for dependency_id in dependency_ids:
+            dependency = conn.execute("SELECT id,project_id FROM background_tasks WHERE id=?", (dependency_id,)).fetchone()
+            if not dependency or dependency["project_id"] != project_id:
+                raise ValueError(f"Dependency task #{dependency_id} must exist in the same project")
         cursor = conn.execute(
-            "INSERT INTO background_tasks(project_id,session_id,title,prompt,source_kind,source_ref,status,created_at) VALUES(?,?,?,?,?,?,?,?)",
-            (project_id, session_id, title, prompt, source_kind, source_ref, "queued", stamp),
+            "INSERT INTO background_tasks(project_id,session_id,title,prompt,source_kind,source_ref,status,parent_task_id,depends_on,agent_role,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (project_id, session_id, title, prompt, source_kind, source_ref, "queued", parent_task_id, json.dumps(dependency_ids), agent_role or "worker", stamp),
         )
         task_id = cursor.lastrowid
     _wake.set()
@@ -71,12 +81,25 @@ def enqueue(project_id: int, session_id: int, title: str, prompt: str, source_ki
 def get(task_id: int) -> dict:
     with connect() as conn:
         row = conn.execute("SELECT * FROM background_tasks WHERE id=?", (task_id,)).fetchone()
-    return dict(row) if row else {}
+    if not row:
+        return {}
+    result = dict(row)
+    try:
+        result["depends_on"] = json.loads(result.get("depends_on") or "[]")
+    except json.JSONDecodeError:
+        result["depends_on"] = []
+    return result
 
 
 def list_for_project(project_id: int) -> list[dict]:
     with connect() as conn:
-        return [dict(row) for row in conn.execute("SELECT * FROM background_tasks WHERE project_id=? ORDER BY id DESC LIMIT 100", (project_id,))]
+        result = [dict(row) for row in conn.execute("SELECT * FROM background_tasks WHERE project_id=? ORDER BY id DESC LIMIT 100", (project_id,))]
+    for item in result:
+        try:
+            item["depends_on"] = json.loads(item.get("depends_on") or "[]")
+        except json.JSONDecodeError:
+            item["depends_on"] = []
+    return result
 
 
 def cancel(task_id: int) -> dict:
@@ -107,10 +130,7 @@ def cancel_requested() -> bool:
 
 def set_worktree(task_id: int, path: str, branch: str) -> None:
     with connect() as conn:
-        conn.execute(
-            "UPDATE background_tasks SET worktree_path=?,worktree_branch=? WHERE id=?",
-            (path, branch, task_id),
-        )
+        conn.execute("UPDATE background_tasks SET worktree_path=?,worktree_branch=? WHERE id=?", (path, branch, task_id))
 
 
 def current_worktree_path() -> str:
@@ -121,14 +141,35 @@ def current_worktree_path() -> str:
     return task.get("worktree_path", "") if task else ""
 
 
+def _dependency_state(conn, task: dict) -> tuple[bool, str]:
+    try:
+        dependency_ids = [int(item) for item in json.loads(task.get("depends_on") or "[]")]
+    except (TypeError, ValueError, json.JSONDecodeError):
+        dependency_ids = []
+    if not dependency_ids:
+        return True, ""
+    placeholders = ",".join("?" for _ in dependency_ids)
+    states = {row["id"]: row["status"] for row in conn.execute(f"SELECT id,status FROM background_tasks WHERE id IN ({placeholders})", dependency_ids)}
+    missing = [item for item in dependency_ids if item not in states]
+    if missing:
+        return False, f"Missing dependency tasks: {missing}"
+    failed = [item for item, status in states.items() if status in {"failed", "cancelled"}]
+    if failed:
+        return False, f"Dependency task(s) did not complete successfully: {failed}"
+    return all(states[item] == "completed" for item in dependency_ids), ""
+
+
 def _claim_next() -> dict | None:
     with connect() as conn:
-        candidates = [dict(row) for row in conn.execute("SELECT * FROM background_tasks WHERE status='queued' ORDER BY id LIMIT 50")]
+        candidates = [dict(row) for row in conn.execute("SELECT * FROM background_tasks WHERE status='queued' ORDER BY id LIMIT 100")]
         for task in candidates:
-            cursor = conn.execute(
-                "UPDATE background_tasks SET status='running',started_at=? WHERE id=? AND status='queued'",
-                (now(), task["id"]),
-            )
+            ready, blocked_reason = _dependency_state(conn, task)
+            if blocked_reason:
+                conn.execute("UPDATE background_tasks SET status='failed',error=?,completed_at=? WHERE id=? AND status='queued'", (blocked_reason, now(), task["id"]))
+                continue
+            if not ready:
+                continue
+            cursor = conn.execute("UPDATE background_tasks SET status='running',started_at=? WHERE id=? AND status='queued'", (now(), task["id"]))
             if cursor.rowcount == 1:
                 return task
     return None
