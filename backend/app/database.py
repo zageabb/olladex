@@ -113,6 +113,8 @@ CREATE TABLE IF NOT EXISTS background_tasks (
   result TEXT NOT NULL DEFAULT '',
   error TEXT NOT NULL DEFAULT '',
   cancel_requested INTEGER NOT NULL DEFAULT 0,
+  worktree_path TEXT NOT NULL DEFAULT '',
+  worktree_branch TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   started_at TEXT NOT NULL DEFAULT '',
   completed_at TEXT NOT NULL DEFAULT ''
@@ -160,6 +162,10 @@ ADDITIVE_COLUMNS = {
     },
     "git_operations": {
         "remote_url": "TEXT NOT NULL DEFAULT ''",
+    },
+    "background_tasks": {
+        "worktree_path": "TEXT NOT NULL DEFAULT ''",
+        "worktree_branch": "TEXT NOT NULL DEFAULT ''",
     },
 }
 
