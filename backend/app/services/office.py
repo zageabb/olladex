@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+import os
+import shutil
+import tempfile
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
 from docx import Document
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font
@@ -7,16 +14,27 @@ from openpyxl.utils import get_column_letter
 from pptx import Presentation
 from pypdf import PdfReader
 
-from .workspace import safe_path
+from .workspace import project_root, safe_path
+
+
+EDITABLE_SUFFIXES = {".docx", ".xlsx", ".pptx"}
 
 
 def inspect(project: dict, relative: str) -> dict:
     path = safe_path(project, relative)
+    return _inspect_path(path)
+
+
+def _inspect_path(path: Path) -> dict:
     suffix = path.suffix.lower()
     if suffix == ".docx":
         doc = Document(path)
         paragraphs = [
-            {"text": p.text, "style": p.style.name if p.style else "", "runs": [{"text": r.text, "bold": r.bold, "italic": r.italic} for r in p.runs]}
+            {
+                "text": p.text,
+                "style": p.style.name if p.style else "",
+                "runs": [{"text": r.text, "bold": r.bold, "italic": r.italic} for r in p.runs],
+            }
             for p in doc.paragraphs
         ]
         headings = [p for p in paragraphs if str(p.get("style", "")).lower().startswith("heading")]
@@ -35,16 +53,18 @@ def inspect(project: dict, relative: str) -> dict:
                     if isinstance(cell.value, str) and cell.value.startswith("="):
                         formulas.append({"cell": cell.coordinate, "formula": cell.value})
                 rows.append(values)
-            sheets.append({
-                "name": sheet.title,
-                "rows": rows,
-                "max_row": sheet.max_row,
-                "max_column": sheet.max_column,
-                "formulas": formulas[:500],
-                "merged_ranges": [str(value) for value in sheet.merged_cells.ranges],
-                "freeze_panes": str(sheet.freeze_panes or ""),
-                "auto_filter": sheet.auto_filter.ref or "",
-            })
+            sheets.append(
+                {
+                    "name": sheet.title,
+                    "rows": rows,
+                    "max_row": sheet.max_row,
+                    "max_column": sheet.max_column,
+                    "formulas": formulas[:500],
+                    "merged_ranges": [str(value) for value in sheet.merged_cells.ranges],
+                    "freeze_panes": str(sheet.freeze_panes or ""),
+                    "auto_filter": sheet.auto_filter.ref or "",
+                }
+            )
         defined_names = [name for name in book.defined_names]
         book.close()
         return {"kind": "excel", "sheets": sheets, "defined_names": defined_names}
@@ -62,7 +82,11 @@ def inspect(project: dict, relative: str) -> dict:
         return {"kind": "powerpoint", "slides": slides, "slide_count": len(slides)}
     if suffix == ".pdf":
         reader = PdfReader(path)
-        return {"kind": "pdf", "pages": [{"number": i + 1, "text": (page.extract_text() or "")[:20_000]} for i, page in enumerate(reader.pages)], "page_count": len(reader.pages)}
+        return {
+            "kind": "pdf",
+            "pages": [{"number": i + 1, "text": (page.extract_text() or "")[:20_000]} for i, page in enumerate(reader.pages)],
+            "page_count": len(reader.pages),
+        }
     raise ValueError("Supported Office formats are DOCX, XLSX, PPTX and PDF")
 
 
@@ -127,3 +151,188 @@ def create(project: dict, kind: str, relative: str, title: str, content: str, da
     else:
         raise ValueError("Unsupported Office output")
     return {"path": relative, "kind": kind, "size": path.stat().st_size}
+
+
+def preview_edit(project: dict, relative: str, operations: list[dict[str, Any]]) -> dict:
+    source = _editable_path(project, relative)
+    before = _inspect_path(source)
+    with tempfile.TemporaryDirectory(prefix="olladex-office-preview-") as directory:
+        preview_path = Path(directory) / source.name
+        shutil.copy2(source, preview_path)
+        _mutate(preview_path, operations)
+        after = _inspect_path(preview_path)
+    return {
+        "status": "preview",
+        "path": _normalized_relative(project, source),
+        "operation_count": len(operations),
+        "operations": operations,
+        "before": before,
+        "after": after,
+    }
+
+
+def edit(project: dict, relative: str, operations: list[dict[str, Any]]) -> dict:
+    source = _editable_path(project, relative)
+    normalized = _normalized_relative(project, source)
+    before = _inspect_path(source)
+
+    temporary = source.with_name(f".{source.stem}.olladex-edit-{os.getpid()}{source.suffix}")
+    shutil.copy2(source, temporary)
+    try:
+        _mutate(temporary, operations)
+        after = _inspect_path(temporary)
+        backup = _backup_file(project, source, normalized)
+        os.replace(temporary, source)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+
+    return {
+        "status": "applied",
+        "path": normalized,
+        "operation_count": len(operations),
+        "operations": operations,
+        "backup_path": backup,
+        "size": source.stat().st_size,
+        "before": before,
+        "after": after,
+    }
+
+
+def _editable_path(project: dict, relative: str) -> Path:
+    path = safe_path(project, relative)
+    if not path.is_file():
+        raise ValueError("Office file not found")
+    if path.suffix.lower() not in EDITABLE_SUFFIXES:
+        raise ValueError("Structured editing supports DOCX, XLSX and PPTX")
+    return path
+
+
+def _normalized_relative(project: dict, path: Path) -> str:
+    return path.relative_to(project_root(project)).as_posix()
+
+
+def _backup_file(project: dict, source: Path, normalized: str) -> str:
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+    backup_root = project_root(project) / ".olladex" / "history" / stamp
+    backup = backup_root / normalized
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, backup)
+    return backup.relative_to(project_root(project)).as_posix()
+
+
+def _mutate(path: Path, operations: list[dict[str, Any]]) -> None:
+    if not operations:
+        raise ValueError("At least one Office edit operation is required")
+    suffix = path.suffix.lower()
+    if suffix == ".docx":
+        _mutate_docx(path, operations)
+    elif suffix == ".xlsx":
+        _mutate_xlsx(path, operations)
+    elif suffix == ".pptx":
+        _mutate_pptx(path, operations)
+    else:
+        raise ValueError("Structured editing supports DOCX, XLSX and PPTX")
+
+
+def _mutate_docx(path: Path, operations: list[dict[str, Any]]) -> None:
+    doc = Document(path)
+    for operation in operations:
+        action = operation.get("action")
+        if action == "set_paragraph":
+            index = _index(operation, "paragraph_index", len(doc.paragraphs))
+            doc.paragraphs[index].text = str(operation.get("text", ""))
+        elif action == "append_paragraph":
+            style = operation.get("style")
+            doc.add_paragraph(str(operation.get("text", "")), style=str(style) if style else None)
+        elif action == "set_table_cell":
+            table_index = _index(operation, "table_index", len(doc.tables))
+            table = doc.tables[table_index]
+            row_index = _index(operation, "row_index", len(table.rows))
+            column_index = _index(operation, "column_index", len(table.rows[row_index].cells))
+            table.rows[row_index].cells[column_index].text = str(operation.get("text", ""))
+        else:
+            raise ValueError(f"Unsupported DOCX edit action: {action}")
+    doc.save(path)
+
+
+def _mutate_xlsx(path: Path, operations: list[dict[str, Any]]) -> None:
+    book = load_workbook(path, read_only=False, data_only=False)
+    try:
+        for operation in operations:
+            action = operation.get("action")
+            if action == "set_cell":
+                sheet = _sheet(book, operation.get("sheet"))
+                cell = str(operation.get("cell", "")).strip().upper()
+                if not cell:
+                    raise ValueError("set_cell requires a cell address")
+                sheet[cell] = operation.get("value")
+            elif action == "add_sheet":
+                name = str(operation.get("name", "")).strip()
+                if not name:
+                    raise ValueError("add_sheet requires a name")
+                if name in book.sheetnames:
+                    raise ValueError(f"Worksheet already exists: {name}")
+                book.create_sheet(title=name[:31])
+            elif action == "rename_sheet":
+                sheet = _sheet(book, operation.get("sheet"))
+                name = str(operation.get("name", "")).strip()
+                if not name:
+                    raise ValueError("rename_sheet requires a name")
+                sheet.title = name[:31]
+            else:
+                raise ValueError(f"Unsupported XLSX edit action: {action}")
+        book.save(path)
+    finally:
+        book.close()
+
+
+def _mutate_pptx(path: Path, operations: list[dict[str, Any]]) -> None:
+    deck = Presentation(path)
+    for operation in operations:
+        action = operation.get("action")
+        if action == "set_shape_text":
+            slide_index = _index(operation, "slide_index", len(deck.slides))
+            slide = deck.slides[slide_index]
+            shape_index = _index(operation, "shape_index", len(slide.shapes))
+            shape = slide.shapes[shape_index]
+            if not hasattr(shape, "text"):
+                raise ValueError("Selected PowerPoint shape does not contain editable text")
+            shape.text = str(operation.get("text", ""))
+        elif action == "add_slide":
+            layout_index = int(operation.get("layout_index", 1))
+            if layout_index < 0 or layout_index >= len(deck.slide_layouts):
+                raise ValueError("PowerPoint layout_index is out of range")
+            slide = deck.slides.add_slide(deck.slide_layouts[layout_index])
+            title = str(operation.get("title", ""))
+            content = str(operation.get("content", ""))
+            if slide.shapes.title is not None:
+                slide.shapes.title.text = title
+            for placeholder in slide.placeholders:
+                if placeholder == slide.shapes.title:
+                    continue
+                if hasattr(placeholder, "text"):
+                    placeholder.text = content
+                    break
+        else:
+            raise ValueError(f"Unsupported PPTX edit action: {action}")
+    deck.save(path)
+
+
+def _index(operation: dict[str, Any], key: str, length: int) -> int:
+    try:
+        index = int(operation.get(key))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{key} must be an integer") from exc
+    if index < 0 or index >= length:
+        raise ValueError(f"{key} is out of range")
+    return index
+
+
+def _sheet(book, requested: Any):
+    name = str(requested or "").strip()
+    if not name:
+        return book.active
+    if name not in book.sheetnames:
+        raise ValueError(f"Worksheet not found: {name}")
+    return book[name]
