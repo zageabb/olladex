@@ -1,0 +1,37 @@
+.conversation-panel {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.messages {
+  min-height: 0;
+  overflow-y: scroll;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: auto;
+  scrollbar-color: #9aacbf #eef2f7;
+}
+
+.messages::-webkit-scrollbar {
+  width: 12px;
+}
+
+.messages::-webkit-scrollbar-track {
+  background: #eef2f7;
+  border-left: 1px solid #dde4ee;
+}
+
+.messages::-webkit-scrollbar-thumb {
+  background: #9aacbf;
+  border: 3px solid #eef2f7;
+  border-radius: 999px;
+}
+
+.messages::-webkit-scrollbar-thumb:hover {
+  background: #71839a;
+}
+
+.composer {
+  position: relative;
+  z-index: 1;
+}
