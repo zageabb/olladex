@@ -17,37 +17,36 @@ This branch develops Office editing independently from the main Olladex agent/ru
 
 - Page-like document canvas with selectable paragraphs.
 - Title, Subtitle, Heading 1–3, bullets and numbered-list styles.
-- Paragraph alignment.
-- Run-level bold, italic, underline, font size and colour operations.
+- Paragraph alignment and run-level bold, italic, underline, font size and colour operations.
 - Paragraph append/insert/delete operations.
 - Table creation plus row/column/cell editing support.
-- Image insertion from project files.
-- Hyperlink insertion.
+- Image and hyperlink insertion.
 - Header/footer editing.
-- Portrait/landscape section orientation and margin-aware inspection.
-- Rich DOCX inspection including runs, tables, page sections and inline-image dimensions.
+- Portrait/landscape sections and margin-aware inspection.
+- Rich DOCX inspection including runs, tables, sections and inline-image dimensions.
 
 ### Spreadsheet Studio — Office 0.3 foundation complete
 
-- Interactive worksheet grid with sticky row/column headers.
-- Worksheet tabs.
-- Cell address and formula/value bar.
-- Formula preservation and visibility.
-- Cell font size, bold, italic, font colour, fill colour, alignment, wrapping and number-format editing.
-- Preview-before-apply for values and formats.
+- Interactive worksheet grid with sticky row/column headers and worksheet tabs.
+- Cell address and formula/value bar with formula preservation and visibility.
+- Cell font size, bold, italic, font/fill colour, alignment, wrapping and number-format editing.
 - Multi-cell range writes in the backend.
-- Add/rename/delete worksheets.
-- Insert/delete rows and columns.
-- Merge/unmerge ranges.
-- Freeze panes.
-- AutoFilter range editing.
+- Add/rename/delete worksheets; insert/delete rows and columns.
+- Merge/unmerge ranges, freeze panes and AutoFilter ranges.
 - Row height and column width operations.
 - Real XLSX ListObject/Table creation with table styles.
 - Rich XLSX inspection including formulas, formatting metadata, merges, tables and pane/filter state.
 
-### PowerPoint editor — Office 0.4 next
+### Presentation Studio — Office 0.4 foundation complete
 
-PowerPoint currently supports structured text-shape selection/editing plus slide creation in the backend. The next dedicated surface is Presentation Studio with a thumbnail rail and editable slide canvas.
+- Slide thumbnail rail and scaled slide canvas.
+- Selectable slide shapes with geometry inspection in inches.
+- Shape text editing, position, size, rotation, fill/line colour and text styling.
+- Add/delete/reorder slides using available presentation layouts.
+- Add textboxes, basic shapes and project images.
+- Slide background colour editing.
+- Rich PPTX inspection including layouts, slide dimensions, shape geometry and text runs.
+- Preview/apply/history-backup workflow shared with Word and Spreadsheet Studio.
 
 ### PDF
 
@@ -83,59 +82,39 @@ All indexes are zero-based unless the Office format uses native 1-based row/colu
 
 ```json
 {"action":"set_shape_text","slide_index":0,"shape_index":0,"text":"Updated title"}
+{"action":"set_shape_position","slide_index":0,"shape_index":0,"left":1,"top":0.5,"width":5,"height":1,"rotation":0}
+{"action":"set_shape_style","slide_index":0,"shape_index":0,"fill_color":"D9EAF7","font_color":"112233","font_size":24}
 {"action":"add_slide","title":"Next steps","content":"More detail","layout_index":1}
+{"action":"add_textbox","slide_index":0,"left":1,"top":2,"width":4,"height":1,"text":"New text"}
+{"action":"add_shape","slide_index":0,"shape":"rounded_rectangle","left":7,"top":3,"width":2.5,"height":1.2,"text":"Status"}
+{"action":"add_image","slide_index":0,"image_path":"docs/image.png","left":1,"top":1,"width":4}
 ```
 
 ## Development sequence
 
 ### Office 0.1 — structured editing foundation — complete
 
-- Structured document snapshots.
-- Preview-without-write workflow.
-- Atomic binary writes with history backups.
-- Initial Word, Excel and PowerPoint operations and editor UI.
-- Branch-only backend/frontend CI.
+Structured snapshots, preview-without-write, atomic binary writes with history backups, and initial Word/Excel/PowerPoint operations.
 
 ### Office 0.2 — Word Studio — foundation complete
 
-Remaining depth work:
-
-- Direct individual-run selection in the UI.
-- Rich table-cell/row/column controls on the page canvas.
-- Image positioning, wrapping, captions and replacement.
-- Page/section breaks, columns and richer header/footer options.
-- Document-derived styles gallery.
-- Comments/tracked changes where OOXML support is practical.
-- AI proposals shown as Word-object changes before apply.
+Remaining depth work: individual-run selection, richer table UI, image positioning/wrapping/captions, page/section breaks, document-derived styles, comments/tracked changes where practical, and AI Word-object proposals.
 
 ### Office 0.3 — Spreadsheet Studio — foundation complete
 
-Remaining depth work:
+Remaining depth work: virtualised large-sheet navigation, direct range selection/fill/copy, borders, validation, conditional formatting, named ranges, charts, and a formula calculation/preview strategy.
 
-- Virtualised navigation for very large worksheets.
-- Direct range selection and fill/copy workflows.
-- Borders and richer cell styles.
-- Data validation and conditional formatting.
-- Named ranges and workbook properties UI.
-- Charts and chart editing.
-- Formula calculation/preview strategy for functions openpyxl does not calculate.
-- Reuse suitable concepts from the AI Spreadsheet project where they improve the grid/editor experience.
+### Office 0.4 — Presentation Studio — foundation complete
 
-### Office 0.4 — Presentation Studio — next
+Remaining depth work: drag/resize handles on canvas, shape z-order/grouping, slide notes, charts, richer images, Mermaid/Graphviz assets, theme/master awareness and slide-template workflows.
 
-- Slide thumbnail rail.
-- Editable slide canvas.
-- Text, images, shapes and layout selection.
-- Add/remove/reorder slides.
-- Charts and Mermaid/Graphviz output as presentation assets.
-- Theme and master awareness.
-
-### Office 0.5 — AI document agent
+### Office 0.5 — AI document agent — next integration phase
 
 - Ollama tools operate on structured Office objects rather than regenerating complete files where possible.
 - Proposed edits remain reviewable before apply.
 - Document-specific change summaries.
 - Safe rollback using Office history backups.
+- Keep this work isolated from the active core-agent runtime until the Office branch is deliberately integrated.
 
 ## Merge strategy
 
