@@ -115,6 +115,9 @@ CREATE TABLE IF NOT EXISTS background_tasks (
   cancel_requested INTEGER NOT NULL DEFAULT 0,
   worktree_path TEXT NOT NULL DEFAULT '',
   worktree_branch TEXT NOT NULL DEFAULT '',
+  pull_request_number INTEGER NOT NULL DEFAULT 0,
+  pull_request_url TEXT NOT NULL DEFAULT '',
+  pull_request_state TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   started_at TEXT NOT NULL DEFAULT '',
   completed_at TEXT NOT NULL DEFAULT ''
@@ -166,6 +169,9 @@ ADDITIVE_COLUMNS = {
     "background_tasks": {
         "worktree_path": "TEXT NOT NULL DEFAULT ''",
         "worktree_branch": "TEXT NOT NULL DEFAULT ''",
+        "pull_request_number": "INTEGER NOT NULL DEFAULT 0",
+        "pull_request_url": "TEXT NOT NULL DEFAULT ''",
+        "pull_request_state": "TEXT NOT NULL DEFAULT ''",
     },
 }
 
