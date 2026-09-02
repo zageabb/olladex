@@ -58,7 +58,8 @@ def refresh(project: dict, embedder: Embedder | None = None, embedding_model: st
 
     embedded = 0
     failure_key = (project_id, embedding_model)
-    can_embed = embedder and embedding_model and time.monotonic() - _embedding_failures.get(failure_key, 0) > 300
+    last_failure = _embedding_failures.get(failure_key)
+    can_embed = bool(embedder and embedding_model and (last_failure is None or time.monotonic() - last_failure > 300))
     if can_embed:
         with connect() as conn:
             pending = [dict(row) for row in conn.execute("SELECT path,content FROM repository_index WHERE project_id=? AND (vector='' OR embedding_model!=?) ORDER BY path LIMIT 500", (project_id, embedding_model))]
