@@ -1,3 +1,3 @@
 """Olladex backend package."""
 
-__version__ = "0.8.1-dev.6"
+__version__ = "0.8.1-dev.7"
