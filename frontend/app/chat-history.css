@@ -1,0 +1,4 @@
+.chat-head-actions { display: flex; align-items: center; gap: 8px; }
+.chat-head-actions > button:not(.approval-mode) { padding: 7px 10px; font-size: 9px; color: #52657f; background: #f8fafc; }
+.task-sidebar .sessions-label { position: sticky; top: 0; z-index: 2; background: #f8fafc; }
+.session-row.selected { box-shadow: inset 3px 0 0 var(--blue); }
