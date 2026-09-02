@@ -62,7 +62,7 @@ function startServices() {
     processes.push(spawn(path.join(root, "api", executable("olladex-api")), [], { cwd: root, env: common, stdio: "inherit" }));
   } else {
     const python = process.platform === "win32" ? path.join(root, ".venv", "Scripts", "python.exe") : path.join(root, ".venv", "bin", "python");
-    processes.push(spawn(python, ["-m", "uvicorn", "backend.app.main:app", "--host", "127.0.0.1", "--port", API_PORT], { cwd: root, env: common, stdio: "inherit" }));
+    processes.push(spawn(python, ["-m", "uvicorn", "backend.app.api:app", "--host", "127.0.0.1", "--port", API_PORT], { cwd: root, env: common, stdio: "inherit" }));
   }
 
   const frontend = app.isPackaged ? path.join(root, "frontend") : path.join(root, "frontend", ".next", "standalone");
