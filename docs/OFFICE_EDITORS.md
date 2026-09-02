@@ -18,9 +18,20 @@ All indexes are zero-based.
 ### Word / DOCX
 
 ```json
-{"action":"set_paragraph","paragraph_index":1,"text":"Updated text"}
+{"action":"set_paragraph","paragraph_index":1,"text":"Updated text","style":"Heading 2","alignment":"center"}
+{"action":"set_run","paragraph_index":1,"run_index":0,"bold":true,"italic":false,"underline":false,"font_size":14,"color":"1768E5"}
 {"action":"append_paragraph","text":"New paragraph","style":"Normal"}
+{"action":"insert_paragraph_after","paragraph_index":1,"text":"Inserted paragraph","style":"List Bullet"}
+{"action":"delete_paragraph","paragraph_index":2}
 {"action":"set_table_cell","table_index":0,"row_index":1,"column_index":2,"text":"Updated cell"}
+{"action":"add_table","rows":3,"columns":2,"style":"Table Grid"}
+{"action":"add_table_row","table_index":0,"values":["New","Row"]}
+{"action":"add_table_column","table_index":0,"width_inches":1.25}
+{"action":"add_image","paragraph_index":1,"image_path":"docs/image.png","width_inches":4}
+{"action":"add_hyperlink","paragraph_index":1,"text":"Open link","url":"https://example.com"}
+{"action":"set_section","section_index":0,"orientation":"landscape","left_margin":0.75,"right_margin":0.75}
+{"action":"set_header","section_index":0,"text":"Header text"}
+{"action":"set_footer","section_index":0,"text":"Footer text"}
 ```
 
 ### Excel / XLSX
@@ -40,18 +51,28 @@ All indexes are zero-based.
 
 ## Current editor surface
 
-The Office workspace now provides a first structured editor UI:
+The Office workspace now routes DOCX files into **Word Studio** and retains the structured Excel and PowerPoint editors.
 
-- Word: select a paragraph, edit its text, preview, then apply.
-- Excel: select a worksheet and visible cell or type a cell address, edit the value, preview, then apply.
-- PowerPoint: select a slide text shape, edit its text, preview, then apply.
-- PDF remains read-only.
+Word Studio currently provides:
 
-The underlying engine already supports additional operations that can be surfaced by later toolbar and canvas work.
+- Page-like document canvas with selectable paragraphs.
+- Paragraph styles including Title, Subtitle, Heading 1–3, bullets and numbered lists.
+- Paragraph alignment controls.
+- Whole-paragraph bold, italic, underline, font size and colour editing through run formatting.
+- Paragraph insertion/deletion and append workflows.
+- Table insertion plus backend row/column/cell operations.
+- Image insertion from project files with preview-before-apply support.
+- Hyperlink insertion.
+- Header and footer editing.
+- Portrait/landscape section orientation and margin-aware inspection.
+- Rich DOCX inspection including runs, tables, page sections and inline image dimensions.
+- The existing Office preview/apply/history-backup safety model.
+
+Excel currently supports worksheet/cell selection and value editing. PowerPoint currently supports slide text-shape selection and text editing. PDF remains read-only.
 
 ## Development sequence
 
-### Office 0.1 — structured editing foundation
+### Office 0.1 — structured editing foundation — complete
 
 - Structured document snapshots.
 - Preview-without-write workflow.
@@ -62,15 +83,29 @@ The underlying engine already supports additional operations that can be surface
 - Initial editor UI.
 - Branch-only backend and frontend CI.
 
-### Office 0.2 — Word Studio
+### Office 0.2 — Word Studio — foundation complete
+
+Completed in this pass:
 
 - Page-like document surface.
 - Paragraph styles, headings and lists.
-- Run-level bold/italic/underline/font controls.
-- Table creation and row/column editing.
+- Run-level bold/italic/underline/font-size/colour controls.
+- Table creation and backend row/column editing.
 - Images and links.
 - Header/footer and section awareness.
-- AI proposals shown as document changes before apply.
+- Dedicated `office_word` service to isolate Word-specific OOXML work from Excel/PowerPoint.
+- Word-specific backend regression suite.
+
+Still to deepen before considering Word Studio feature-complete:
+
+- Direct selection/editing of individual runs rather than formatting the whole selected paragraph.
+- Rich table cell UI and row/column controls on the page canvas.
+- Image positioning, wrapping, captions and replacement.
+- Header/footer first/different-page options.
+- Page breaks, section breaks and columns.
+- Styles gallery derived from the document rather than a fixed built-in shortlist.
+- Comments, tracked changes and document properties where OOXML support is practical.
+- AI proposals shown as Word-object changes before apply.
 
 ### Office 0.3 — Spreadsheet Studio
 
