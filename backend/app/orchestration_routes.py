@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from .database import connect, now
-from .services import task_queue
+from .services import task_queue, worktrees
 
 
 router = APIRouter(prefix="/api", tags=["orchestration"])
@@ -18,11 +18,16 @@ class OrchestratedTaskRequest(BaseModel):
     agent_role: str = Field(default="worker", min_length=1, max_length=80)
 
 
-def _project_exists(project_id: int) -> None:
+def _project(project_id: int) -> dict:
     with connect() as conn:
-        row = conn.execute("SELECT id FROM projects WHERE id=?", (project_id,)).fetchone()
+        row = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
     if not row:
         raise HTTPException(404, "Project not found")
+    return dict(row)
+
+
+def _project_exists(project_id: int) -> None:
+    _project(project_id)
 
 
 def _create(project_id: int, body: OrchestratedTaskRequest, parent_override: int | None = None) -> dict:
@@ -89,3 +94,35 @@ def orchestration_graph(project_id: int):
             "pr_state": task.get("pull_request_state") or "",
         })
     return {"project_id": project_id, "nodes": nodes}
+
+
+@router.get("/tasks/{task_id}/review-bundle")
+def orchestration_review_bundle(task_id: int, base: str = "main"):
+    root_task = task_queue.get(task_id)
+    if not root_task:
+        raise HTTPException(404, "Task not found")
+    project = _project(root_task["project_id"])
+    tasks = task_queue.list_for_project(root_task["project_id"])
+    included = [root_task, *[task for task in tasks if task.get("parent_task_id") == task_id]]
+    items = []
+    for task in included:
+        branch_summary = None
+        branch_error = ""
+        if task.get("worktree_path"):
+            try:
+                branch_summary = worktrees.summary(project, task["worktree_path"], base)
+            except ValueError as exc:
+                branch_error = str(exc)
+        items.append({
+            "id": task["id"],
+            "title": task["title"],
+            "agent_role": task.get("agent_role") or "worker",
+            "status": task["status"],
+            "depends_on": task.get("depends_on") or [],
+            "worktree_branch": task.get("worktree_branch") or "",
+            "pull_request_number": task.get("pull_request_number") or 0,
+            "pull_request_state": task.get("pull_request_state") or "",
+            "branch": branch_summary,
+            "branch_error": branch_error,
+        })
+    return {"task_id": task_id, "base": base, "items": items}
