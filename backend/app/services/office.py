@@ -15,6 +15,7 @@ from pptx import Presentation
 from pypdf import PdfReader
 
 from .office_excel import inspect_xlsx, mutate_xlsx
+from .office_powerpoint import inspect_pptx, mutate_pptx
 from .office_word import inspect_docx, mutate_docx
 from .workspace import project_root, safe_path
 
@@ -34,17 +35,7 @@ def _inspect_path(path: Path) -> dict:
     if suffix == ".xlsx":
         return inspect_xlsx(path)
     if suffix == ".pptx":
-        deck = Presentation(path)
-        slides = []
-        for index, slide in enumerate(deck.slides, 1):
-            shapes = []
-            for shape in slide.shapes:
-                item = {"name": shape.name, "type": str(shape.shape_type)}
-                if hasattr(shape, "text") and shape.text:
-                    item["text"] = shape.text
-                shapes.append(item)
-            slides.append({"number": index, "shapes": shapes, "text": [item["text"] for item in shapes if item.get("text")]})
-        return {"kind": "powerpoint", "slides": slides, "slide_count": len(slides)}
+        return inspect_pptx(path)
     if suffix == ".pdf":
         reader = PdfReader(path)
         return {
@@ -201,48 +192,6 @@ def _mutate(project: dict, path: Path, operations: list[dict[str, Any]]) -> None
     elif suffix == ".xlsx":
         mutate_xlsx(path, operations)
     elif suffix == ".pptx":
-        _mutate_pptx(path, operations)
+        mutate_pptx(project, path, operations)
     else:
         raise ValueError("Structured editing supports DOCX, XLSX and PPTX")
-
-
-def _mutate_pptx(path: Path, operations: list[dict[str, Any]]) -> None:
-    deck = Presentation(path)
-    for operation in operations:
-        action = operation.get("action")
-        if action == "set_shape_text":
-            slide_index = _index(operation, "slide_index", len(deck.slides))
-            slide = deck.slides[slide_index]
-            shape_index = _index(operation, "shape_index", len(slide.shapes))
-            shape = slide.shapes[shape_index]
-            if not hasattr(shape, "text"):
-                raise ValueError("Selected PowerPoint shape does not contain editable text")
-            shape.text = str(operation.get("text", ""))
-        elif action == "add_slide":
-            layout_index = int(operation.get("layout_index", 1))
-            if layout_index < 0 or layout_index >= len(deck.slide_layouts):
-                raise ValueError("PowerPoint layout_index is out of range")
-            slide = deck.slides.add_slide(deck.slide_layouts[layout_index])
-            title = str(operation.get("title", ""))
-            content = str(operation.get("content", ""))
-            if slide.shapes.title is not None:
-                slide.shapes.title.text = title
-            for placeholder in slide.placeholders:
-                if placeholder == slide.shapes.title:
-                    continue
-                if hasattr(placeholder, "text"):
-                    placeholder.text = content
-                    break
-        else:
-            raise ValueError(f"Unsupported PPTX edit action: {action}")
-    deck.save(path)
-
-
-def _index(operation: dict[str, Any], key: str, length: int) -> int:
-    try:
-        index = int(operation.get(key))
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{key} must be an integer") from exc
-    if index < 0 or index >= length:
-        raise ValueError(f"{key} is out of range")
-    return index
