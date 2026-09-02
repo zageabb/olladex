@@ -17,6 +17,8 @@ npm --prefix desktop run dist
 
 The build prepares the standalone frontend and freezes the Python API with PyInstaller before Electron Builder creates AppImage/DEB, DMG or NSIS output. Build each target on its native operating system. Pushing a `v*` tag runs the cross-platform GitHub Actions release workflow.
 
+Each platform build now runs `scripts/smoke_release.py` against the frozen API and standalone frontend before packaging. Electron Builder also emits the platform updater metadata and blockmaps alongside the installer.
+
 For signed builds, configure `CSC_LINK` and `CSC_KEY_PASSWORD` as repository secrets. Apple notarization additionally uses `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID`. The workflow remains usable without these secrets and produces unsigned installers.
 
 For a Linux x64 bundle that does not require AppImage tooling:

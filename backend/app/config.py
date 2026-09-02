@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     command_timeout_seconds: int = 120
     max_file_bytes: int = 2_000_000
     context_candidate_files: int = 24
+    github_token: str = ""
+    github_api_url: str = "https://api.github.com"
 
     @property
     def database_path(self) -> Path:

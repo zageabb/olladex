@@ -102,6 +102,7 @@ button.primary:hover { background: var(--blue-2); }
 .composer-actions { padding: 7px; display: flex; align-items: center; gap: 6px; border-top: 1px solid #edf1f6; }
 .composer-actions > div:first-child { display: flex; gap: 4px; }
 .composer-actions button { padding: 7px 8px; background: #f7f9fc; border-color: transparent; font-size: 9px; }
+.composer-actions button.active { color: #fff; background: #315f9d; }
 .composer-actions .send { margin-left: 0; color: #fff; background: var(--blue); padding: 7px 11px; }
 .model-chip { flex: 1; overflow: hidden; color: #718096; font-size: 9px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -168,6 +169,36 @@ button.primary:hover { background: var(--blue-2); }
 .git-approvals small { overflow: hidden; color: var(--muted); font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
 .git-approvals article > div:last-child { display: flex; gap: 5px; }
 .git-approvals button { padding: 5px 7px; font-size: 8px; }
+.github-panel { margin-bottom: 11px; overflow: hidden; background: #fff; border: 1px solid var(--line); border-radius: 10px; }
+.github-panel > header { padding: 11px 13px; display: flex; align-items: center; justify-content: space-between; color: #fff; background: linear-gradient(120deg, #17283f, #243f64); border: 0; }
+.github-panel > header h3 { margin: 2px 0 0; font-size: 13px; }
+.github-panel > header h3 span { margin-left: 5px; color: #9fb9dc; font-size: 9px; font-weight: 500; }
+.github-panel > header button { padding: 5px 8px; color: #dce9f8; background: #ffffff0b; border-color: #ffffff20; font-size: 8px; }
+.github-grid { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid var(--line); }
+.github-grid > div { min-width: 0; padding: 10px; }
+.github-grid > div + div { border-left: 1px solid var(--line); }
+.github-panel h4 { margin: 0 0 7px; color: #607187; font-size: 8px; text-transform: uppercase; }
+.github-grid article, .github-approvals article { margin: 0 0 5px; padding: 7px 8px; display: flex; align-items: center; justify-content: space-between; gap: 7px; border: 1px solid #edf1f5; border-radius: 7px; }
+.github-grid article div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.github-grid a { overflow: hidden; color: #245b9f; font-size: 9px; font-weight: 700; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
+.github-grid small, .github-grid > div > p { margin: 0; color: var(--muted); font-size: 7px; }
+.github-grid button { flex: 0 0 auto; padding: 5px 7px; font-size: 8px; }
+.github-pr-form { padding: 10px; display: grid; gap: 6px; border-bottom: 1px solid var(--line); }
+.github-pr-form input, .github-pr-form textarea, .github-pr-form select { width: 100%; padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px; font-size: 9px; }
+.github-pr-form textarea { min-height: 58px; resize: vertical; }
+.github-pr-form > div { display: flex; align-items: end; gap: 8px; }
+.github-pr-form label { display: grid; gap: 3px; color: var(--muted); font-size: 7px; text-transform: uppercase; }
+.github-pr-form .draft-check { display: flex; align-items: center; gap: 4px; padding-bottom: 7px; }
+.github-pr-form .draft-check input { width: auto; }
+.github-pr-form button { margin-left: auto; padding: 6px 8px; font-size: 8px; }
+.github-pr-form > small { color: #9a681d; font-size: 7px; }
+.github-approvals { padding: 10px; background: #fff9ef; }
+.github-approvals article > div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.github-approvals article > div:last-child { flex-direction: row; flex: 0 0 auto; }
+.github-approvals strong { font-size: 9px; }
+.github-approvals span { color: var(--muted); font-size: 7px; }
+.github-approvals button { padding: 5px 7px; font-size: 8px; }
+.github-notice { padding: 8px 10px; color: #8a5b17; background: #fff8e9; border-bottom: 1px solid #f1dfbd; font-size: 8px; }
 .empty-git { padding: 14px; display: flex; flex-direction: column; gap: 4px; }
 .empty-git strong { font-size: 11px; }
 .empty-git span { color: var(--muted); font-size: 9px; }
@@ -202,6 +233,26 @@ button.primary:hover { background: var(--blue-2); }
 .terminal-controls { min-height: 31px; padding: 6px 12px; display: flex; align-items: center; justify-content: flex-end; gap: 4px; border-top: 1px solid #ffffff0e; }
 .terminal-controls span { margin-right: auto; color: #7085a3; font-family: "SFMono-Regular", Consolas, monospace; font-size: 8px; }
 .terminal-controls button { padding: 4px 7px; color: #90a4bf; background: #ffffff08; border-color: #ffffff12; font-family: "SFMono-Regular", Consolas, monospace; font-size: 8px; }
+
+.jobs-panel { min-height: 0; overflow: auto; padding: 14px; background: #f5f7fa; }
+.jobs-panel > header { padding: 13px 15px; display: flex; align-items: center; justify-content: space-between; color: #fff; background: linear-gradient(120deg, #102445, #1768e5); border-radius: 10px 10px 0 0; }
+.jobs-panel > header h3 { margin: 2px 0 0; font-size: 14px; }
+.jobs-panel > header span { padding: 4px 7px; background: #ffffff14; border-radius: 8px; font-size: 8px; }
+.job-list { padding: 10px; background: #fff; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 10px 10px; }
+.job-card { margin-bottom: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
+.job-state { display: flex; align-items: center; gap: 6px; }
+.job-state i { width: 7px; height: 7px; background: #7d8da3; border-radius: 50%; }
+.job-card.running .job-state i { background: #3187ff; box-shadow: 0 0 0 3px #3187ff20; animation: pulse 1.2s infinite; }
+.job-card.completed .job-state i { background: #42c58a; }
+.job-card.failed .job-state i { background: #e05c53; }
+.job-state strong { font-size: 9px; text-transform: capitalize; }
+.job-state small { color: var(--muted); font-size: 7px; }
+.job-card p { max-height: 58px; overflow: hidden; margin: 8px 0; color: #40536d; font-size: 9px; line-height: 1.5; white-space: pre-wrap; }
+.job-card pre { max-height: 100px; overflow: auto; padding: 8px; color: #a4433d; background: #fff0ee; border-radius: 6px; font-size: 8px; white-space: pre-wrap; }
+.job-card footer { display: flex; align-items: center; justify-content: space-between; }
+.job-card footer span { color: var(--muted); font-size: 7px; }
+.job-card footer button { padding: 5px 7px; font-size: 8px; }
+.job-notice { padding: 8px 10px; color: #9f3e35; background: #fff0ee; font-size: 8px; }
 
 .diagram-studio { min-height: 0; display: grid; grid-template-rows: auto 1fr; background: #f4f7fb; }
 .diagram-toolbar { padding: 9px 11px; display: flex; justify-content: space-between; background: #fff; border-bottom: 1px solid var(--line); }
@@ -270,8 +321,12 @@ button.primary:hover { background: var(--blue-2); }
 .profile-builder summary { color: #315d98; cursor: pointer; font-size: 9px; font-weight: 750; }
 .profile-builder[open] summary { margin-bottom: 9px; }
 .profile-builder > div { margin-top: 8px; display: grid!important; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start!important; gap: 8px!important; }
-.profile-builder > div:nth-of-type(2) { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.profile-builder > div:nth-of-type(3) { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .profile-builder > button { margin-top: 9px; padding: 6px 9px; font-size: 8px; }
+.project-columns form > .profile-actions { justify-content: flex-end; }
+.profile-actions button { padding: 5px 7px; font-size: 8px; }
+.profile-builder > .profile-save-actions { display: flex!important; grid-template-columns: none; justify-content: flex-end; }
+.profile-save-actions button { padding: 6px 8px; font-size: 8px; }
 .symbol-map > div { max-height: 280px; overflow: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
 .symbol-map article { min-width: 0; padding: 7px 8px; display: flex; flex-direction: column; background: #f7f9fc; border-radius: 6px; }
 .symbol-map article strong { font-size: 9px; }

@@ -100,6 +100,34 @@ CREATE TABLE IF NOT EXISTS repository_index (
   indexed_at TEXT NOT NULL,
   PRIMARY KEY(project_id,path)
 );
+CREATE TABLE IF NOT EXISTS agent_jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  prompt TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'manual',
+  status TEXT NOT NULL DEFAULT 'queued',
+  result_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+  error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  started_at TEXT NOT NULL DEFAULT '',
+  completed_at TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS github_operations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  action TEXT NOT NULL,
+  repository TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL DEFAULT '',
+  head TEXT NOT NULL,
+  base TEXT NOT NULL,
+  draft INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending',
+  response TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 """
 
 ADDITIVE_COLUMNS = {

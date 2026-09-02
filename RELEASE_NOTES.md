@@ -1,5 +1,28 @@
 # Olladex release notes
 
+## v0.6.0
+
+Olladex v0.6 adds durable background development work and connects the local agent workflow to GitHub issues and review-controlled pull requests.
+
+### Added
+
+- Persistent SQLite agent-job queue with automatic recovery of interrupted running jobs after restart.
+- Background composer mode and a Jobs workspace showing status, source, timestamps, errors, cancellation and completed-session links.
+- GitHub repository discovery from the selected Git remote.
+- Open issue and pull-request overview with issue-to-background-agent import.
+- Pull-request proposals showing repository, head, base, title and draft state before a separate approval action creates anything externally.
+- Environment-only GitHub token configuration for private repositories and write operations.
+- Update and deletion APIs/UI for reusable custom model profiles, while built-in profiles remain protected.
+- Cross-platform frozen API and standalone frontend smoke script used by every desktop release runner.
+- Electron Builder update metadata and blockmaps included in release artifacts.
+- FastAPI lifespan startup replacing the deprecated startup-event path.
+
+### Verification
+
+- Nineteen backend tests cover background execution and persistence, model-profile lifecycle, GitHub discovery and explicitly approved PR creation alongside all earlier workflows.
+- Production Next.js compilation and strict TypeScript checking pass with Jobs and GitHub workspaces.
+- Python compilation, workflow parsing and packaged-service smoke checks form the desktop release gate.
+
 ## v0.5.0
 
 Olladex v0.5 makes repository context persistent, upgrades the local terminal to a full ANSI surface and automates native desktop release builds.

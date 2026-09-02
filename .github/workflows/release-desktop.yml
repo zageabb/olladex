@@ -19,13 +19,21 @@ jobs:
             platform: linux
             artifacts: |
               desktop/dist/*.AppImage
+              desktop/dist/*.AppImage.blockmap
               desktop/dist/*.deb
+              desktop/dist/latest-linux.yml
           - os: macos-latest
             platform: macos
-            artifacts: desktop/dist/*.dmg
+            artifacts: |
+              desktop/dist/*.dmg
+              desktop/dist/*.dmg.blockmap
+              desktop/dist/latest-mac.yml
           - os: windows-latest
             platform: windows
-            artifacts: desktop/dist/*.exe
+            artifacts: |
+              desktop/dist/*.exe
+              desktop/dist/*.exe.blockmap
+              desktop/dist/latest.yml
     runs-on: ${{ matrix.os }}
     env:
       CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -56,6 +64,8 @@ jobs:
         run: python desktop/scripts/build_backend.py
       - name: Build frontend bundle
         run: npm --prefix desktop run prepare:app
+      - name: Smoke-test packaged services
+        run: python desktop/scripts/smoke_release.py
       - name: Package Linux
         if: matrix.platform == 'linux'
         working-directory: desktop
