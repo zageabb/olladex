@@ -1,0 +1,30 @@
+.studio { display: grid; gap: 10px; }
+.toolbar { padding: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; background: #f7f9fc; border: 1px solid var(--line); border-radius: 9px; }
+.toolbar select, .toolbar input { min-height: 30px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 6px; background: #fff; font-size: 9px; }
+.toolbar button { padding: 6px 8px; font-size: 9px; }
+.toolbar button.active { color: var(--blue); background: var(--blue-soft); border-color: #b9d2f8; }
+.formulaBar { display: grid; grid-template-columns: 74px 1fr auto auto; gap: 6px; align-items: center; }
+.formulaBar input { padding: 8px; border: 1px solid var(--line); border-radius: 7px; font-size: 10px; }
+.formulaBar button { padding: 7px 10px; font-size: 9px; }
+.sheetTabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.sheetTabs button { padding: 5px 9px; font-size: 8px; }
+.sheetTabs button.active { color: var(--blue); background: var(--blue-soft); border-color: #b9d2f8; }
+.gridWrap { max-height: 560px; overflow: auto; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
+.grid { border-collapse: separate; border-spacing: 0; table-layout: fixed; min-width: 100%; font-size: 9px; }
+.grid th, .grid td { min-width: 92px; height: 28px; padding: 0; border-right: 1px solid #e2e7ef; border-bottom: 1px solid #e2e7ef; }
+.grid th { position: sticky; top: 0; z-index: 2; min-width: 42px; padding: 5px 7px; color: #637085; background: #f3f6fa; text-align: center; }
+.grid th:first-child { left: 0; z-index: 3; }
+.grid tbody th { position: sticky; left: 0; z-index: 1; min-width: 42px; }
+.cell { width: 100%; height: 100%; padding: 5px 7px; overflow: hidden; border: 0; border-radius: 0; background: #fff; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.cell:hover { background: #f7fbff; }
+.cell.selected { outline: 2px solid var(--blue); outline-offset: -2px; background: #edf5ff; }
+.lower { display: grid; grid-template-columns: 1fr 280px; gap: 10px; align-items: start; }
+.card { padding: 11px; background: #fff; border: 1px solid var(--line); border-radius: 9px; }
+.card h4 { margin: 0 0 8px; font-size: 10px; }
+.card label { margin-top: 6px; display: grid; gap: 4px; color: #66768b; font-size: 8px; font-weight: 700; text-transform: uppercase; }
+.card input, .card select, .card textarea { width: 100%; padding: 7px; border: 1px solid var(--line); border-radius: 6px; font-size: 9px; text-transform: none; }
+.card button { margin: 6px 4px 0 0; padding: 6px 8px; font-size: 8px; }
+.meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.meta span { padding: 7px; background: #f7f9fc; border-radius: 7px; color: var(--muted); font-size: 8px; }
+.status { color: var(--muted); font-size: 9px; }
+@media (max-width: 900px) { .lower { grid-template-columns: 1fr; } .formulaBar { grid-template-columns: 64px 1fr; } }
