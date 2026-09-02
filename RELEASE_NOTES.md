@@ -1,5 +1,70 @@
 # Olladex release notes
 
+## v0.8.1 — release candidate
+
+Olladex v0.8.1 turns parallel task execution into a coordinated multi-agent development workflow with task-to-PR lifecycle tracking, autonomous lead-agent decomposition, dependency-aware specialists, integration worktrees and combined CI gates.
+
+### Added
+
+- Persistent parent/child task relationships, explicit task dependencies and specialist agent roles.
+- Dependency-aware scheduling that waits for prerequisites and blocks downstream tasks when prerequisites fail or are cancelled.
+- Autonomous lead-agent planning through Ollama, with bounded specialist decomposition and a final reviewer/consolidation task.
+- Automatic dependency-result hand-offs to downstream specialists and the final reviewer.
+- Task graph UI for autonomous leads, manual specialists, dependencies, review bundles and consolidated lead results.
+- Durable task-to-pull-request linkage with PR state, review decision and status-check visibility.
+- Safe automatic cleanup of merged task worktrees when no uncommitted work remains.
+- Managed integration worktrees using `olladex/integration-<lead-task-id>` branches.
+- Specialist branch preflight with changed-file overlap reporting.
+- Conflict-safe cherry-pick integration that aborts without modifying `main`.
+- Combined integration check command, push gate and single final integration pull request workflow.
+- Dedicated push/PR CI workflow for backend pytest, frontend TypeScript checking and production Next.js builds.
+- Temporary-Git-repository tests for worktree integration, overlap detection, combined checks and conflict aborts.
+- SQLite-backed tests for dependency waiting, failed prerequisites and cross-project dependency rejection.
+
+### Fixed
+
+- Desktop publisher now targets `zageabb/olladex` instead of the retired `olladex-` repository slug.
+- Frontend and desktop package metadata now follow the active v0.8.1 development line instead of reporting v0.6.0.
+- Application header uses the live backend version rather than a hard-coded v0.6 label.
+- Pull-request persistence fields were reconciled across task lifecycle and orchestration migrations.
+
+### Verification status
+
+- CI configuration and expanded tests are committed.
+- The connected GitHub integration does not currently have permission to read Actions/commit-status results for this private repository, so a successful v0.8.1 CI run has not yet been independently verified from this development session.
+- Do not tag or publish v0.8.1 until backend tests and frontend type/build checks are observed passing.
+
+## v0.8.0
+
+Olladex v0.8 introduced isolated Git worktrees for parallel agents, pull-request review tooling and deeper Office-file inspection/generation.
+
+### Added
+
+- Per-task managed Git worktrees and `olladex/task-<id>` branches so agents can work concurrently in the same repository.
+- Agent filesystem routing into task worktrees while ordinary API requests continue to use the main checkout.
+- Task branch commit, push and pull-request promotion workflow.
+- GitHub pull-request list/detail/diff review services with comments, approvals and requested changes.
+- Pull-request review workspace with check/status visibility.
+- Deeper DOCX, XLSX, PPTX and PDF inspection plus improved basic Office generation.
+- Worktree lifecycle tests and API route assembly coverage.
+
+### Safety
+
+- Task proposal application/revert is routed back into the originating task worktree.
+- Worktree deletion is confined to Olladex-managed directories.
+- Automatic cleanup refuses worktrees that still contain uncommitted changes.
+
+## v0.7 development line
+
+The v0.7 development line established the parallel task runtime that v0.8 later isolated with Git worktrees.
+
+### Added
+
+- Configurable multi-worker background task queue with `OLLADEX_TASK_WORKERS`.
+- Cooperative cancellation checks during streamed Ollama chat and before tool execution.
+- Streaming Ollama `/api/chat` handling with cancellable background jobs.
+- Initial safe concurrency controls before same-repository worktree isolation arrived in v0.8.
+
 ## v0.6.0
 
 Olladex v0.6 adds persistent background development work, review-first GitHub workflows, full model-profile management and a stronger cross-platform desktop release path.
