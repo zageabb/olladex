@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .chat_routes import router as chat_router
 from .github_review_routes import router as github_review_router
 from .integration_routes import router as integration_router
 from .main import app
@@ -12,6 +13,7 @@ from .task_routes import router as task_router
 runtime_settings.load()
 
 app.include_router(task_router)
+app.include_router(chat_router)
 app.include_router(github_review_router)
 app.include_router(orchestration_router)
 app.include_router(integration_router)
