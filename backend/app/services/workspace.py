@@ -17,7 +17,15 @@ TEXT_SUFFIXES = {
 
 
 def project_root(project: dict) -> Path:
-    root = Path(project["path"]).expanduser().resolve()
+    root_value = project["path"]
+    try:
+        from . import task_queue
+        worktree = task_queue.current_worktree_path()
+        if worktree:
+            root_value = worktree
+    except Exception:
+        pass
+    root = Path(root_value).expanduser().resolve()
     if not root.is_dir():
         raise HTTPException(404, "Project directory is no longer available")
     return root
