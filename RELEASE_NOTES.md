@@ -1,6 +1,6 @@
 # Olladex release notes
 
-## v0.8.1 — release candidate
+## v0.8.1
 
 Olladex v0.8.1 turns parallel task execution into a coordinated multi-agent development workflow with task-to-PR lifecycle tracking, autonomous lead-agent decomposition, dependency-aware specialists, integration worktrees and combined CI gates.
 
@@ -24,15 +24,19 @@ Olladex v0.8.1 turns parallel task execution into a coordinated multi-agent deve
 ### Fixed
 
 - Desktop publisher now targets `zageabb/olladex` instead of the retired `olladex-` repository slug.
-- Frontend and desktop package metadata now follow the active v0.8.1 development line instead of reporting v0.6.0.
+- Electron release metadata now treats the repository as public.
+- Frontend and desktop package metadata now report v0.8.1 instead of the older v0.6.0 line.
 - Application header uses the live backend version rather than a hard-coded v0.6 label.
 - Pull-request persistence fields were reconciled across task lifecycle and orchestration migrations.
+- Repository embeddings no longer incorrectly enter a five-minute cooldown on a fresh process before any embedding failure has occurred.
+- API assembly coverage now validates the real assembled OpenAPI contract rather than FastAPI internal router objects.
 
-### Verification status
+### Verification
 
-- CI configuration and expanded tests are committed.
-- The connected GitHub integration does not currently have permission to read Actions/commit-status results for this private repository, so a successful v0.8.1 CI run has not yet been independently verified from this development session.
-- Do not tag or publish v0.8.1 until backend tests and frontend type/build checks are observed passing.
+- GitHub Actions CI run #12 passed on the release-candidate code.
+- Backend: 30 tests passed under Python 3.12.
+- Frontend: dependency install, strict TypeScript check and production Next.js build passed under Node 22.
+- Desktop: dependency install, Electron shell syntax checks and release metadata validation passed.
 
 ## v0.8.0
 
