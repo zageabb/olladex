@@ -39,10 +39,7 @@ def start(handler: TaskHandler) -> None:
         with connect() as conn:
             conn.execute("UPDATE background_tasks SET status='cancelled',completed_at=? WHERE status='running' AND cancel_requested=1", (now(),))
             conn.execute("UPDATE background_tasks SET status='queued',started_at='' WHERE status='running'")
-        _threads = [
-            threading.Thread(target=_worker, name=f"olladex-task-worker-{index + 1}", daemon=True)
-            for index in range(_worker_count())
-        ]
+        _threads = [threading.Thread(target=_worker, name=f"olladex-task-worker-{index + 1}", daemon=True) for index in range(_worker_count())]
         for thread in _threads:
             thread.start()
 
@@ -141,11 +138,18 @@ def current_worktree_path() -> str:
     return task.get("worktree_path", "") if task else ""
 
 
-def _dependency_state(conn, task: dict) -> tuple[bool, str]:
+def _dependency_ids(task: dict) -> list[int]:
+    value = task.get("depends_on") or []
+    if isinstance(value, list):
+        return [int(item) for item in value if int(item) > 0]
     try:
-        dependency_ids = [int(item) for item in json.loads(task.get("depends_on") or "[]")]
+        return [int(item) for item in json.loads(value or "[]") if int(item) > 0]
     except (TypeError, ValueError, json.JSONDecodeError):
-        dependency_ids = []
+        return []
+
+
+def _dependency_state(conn, task: dict) -> tuple[bool, str]:
+    dependency_ids = _dependency_ids(task)
     if not dependency_ids:
         return True, ""
     placeholders = ",".join("?" for _ in dependency_ids)
@@ -157,6 +161,23 @@ def _dependency_state(conn, task: dict) -> tuple[bool, str]:
     if failed:
         return False, f"Dependency task(s) did not complete successfully: {failed}"
     return all(states[item] == "completed" for item in dependency_ids), ""
+
+
+def _dependency_context(task: dict) -> str:
+    dependency_ids = _dependency_ids(task)
+    if not dependency_ids:
+        return ""
+    placeholders = ",".join("?" for _ in dependency_ids)
+    with connect() as conn:
+        rows = [dict(row) for row in conn.execute(f"SELECT id,title,agent_role,status,result,error,worktree_branch,pull_request_number,pull_request_state FROM background_tasks WHERE id IN ({placeholders}) ORDER BY id", dependency_ids)]
+    parts = ["Dependency hand-offs from completed specialist tasks:"]
+    for item in rows:
+        parts.append(
+            f"\nTask #{item['id']} — {item['title']} ({item.get('agent_role') or 'worker'}, {item['status']})\n"
+            f"Branch: {item.get('worktree_branch') or 'none'} | PR: {item.get('pull_request_number') or 'none'} {item.get('pull_request_state') or ''}\n"
+            f"Result:\n{(item.get('result') or item.get('error') or 'No result')[:12000]}"
+        )
+    return "\n".join(parts)
 
 
 def _claim_next() -> dict | None:
@@ -171,13 +192,16 @@ def _claim_next() -> dict | None:
                 continue
             cursor = conn.execute("UPDATE background_tasks SET status='running',started_at=? WHERE id=? AND status='queued'", (now(), task["id"]))
             if cursor.rowcount == 1:
+                try:
+                    task["depends_on"] = json.loads(task.get("depends_on") or "[]")
+                except json.JSONDecodeError:
+                    task["depends_on"] = []
                 return task
     return None
 
 
 def _prepare_isolation(task: dict) -> threading.Lock | None:
     from . import worktrees
-
     with connect() as conn:
         row = conn.execute("SELECT * FROM projects WHERE id=?", (task["project_id"],)).fetchone()
     if not row:
@@ -196,6 +220,20 @@ def _prepare_isolation(task: dict) -> threading.Lock | None:
         return fallback
 
 
+def _finalize_parent(task: dict, final_status: str, result: str = "", error: str = "") -> None:
+    parent_id = task.get("parent_task_id")
+    if not parent_id or (task.get("agent_role") or "") != "reviewer":
+        return
+    with connect() as conn:
+        parent = conn.execute("SELECT status FROM background_tasks WHERE id=?", (parent_id,)).fetchone()
+        if not parent or parent["status"] not in {"coordinating", "queued"}:
+            return
+        if final_status == "completed":
+            conn.execute("UPDATE background_tasks SET status='completed',result=?,completed_at=? WHERE id=?", (result, now(), parent_id))
+        else:
+            conn.execute("UPDATE background_tasks SET status='failed',error=?,completed_at=? WHERE id=?", (error or "Lead consolidation task failed", now(), parent_id))
+
+
 def run_once() -> bool:
     handler = _handler
     if handler is None:
@@ -210,19 +248,29 @@ def run_once() -> bool:
         if cancel_requested():
             with connect() as conn:
                 conn.execute("UPDATE background_tasks SET status='cancelled',completed_at=? WHERE id=?", (now(), task["id"]))
+            _finalize_parent(task, "cancelled", error="Lead consolidation task was cancelled")
             return True
+        dependency_context = _dependency_context(task)
+        if dependency_context:
+            task["prompt"] = f"{task['prompt']}\n\n{dependency_context}"
         result = handler(task)
         with connect() as conn:
             current = conn.execute("SELECT cancel_requested FROM background_tasks WHERE id=?", (task["id"],)).fetchone()
             final_status = "cancelled" if current and current["cancel_requested"] else "completed"
             conn.execute("UPDATE background_tasks SET status=?,result=?,completed_at=? WHERE id=?", (final_status, result, now(), task["id"]))
+        _finalize_parent(task, final_status, result=result, error="Lead consolidation task was cancelled")
     except Exception as exc:
         with connect() as conn:
             current = conn.execute("SELECT cancel_requested FROM background_tasks WHERE id=?", (task["id"],)).fetchone()
             if current and current["cancel_requested"]:
                 conn.execute("UPDATE background_tasks SET status='cancelled',error='',completed_at=? WHERE id=?", (now(), task["id"]))
+                final_status = "cancelled"
+                error = "Lead consolidation task was cancelled"
             else:
-                conn.execute("UPDATE background_tasks SET status='failed',error=?,completed_at=? WHERE id=?", (str(exc)[:20_000], now(), task["id"]))
+                error = str(exc)[:20000]
+                conn.execute("UPDATE background_tasks SET status='failed',error=?,completed_at=? WHERE id=?", (error, now(), task["id"]))
+                final_status = "failed"
+        _finalize_parent(task, final_status, error=error)
     finally:
         _local.task_id = None
         if fallback_lock:
