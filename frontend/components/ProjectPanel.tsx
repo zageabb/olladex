@@ -8,11 +8,11 @@ type Intelligence = { name: string; path: string; file_count: number; total_byte
 type ContextItem = { path: string; score: number; semantic_score: number; start_line: number; strategy: "hybrid" | "lexical" | "indexed-hybrid" | "indexed-lexical"; excerpt: string };
 type ModelProfile = { id: number; name: string; chat_model: string; embedding_model: string; temperature: number; max_steps: number; context_files: number; context_chars: number; is_builtin: number };
 type IndexStatus = { files: number; embedded: number; updated_at?: string; changed?: number; removed?: number; embedded_now?: number };
-type OllamaSettings = { ollama_url: string; ollama_model: string; ollama_embedding_model: string; connected: boolean; models: string[]; error?: string };
+type OllamaSettings = { ollama_url: string; ollama_model: string; ollama_embedding_model: string; connected: boolean; models: string[]; selected_model?: string; selected_embedding_model?: string; model_available?: boolean; embedding_available?: boolean; error?: string };
 
 export function ProjectPanel({ project, onUpdated }: { project: Project; onUpdated: (project: Project) => void }) {
   const [intelligence, setIntelligence] = useState<Intelligence | null>(null);
-  const [model, setModel] = useState(project.model);
+  const [model, setModel] = useState(project.profile_chat_model || project.model);
   const [mode, setMode] = useState(project.approval_mode || "assisted");
   const [instructions, setInstructions] = useState(project.instructions || "");
   const [gitName, setGitName] = useState(project.git_author_name || "Olladex User");
@@ -30,7 +30,7 @@ export function ProjectPanel({ project, onUpdated }: { project: Project; onUpdat
   const [profileFiles, setProfileFiles] = useState(project.profile_context_files ?? 8);
   const [profileChars, setProfileChars] = useState(project.profile_context_chars ?? 32000);
   const [ollamaUrl, setOllamaUrl] = useState("http://127.0.0.1:11434");
-  const [ollamaDefaultModel, setOllamaDefaultModel] = useState("qwen3:14b");
+  const [ollamaDefaultModel, setOllamaDefaultModel] = useState("");
   const [ollamaEmbeddingModel, setOllamaEmbeddingModel] = useState("nomic-embed-text");
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [ollamaConnected, setOllamaConnected] = useState(false);
@@ -44,11 +44,11 @@ export function ProjectPanel({ project, onUpdated }: { project: Project; onUpdat
   }, [profileId, profiles]);
 
   useEffect(() => {
-    setModel(project.model); setMode(project.approval_mode || "assisted"); setInstructions(project.instructions || ""); setGitName(project.git_author_name || "Olladex User"); setGitEmail(project.git_author_email || "olladex@local"); setProfileId(project.model_profile_id ? String(project.model_profile_id) : "");
+    setModel(project.profile_chat_model || project.model); setMode(project.approval_mode || "assisted"); setInstructions(project.instructions || ""); setGitName(project.git_author_name || "Olladex User"); setGitEmail(project.git_author_email || "olladex@local"); setProfileId(project.model_profile_id ? String(project.model_profile_id) : ""); setProfileEmbedding(project.profile_embedding_model || "nomic-embed-text");
     request<Intelligence>(`/projects/${project.id}/intelligence`).then(setIntelligence).catch((error) => setNotice(error.message));
     request<ModelProfile[]>("/model-profiles").then(setProfiles).catch(() => {});
     request<IndexStatus>(`/projects/${project.id}/index`).then(setIndexStatus).catch(() => {});
-  }, [project.id, project.model, project.approval_mode, project.instructions, project.git_author_name, project.git_author_email]);
+  }, [project.id, project.model, project.profile_chat_model, project.profile_embedding_model, project.approval_mode, project.instructions, project.git_author_name, project.git_author_email]);
 
   useEffect(() => {
     request<OllamaSettings>("/settings/ollama").then((data) => {
@@ -57,7 +57,7 @@ export function ProjectPanel({ project, onUpdated }: { project: Project; onUpdat
       setOllamaEmbeddingModel(data.ollama_embedding_model);
       setOllamaModels(data.models || []);
       setOllamaConnected(data.connected);
-      setOllamaNotice(data.connected ? `Connected · ${data.models.length} model${data.models.length === 1 ? "" : "s"} available` : data.error || "Ollama is not reachable");
+      setOllamaNotice(connectionMessage(data));
     }).catch((error) => setOllamaNotice(error instanceof Error ? error.message : String(error)));
   }, []);
 
@@ -65,27 +65,32 @@ export function ProjectPanel({ project, onUpdated }: { project: Project; onUpdat
     event.preventDefault(); setNotice("Saving…");
     try {
       const updated = await request<Project>(`/projects/${project.id}/settings`, { method: "PATCH", body: JSON.stringify({ model, approval_mode: mode, instructions, git_author_name: gitName, git_author_email: gitEmail, model_profile_id: profileId ? Number(profileId) : null }) });
-      onUpdated(updated); setNotice("Project settings saved");
+      onUpdated(updated); setNotice(`Project settings saved · effective model ${updated.profile_chat_model || updated.model}`);
       const map = await request<Intelligence>(`/projects/${project.id}/intelligence`); setIntelligence(map);
     } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); }
   }
 
   async function testOllama() {
-    setTestingOllama(true); setOllamaNotice("Testing connection…");
+    setTestingOllama(true); setOllamaNotice("Testing server and selected models…");
     try {
-      const result = await request<{ connected: boolean; url: string; models: string[]; error?: string }>("/settings/ollama/test", { method: "POST", body: JSON.stringify({ ollama_url: ollamaUrl }) });
+      const result = await request<OllamaSettings>("/settings/ollama/test", { method: "POST", body: JSON.stringify({ ollama_url: ollamaUrl, ollama_model: ollamaDefaultModel, ollama_embedding_model: ollamaEmbeddingModel }) });
       setOllamaConnected(result.connected); setOllamaModels(result.models || []);
-      setOllamaNotice(result.connected ? `Connected to ${result.url} · ${result.models.length} model${result.models.length === 1 ? "" : "s"} available` : result.error || "Connection failed");
+      setOllamaNotice(connectionMessage(result));
     } catch (error) { setOllamaConnected(false); setOllamaNotice(error instanceof Error ? error.message : String(error)); }
     finally { setTestingOllama(false); }
   }
 
   async function saveOllama(event: FormEvent) {
-    event.preventDefault(); setOllamaNotice("Saving Ollama settings…");
+    event.preventDefault(); setOllamaNotice("Validating and saving Ollama settings…");
     try {
       const result = await request<OllamaSettings>("/settings/ollama", { method: "PUT", body: JSON.stringify({ ollama_url: ollamaUrl, ollama_model: ollamaDefaultModel, ollama_embedding_model: ollamaEmbeddingModel }) });
       setOllamaUrl(result.ollama_url); setOllamaDefaultModel(result.ollama_model); setOllamaEmbeddingModel(result.ollama_embedding_model); setOllamaModels(result.models || []); setOllamaConnected(result.connected);
-      setOllamaNotice(result.connected ? "Saved and connected. New Ollama requests will use this server immediately." : `Saved, but the server is not currently reachable${result.error ? `: ${result.error}` : "."}`);
+      const [updatedProject, updatedProfiles] = await Promise.all([
+        request<Project>(`/projects/${project.id}/settings`),
+        request<ModelProfile[]>("/model-profiles"),
+      ]);
+      setProfiles(updatedProfiles); setModel(updatedProject.profile_chat_model || updatedProject.model); setProfileEmbedding(updatedProject.profile_embedding_model || result.ollama_embedding_model); onUpdated(updatedProject);
+      setOllamaNotice(`Saved · ${result.ollama_model} is now the default model and built-in local profiles were updated.`);
     } catch (error) { setOllamaNotice(error instanceof Error ? error.message : String(error)); }
   }
 
@@ -133,14 +138,21 @@ export function ProjectPanel({ project, onUpdated }: { project: Project; onUpdat
 
   return <div className="project-panel">
     <section className="project-summary-card"><div><p className="eyebrow">Repository intelligence</p><h2>{project.name}</h2><p>{project.path}</p></div><div className="project-metrics"><span><strong>{intelligence?.file_count || 0}</strong>files</span><span><strong>{formatBytes(intelligence?.total_bytes || 0)}</strong>indexed</span><span><strong>{intelligence?.symbols.length || 0}</strong>symbols</span></div></section>
-    <section className="context-lens ollama-settings"><div className="context-head"><div><p className="eyebrow">AI connection</p><h3>Ollama server</h3></div><div><span>{ollamaConnected ? "● Connected" : "○ Offline"}</span><span>{ollamaModels.length} models</span></div></div><form onSubmit={saveOllama}><label>Server URL<input value={ollamaUrl} onChange={(event) => setOllamaUrl(event.target.value)} placeholder="http://192.168.1.249:11434" /></label><label>Default chat model<input list="olladex-ollama-models" value={ollamaDefaultModel} onChange={(event) => setOllamaDefaultModel(event.target.value)} placeholder="qwen3:14b" /></label><label>Embedding model<input list="olladex-ollama-models" value={ollamaEmbeddingModel} onChange={(event) => setOllamaEmbeddingModel(event.target.value)} placeholder="nomic-embed-text" /></label><datalist id="olladex-ollama-models">{ollamaModels.map((item) => <option key={item} value={item} />)}</datalist><button type="button" onClick={testOllama} disabled={testingOllama}>{testingOllama ? "Testing…" : "Test connection"}</button><button className="primary" type="submit">Save Ollama settings</button></form><small>{ollamaNotice}</small></section>
+    <section className="context-lens ollama-settings"><div className="context-head"><div><p className="eyebrow">AI connection</p><h3>Ollama server & defaults</h3></div><div><span>{ollamaConnected ? "● Connected" : "○ Offline"}</span><span>{ollamaModels.length} models</span></div></div><form onSubmit={saveOllama}><label>Server URL<input value={ollamaUrl} onChange={(event) => setOllamaUrl(event.target.value)} placeholder="http://192.168.1.249:11434" /></label><label>Default chat model<input list="olladex-ollama-models" value={ollamaDefaultModel} onChange={(event) => setOllamaDefaultModel(event.target.value)} placeholder="Select an installed model" /></label><label>Embedding model<input list="olladex-ollama-models" value={ollamaEmbeddingModel} onChange={(event) => setOllamaEmbeddingModel(event.target.value)} placeholder="nomic-embed-text" /></label><datalist id="olladex-ollama-models">{ollamaModels.map((item) => <option key={item} value={item} />)}</datalist><button type="button" onClick={testOllama} disabled={testingOllama}>{testingOllama ? "Testing…" : "Test server + models"}</button><button className="primary" type="submit" disabled={!ollamaDefaultModel.trim()}>Validate & save</button></form><small>{ollamaNotice}</small></section>
     <div className="project-columns">
       <section><p className="eyebrow">Detected stack</p><h3>Languages & frameworks</h3><div className="tag-list">{intelligence?.frameworks.map((item) => <span key={item}>{item}</span>)}{intelligence?.languages.map((item) => <span key={item.extension}>{item.extension} · {item.files}</span>)}</div><h4>Suggested checks</h4>{[...(intelligence?.test_commands || []), ...(intelligence?.build_commands || [])].map((item) => <code key={item}>{item}</code>)}</section>
-      <section><p className="eyebrow">Agent configuration</p><h3>Project rules</h3><form onSubmit={save}><label>Model profile<select value={profileId} onChange={(e) => setProfileId(e.target.value)}><option value="">Project model only</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.chat_model}</option>)}</select></label><label>Ollama model<input value={model} onChange={(e) => setModel(e.target.value)} /></label><details className="profile-builder"><summary>{profileId ? "Edit selected model profile" : "Create reusable profile"}</summary><div className="profile-title"><label>Profile name<input value={profileName} disabled={Boolean(profiles.find((profile) => String(profile.id) === profileId)?.is_builtin)} onChange={(e) => setProfileName(e.target.value)} placeholder="My coding profile" /></label>{profileId && <button type="button" onClick={newProfile}>New profile</button>}</div><div><label>Embedding model<input value={profileEmbedding} onChange={(e) => setProfileEmbedding(e.target.value)} /></label><label>Temperature<input type="number" min="0" max="2" step="0.05" value={profileTemperature} onChange={(e) => setProfileTemperature(Number(e.target.value))} /></label></div><div><label>Tool steps<input type="number" min="1" max="30" value={profileSteps} onChange={(e) => setProfileSteps(Number(e.target.value))} /></label><label>Context files<input type="number" min="1" max="30" value={profileFiles} onChange={(e) => setProfileFiles(Number(e.target.value))} /></label><label>Context characters<input type="number" min="4000" max="200000" step="1000" value={profileChars} onChange={(e) => setProfileChars(Number(e.target.value))} /></label></div><div className="profile-actions">{profileId ? <><button type="button" onClick={updateProfile}>Save profile</button>{!profiles.find((profile) => String(profile.id) === profileId)?.is_builtin && <button type="button" onClick={deleteProfile}>Delete custom profile</button>}</> : <button type="button" onClick={createProfile}>Create profile</button>}</div></details><label>Approval mode<select value={mode} onChange={(e) => setMode(e.target.value as typeof mode)}><option value="review">Review — approve every command</option><option value="assisted">Assisted — safe checks run automatically</option><option value="autonomous">Autonomous — commands run automatically</option></select></label><label>Instructions<textarea value={instructions} onChange={(e) => setInstructions(e.target.value)} placeholder="Use Python 3.12. Run tests before completion. Never modify deployment secrets…" /></label><div className="git-identity"><label>Git author<input value={gitName} onChange={(e) => setGitName(e.target.value)} /></label><label>Git email<input type="email" value={gitEmail} onChange={(e) => setGitEmail(e.target.value)} /></label></div><div><button className="primary">Save settings</button><span>{notice}</span></div></form></section>
+      <section><p className="eyebrow">Agent configuration</p><h3>Project rules</h3><form onSubmit={save}><label>Model profile<select value={profileId} onChange={(e) => setProfileId(e.target.value)}><option value="">Project model only</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.chat_model}</option>)}</select></label><label>Effective project model<input list="olladex-ollama-models" value={model} onChange={(e) => setModel(e.target.value)} /></label><details className="profile-builder"><summary>{profileId ? "Edit selected model profile" : "Create reusable profile"}</summary><div className="profile-title"><label>Profile name<input value={profileName} disabled={Boolean(profiles.find((profile) => String(profile.id) === profileId)?.is_builtin)} onChange={(e) => setProfileName(e.target.value)} placeholder="My coding profile" /></label>{profileId && <button type="button" onClick={newProfile}>New profile</button>}</div><div><label>Embedding model<input value={profileEmbedding} onChange={(e) => setProfileEmbedding(e.target.value)} /></label><label>Temperature<input type="number" min="0" max="2" step="0.05" value={profileTemperature} onChange={(e) => setProfileTemperature(Number(e.target.value))} /></label></div><div><label>Tool steps<input type="number" min="1" max="30" value={profileSteps} onChange={(e) => setProfileSteps(Number(e.target.value))} /></label><label>Context files<input type="number" min="1" max="30" value={profileFiles} onChange={(e) => setProfileFiles(Number(e.target.value))} /></label><label>Context characters<input type="number" min="4000" max="200000" step="1000" value={profileChars} onChange={(e) => setProfileChars(Number(e.target.value))} /></label></div><div className="profile-actions">{profileId ? <><button type="button" onClick={updateProfile}>Save profile</button>{!profiles.find((profile) => String(profile.id) === profileId)?.is_builtin && <button type="button" onClick={deleteProfile}>Delete custom profile</button>}</> : <button type="button" onClick={createProfile}>Create profile</button>}</div></details><label>Approval mode<select value={mode} onChange={(e) => setMode(e.target.value as typeof mode)}><option value="review">Review — approve every command</option><option value="assisted">Assisted — safe checks run automatically</option><option value="autonomous">Autonomous — commands run automatically</option></select></label><label>Instructions<textarea value={instructions} onChange={(e) => setInstructions(e.target.value)} placeholder="Use Python 3.12. Run tests before completion. Never modify deployment secrets…" /></label><div className="git-identity"><label>Git author<input value={gitName} onChange={(e) => setGitName(e.target.value)} /></label><label>Git email<input type="email" value={gitEmail} onChange={(e) => setGitEmail(e.target.value)} /></label></div><div><button className="primary">Save settings</button><span>{notice}</span></div></form></section>
     </div>
     <section className="context-lens"><div className="context-head"><div><p className="eyebrow">Persistent context engine</p><h3>Preview task-ranked context</h3></div><div><span>{indexStatus?.files || 0} indexed</span><span>{indexStatus?.embedded || 0} embedded</span><button type="button" onClick={refreshIndex}>Refresh index</button></div></div><form onSubmit={previewContext}><input value={contextQuery} onChange={(event) => setContextQuery(event.target.value)} placeholder="e.g. Where is authentication state validated?" /><button className="primary" disabled={!contextQuery.trim()}>Rank files</button></form>{contextItems.length > 0 && <div>{contextItems.map((item) => <article key={item.path}><span><strong>{item.path}</strong><small>line {item.start_line} · {item.strategy} · {item.score.toFixed(3)}</small></span><i>{item.semantic_score > 0 ? `semantic ${item.semantic_score.toFixed(3)}` : "lexical fallback"}</i></article>)}</div>}</section>
     <section className="symbol-map"><p className="eyebrow">Repository map</p><h3>Detected symbols</h3><div>{intelligence?.symbols.slice(0, 120).map((symbol) => <article key={`${symbol.path}:${symbol.line}:${symbol.name}`}><strong>{symbol.name}</strong><span>{symbol.path}:{symbol.line}</span><i>{symbol.kind} · {symbol.parser}</i></article>)}</div></section>
   </div>;
+}
+
+function connectionMessage(data: OllamaSettings) {
+  if (!data.connected) return data.error || "Ollama is not reachable";
+  if (data.ollama_model && data.model_available === false) return `Connected, but chat model '${data.ollama_model}' is not installed.`;
+  if (data.ollama_embedding_model && data.embedding_available === false) return `Connected, but embedding model '${data.ollama_embedding_model}' is not installed.`;
+  return `Connected · ${data.models.length} model${data.models.length === 1 ? "" : "s"} available · chat ${data.ollama_model || data.selected_model || "not set"}`;
 }
 
 function formatBytes(value: number) { return value > 1_000_000 ? `${(value / 1_000_000).toFixed(1)} MB` : value > 1_000 ? `${Math.round(value / 1_000)} KB` : `${value} B`; }
