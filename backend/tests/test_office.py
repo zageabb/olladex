@@ -8,7 +8,9 @@ def project(path):
 def test_create_and_inspect_office_files(tmp_path):
     item = project(tmp_path)
     create(item, "docx", "report.docx", "Report", "First paragraph", [])
-    assert inspect(item, "report.docx")["paragraphs"][0] == "Report"
+    document = inspect(item, "report.docx")
+    assert document["paragraphs"][0]["text"] == "Report"
+    assert document["paragraphs"][0]["style"] == "Title"
 
     create(item, "xlsx", "book.xlsx", "Data", "", [["Name", "Value"], ["A", 2]])
     workbook = inspect(item, "book.xlsx")
@@ -16,4 +18,3 @@ def test_create_and_inspect_office_files(tmp_path):
 
     create(item, "pptx", "deck.pptx", "Deck", "Overview", [])
     assert inspect(item, "deck.pptx")["slides"][0]["text"][0] == "Deck"
-
