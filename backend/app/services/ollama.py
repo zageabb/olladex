@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -101,7 +102,14 @@ def summarize(name: str, result: Any) -> str:
     return "Complete"
 
 
-def chat(project: dict, history: list[dict], model: str | None = None, max_steps: int | None = None, session_summary: str = "") -> tuple[str, list[dict]]:
+def chat(
+    project: dict,
+    history: list[dict],
+    model: str | None = None,
+    max_steps: int | None = None,
+    session_summary: str = "",
+    checkpoint: Callable[[], None] | None = None,
+) -> tuple[str, list[dict]]:
     request = next((message.get("content", "") for message in reversed(history) if message.get("role") == "user"), "")
     intelligence = workspace.repository_intelligence(project)
     intelligence["symbols"] = intelligence.get("symbols", [])[:40]
@@ -122,6 +130,8 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
     tool_attempts: dict[str, int] = {}
     with client() as http:
         for _ in range(max_steps or project.get("profile_max_steps") or 8):
+            if checkpoint:
+                checkpoint()
             response = http.post("/api/chat", json={"model": model or project.get("profile_chat_model") or project.get("model") or settings.ollama_model, "messages": messages, "tools": TOOLS, "stream": False, "options": {"temperature": project.get("profile_temperature") if project.get("profile_temperature") is not None else 0.2}})
             response.raise_for_status()
             message = response.json().get("message", {})
@@ -130,6 +140,8 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
             if not tool_calls:
                 return message.get("content", ""), activities
             for call in tool_calls:
+                if checkpoint:
+                    checkpoint()
                 function = call.get("function", {})
                 name = function.get("name", "")
                 args = function.get("arguments") or {}

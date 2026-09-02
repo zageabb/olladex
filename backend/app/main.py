@@ -259,6 +259,12 @@ def project_jobs(project_id: int):
     return background_jobs.list_for_project(project_id)
 
 
+@app.get("/api/projects/{project_id}/jobs-capacity")
+def agent_job_capacity(project_id: int):
+    get_project(project_id)
+    return background_jobs.capacity()
+
+
 @app.post("/api/projects/{project_id}/jobs")
 def create_agent_job(project_id: int, body: AgentJobRequest):
     get_project(project_id)
@@ -282,6 +288,24 @@ def cancel_agent_job(project_id: int, job_id: int):
     get_project(project_id)
     try:
         return background_jobs.cancel(job_id, project_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/projects/{project_id}/jobs/{job_id}/pause")
+def pause_agent_job(project_id: int, job_id: int):
+    get_project(project_id)
+    try:
+        return background_jobs.pause(job_id, project_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/projects/{project_id}/jobs/{job_id}/resume")
+def resume_agent_job(project_id: int, job_id: int):
+    get_project(project_id)
+    try:
+        return background_jobs.resume(job_id, project_id)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 

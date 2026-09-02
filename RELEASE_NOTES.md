@@ -1,5 +1,21 @@
 # Olladex release notes
 
+## v0.7.0 (development)
+
+The first v0.7 checkpoint makes background agent work controllable under load.
+
+### Added
+
+- Configurable background-agent concurrency through `OLLADEX_AGENT_JOB_WORKERS`, bounded to one through eight workers.
+- Persistent running-job pause and resume actions with cooperative checkpoints between Ollama requests and tool calls.
+- Cancellation for queued, paused and running jobs; running turns stop before their next model or tool step.
+- Live worker-capacity reporting and Jobs-panel controls for pause, resume and cancel.
+
+### Verification
+
+- Twenty backend tests now include parallel-limit, pause/resume, queued-cancel and running-cancel coverage.
+- Production Next.js compilation and strict TypeScript checking pass.
+
 ## v0.6.0
 
 Olladex v0.6 adds durable background development work and connects the local agent workflow to GitHub issues and review-controlled pull requests.

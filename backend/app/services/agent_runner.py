@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 
 from ..database import connect, now, rows
 from . import changes as change_service
@@ -8,8 +9,10 @@ from . import ollama
 from .session_summary import build as build_session_summary
 
 
-def run(session_id: int, project: dict, content: str) -> dict:
+def run(session_id: int, project: dict, content: str, checkpoint: Callable[[], None] | None = None) -> dict:
     """Persist one complete agent turn and return its assistant message."""
+    if checkpoint:
+        checkpoint()
     with connect() as conn:
         session = conn.execute("SELECT * FROM sessions WHERE id=? AND project_id=?", (session_id, project["id"])).fetchone()
         if not session:
@@ -17,7 +20,14 @@ def run(session_id: int, project: dict, content: str) -> dict:
         history = rows(conn.execute("SELECT role,content FROM messages WHERE session_id=? ORDER BY id", (session_id,)))
         conn.execute("INSERT INTO messages(session_id,role,content,created_at) VALUES(?,?,?,?)", (session_id, "user", content, now()))
 
-    answer, activities = ollama.chat(project, [*history, {"role": "user", "content": content}], session_summary=session["summary"] or "")
+    answer, activities = ollama.chat(
+        project,
+        [*history, {"role": "user", "content": content}],
+        session_summary=session["summary"] or "",
+        checkpoint=checkpoint,
+    )
+    if checkpoint:
+        checkpoint()
     stamp = now()
     with connect() as conn:
         for activity in activities:
