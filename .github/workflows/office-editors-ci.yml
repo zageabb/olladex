@@ -7,10 +7,13 @@ on:
   pull_request:
     paths:
       - "backend/app/services/office.py"
+      - "backend/app/services/office_word.py"
       - "backend/app/schemas.py"
-      - "backend/tests/test_office.py"
+      - "backend/tests/test_office*.py"
       - "frontend/components/OfficeEditor.tsx"
       - "frontend/components/OfficePanel.tsx"
+      - "frontend/components/WordStudio.tsx"
+      - "frontend/components/WordStudio.module.css"
       - ".github/workflows/office-editors-ci.yml"
 
 permissions:
@@ -32,5 +35,5 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: python -m pip install -r backend/requirements.txt
       - run: npm ci --prefix frontend
-      - run: python -m pytest -q backend/tests/test_office.py
+      - run: python -m pytest -q backend/tests/test_office.py backend/tests/test_office_word.py
       - run: npm --prefix frontend run build
