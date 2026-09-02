@@ -18,3 +18,8 @@ def test_task_and_pr_review_routes_are_mounted():
     assert "/api/projects/{project_id}/orchestration/lead" in paths
     assert "/api/tasks/{parent_task_id}/children" in paths
     assert "/api/tasks/{task_id}/review-bundle" in paths
+    assert "/api/tasks/{lead_task_id}/integration/preflight" in paths
+    assert "/api/tasks/{lead_task_id}/integration" in paths
+    assert "/api/tasks/{lead_task_id}/integration/checks" in paths
+    assert "/api/tasks/{lead_task_id}/integration/push" in paths
+    assert "/api/tasks/{lead_task_id}/integration/pull-request" in paths
