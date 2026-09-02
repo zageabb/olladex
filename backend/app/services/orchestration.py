@@ -46,25 +46,30 @@ Objective:\n{objective.strip()}\n\nRepository intelligence:\n{json.dumps(intelli
     items = data.get("tasks") if isinstance(data, dict) else None
     if not isinstance(items, list) or not items:
         raise ValueError("Lead planner did not return any specialist tasks")
+
     result: list[dict] = []
-    for index, item in enumerate(items[:max_tasks]):
+    source_to_result: dict[int, int] = {}
+    for source_index, item in enumerate(items[:max_tasks]):
         if not isinstance(item, dict):
             continue
-        title = str(item.get("title") or f"Specialist task {index + 1}").strip()[:256]
+        title = str(item.get("title") or f"Specialist task {source_index + 1}").strip()[:256]
         role = str(item.get("role") or "worker").strip().lower()
         if role not in ALLOWED_ROLES:
             role = "worker"
         task_prompt = str(item.get("prompt") or "").strip()
         if not task_prompt:
             continue
-        dependencies = []
+        dependencies: list[int] = []
         for dependency in item.get("depends_on") or []:
             try:
-                dependency_index = int(dependency)
+                dependency_source_index = int(dependency)
             except (TypeError, ValueError):
                 continue
-            if 0 <= dependency_index < index:
-                dependencies.append(dependency_index)
+            mapped = source_to_result.get(dependency_source_index)
+            if mapped is not None:
+                dependencies.append(mapped)
+        result_index = len(result)
+        source_to_result[source_index] = result_index
         result.append({"title": title, "role": role, "prompt": task_prompt, "depends_on": sorted(set(dependencies))})
     if len(result) < 2:
         raise ValueError("Lead planner must produce at least two actionable specialist tasks")
