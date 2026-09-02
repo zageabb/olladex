@@ -14,7 +14,6 @@ _stop = threading.Event()
 _wake = threading.Event()
 _lock = threading.Lock()
 _local = threading.local()
-_project_locks: dict[int, threading.Lock] = {}
 
 
 def _worker_count() -> int:
@@ -105,26 +104,24 @@ def cancel_requested() -> bool:
     return bool(row and (row["cancel_requested"] or row["status"] == "cancelled"))
 
 
-def _project_lock(project_id: int) -> threading.Lock:
-    with _lock:
-        return _project_locks.setdefault(project_id, threading.Lock())
+def set_worktree(task_id: int, path: str, branch: str) -> None:
+    with connect() as conn:
+        conn.execute(
+            "UPDATE background_tasks SET worktree_path=?,worktree_branch=? WHERE id=?",
+            (path, branch, task_id),
+        )
 
 
-def _claim_next() -> tuple[dict, threading.Lock] | None:
+def _claim_next() -> dict | None:
     with connect() as conn:
         candidates = [dict(row) for row in conn.execute("SELECT * FROM background_tasks WHERE status='queued' ORDER BY id LIMIT 50")]
-    for task in candidates:
-        project_lock = _project_lock(task["project_id"])
-        if not project_lock.acquire(blocking=False):
-            continue
-        with connect() as conn:
+        for task in candidates:
             cursor = conn.execute(
                 "UPDATE background_tasks SET status='running',started_at=? WHERE id=? AND status='queued'",
                 (now(), task["id"]),
             )
-        if cursor.rowcount == 1:
-            return task, project_lock
-        project_lock.release()
+            if cursor.rowcount == 1:
+                return task
     return None
 
 
@@ -132,10 +129,9 @@ def run_once() -> bool:
     handler = _handler
     if handler is None:
         return False
-    claimed = _claim_next()
-    if not claimed:
+    task = _claim_next()
+    if not task:
         return False
-    task, project_lock = claimed
     _local.task_id = task["id"]
     try:
         if cancel_requested():
@@ -156,7 +152,6 @@ def run_once() -> bool:
                 conn.execute("UPDATE background_tasks SET status='failed',error=?,completed_at=? WHERE id=?", (str(exc)[:20_000], now(), task["id"]))
     finally:
         _local.task_id = None
-        project_lock.release()
     return True
 
 
