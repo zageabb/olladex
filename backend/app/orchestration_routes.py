@@ -85,7 +85,7 @@ def orchestration_graph(project_id: int):
             "depends_on": task.get("depends_on") or [],
             "children": by_parent.get(task["id"], []),
             "worktree_branch": task.get("worktree_branch") or "",
-            "pr_number": task.get("pr_number") or 0,
-            "pr_state": task.get("pr_state") or "",
+            "pr_number": task.get("pull_request_number") or 0,
+            "pr_state": task.get("pull_request_state") or "",
         })
     return {"project_id": project_id, "nodes": nodes}
