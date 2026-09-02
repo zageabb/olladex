@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 
 from ..config import settings
-from . import workspace
+from . import task_queue, workspace
 from .context_engine import format_context
 from .repository_index import ranked_context
 from .terminal import requires_approval, run as run_command
@@ -20,6 +20,10 @@ TOOLS = [
     {"type": "function", "function": {"name": "write_file", "description": "Propose a complete UTF-8 file change for user review. Use only when the user asks for changes.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
     {"type": "function", "function": {"name": "run_command", "description": "Run a bash command in the project", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
 ]
+
+
+class AgentCancelled(RuntimeError):
+    pass
 
 
 def client(timeout: float | httpx.Timeout = 300) -> httpx.Client:
@@ -38,20 +42,28 @@ def status() -> dict:
         return {"connected": False, "url": settings.ollama_url, "models": [], "embedding_model": settings.ollama_embedding_model, "embedding_available": False, "error": str(exc)}
 
 
+def _check_cancelled() -> None:
+    if task_queue.cancel_requested():
+        raise AgentCancelled("Task cancelled")
+
+
 def embed_texts(texts: list[str], model: str | None = None) -> list[list[float]]:
     embedding_model = model or settings.ollama_embedding_model
     if not embedding_model:
         raise ValueError("No Ollama embedding model is configured")
+    _check_cancelled()
     with client(httpx.Timeout(90, connect=3)) as http:
         response = http.post("/api/embed", json={"model": embedding_model, "input": texts, "truncate": True})
         response.raise_for_status()
         vectors = response.json().get("embeddings") or []
+    _check_cancelled()
     if len(vectors) != len(texts):
         raise ValueError("Ollama returned an incomplete embedding response")
     return vectors
 
 
 def _execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
+    _check_cancelled()
     if name == "get_project_tree":
         result = workspace.tree(project, max_items=350)
     elif name == "read_file":
@@ -80,6 +92,8 @@ def _execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
 def execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
     try:
         return _execute_tool(project, name, args)
+    except AgentCancelled:
+        raise
     except Exception as exc:
         result = {"error": str(exc), "recoverable": True}
         return result, {"tool": name, "arguments": args, "summary": f"Tool failed: {exc}", "result": result}
@@ -99,6 +113,34 @@ def summarize(name: str, result: Any) -> str:
     if name == "run_command":
         return "Awaiting command approval" if result.get("status") == "pending" else f"Exited with code {result.get('exit_code')}"
     return "Complete"
+
+
+def _stream_chat(http: httpx.Client, payload: dict) -> dict:
+    content_parts: list[str] = []
+    tool_calls: list[dict] = []
+    role = "assistant"
+    with http.stream("POST", "/api/chat", json={**payload, "stream": True}) as response:
+        response.raise_for_status()
+        for line in response.iter_lines():
+            _check_cancelled()
+            if not line:
+                continue
+            try:
+                chunk = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            message = chunk.get("message") or {}
+            role = message.get("role") or role
+            if message.get("content"):
+                content_parts.append(message["content"])
+            if message.get("tool_calls"):
+                tool_calls.extend(message["tool_calls"])
+            if chunk.get("error"):
+                raise ValueError(str(chunk["error"]))
+            if chunk.get("done"):
+                break
+    _check_cancelled()
+    return {"role": role, "content": "".join(content_parts), "tool_calls": tool_calls}
 
 
 def chat(project: dict, history: list[dict], model: str | None = None, max_steps: int | None = None, session_summary: str = "") -> tuple[str, list[dict]]:
@@ -122,14 +164,19 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
     tool_attempts: dict[str, int] = {}
     with client() as http:
         for _ in range(max_steps or project.get("profile_max_steps") or 8):
-            response = http.post("/api/chat", json={"model": model or project.get("profile_chat_model") or project.get("model") or settings.ollama_model, "messages": messages, "tools": TOOLS, "stream": False, "options": {"temperature": project.get("profile_temperature") if project.get("profile_temperature") is not None else 0.2}})
-            response.raise_for_status()
-            message = response.json().get("message", {})
+            _check_cancelled()
+            message = _stream_chat(http, {
+                "model": model or project.get("profile_chat_model") or project.get("model") or settings.ollama_model,
+                "messages": messages,
+                "tools": TOOLS,
+                "options": {"temperature": project.get("profile_temperature") if project.get("profile_temperature") is not None else 0.2},
+            })
             messages.append(message)
             tool_calls = message.get("tool_calls") or []
             if not tool_calls:
                 return message.get("content", ""), activities
             for call in tool_calls:
+                _check_cancelled()
                 function = call.get("function", {})
                 name = function.get("name", "")
                 args = function.get("arguments") or {}
