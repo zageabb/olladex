@@ -2,26 +2,27 @@
 
 ## v0.6.0
 
-Olladex v0.6 adds durable background development work and connects the local agent workflow to GitHub issues and review-controlled pull requests.
+Olladex v0.6 adds persistent background development work, review-first GitHub workflows, full model-profile management and a stronger cross-platform desktop release path.
 
 ### Added
 
-- Persistent SQLite agent-job queue with automatic recovery of interrupted running jobs after restart.
-- Background composer mode and a Jobs workspace showing status, source, timestamps, errors, cancellation and completed-session links.
-- GitHub repository discovery from the selected Git remote.
-- Open issue and pull-request overview with issue-to-background-agent import.
-- Pull-request proposals showing repository, head, base, title and draft state before a separate approval action creates anything externally.
-- Environment-only GitHub token configuration for private repositories and write operations.
-- Update and deletion APIs/UI for reusable custom model profiles, while built-in profiles remain protected.
-- Cross-platform frozen API and standalone frontend smoke script used by every desktop release runner.
-- Electron Builder update metadata and blockmaps included in release artifacts.
-- FastAPI lifespan startup replacing the deprecated startup-event path.
+- SQLite-backed background agent queue with recovery of interrupted jobs, persistent status, results, errors and session history.
+- Queue controls in the composer and a dedicated task workspace with cooperative cancellation.
+- GitHub CLI status and open-issue discovery for repositories with a supported GitHub origin.
+- One-click conversion of a GitHub issue into a queued Olladex implementation session.
+- Pull-request proposals that show and persist the exact `gh pr create` command before separate approval.
+- Editing of all model profile settings plus deletion of custom profiles and protection for built-in profiles.
+- Native Windows ConPTY support through pywinpty with live input and resize, retaining a compatible pipe fallback.
+- Electron update checks, download/install prompts and GitHub release metadata for packaged builds.
+- Optional private-release authentication through an environment token without database storage.
+- Release CI verification job, per-platform frozen API health smoke test and installer-size/type validation.
 
 ### Verification
 
-- Nineteen backend tests cover background execution and persistence, model-profile lifecycle, GitHub discovery and explicitly approved PR creation alongside all earlier workflows.
-- Production Next.js compilation and strict TypeScript checking pass with Jobs and GitHub workspaces.
-- Python compilation, workflow parsing and packaged-service smoke checks form the desktop release gate.
+- Twenty-one backend tests cover queued agent execution, result persistence, complete model-profile lifecycle, GitHub command approval and all previous workflows.
+- Production Next.js compilation and strict TypeScript checking pass with the Queue, GitHub and updater interfaces.
+- Python, Electron and workflow syntax checks pass.
+- The frozen v0.6 API, standalone frontend and Linux portable bundle are exercised in the release pass.
 
 ## v0.5.0
 

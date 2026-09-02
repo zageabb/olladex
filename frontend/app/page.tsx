@@ -2,10 +2,10 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { DiagramStudio } from "../components/DiagramStudio";
-import { BackgroundJobs } from "../components/BackgroundJobs";
+import { BackgroundTasksPanel } from "../components/BackgroundTasksPanel";
+import { DesktopUpdateBadge } from "../components/DesktopUpdateBadge";
 import { FileTree, TreeNode } from "../components/FileTree";
 import { GitControls, GitSummary } from "../components/GitControls";
-import { GitHubPanel } from "../components/GitHubPanel";
 import { OfficePanel } from "../components/OfficePanel";
 import { ProjectPanel } from "../components/ProjectPanel";
 import { TerminalPanel } from "../components/TerminalPanel";
@@ -18,7 +18,7 @@ type Message = { id?: number; role: "user" | "assistant"; content: string; activ
 type Status = { version: string; shell: string; ollama: { connected: boolean; url: string; models: string[]; error?: string } };
 type Hunk = { index: number; header: string; lines: string[]; changes: number };
 type Change = { id: number; path: string; diff: string; hunks: Hunk[]; status: "proposed" | "applied" | "rejected" | "reverted"; created_at: string; updated_at: string };
-type Tab = "files" | "changes" | "terminal" | "jobs" | "diagrams" | "office" | "project";
+type Tab = "files" | "changes" | "terminal" | "diagrams" | "office" | "tasks" | "project";
 
 const WELCOME: Message = { role: "assistant", content: "Welcome to Olladex. Open a local repository, then ask me to inspect, change and test it. Repository tools, your local shell, diagrams and Office files stay on your machine." };
 
@@ -44,7 +44,6 @@ export default function Home() {
   const [showOpen, setShowOpen] = useState(false);
   const [notice, setNotice] = useState("");
   const [search, setSearch] = useState("");
-  const [backgroundMode, setBackgroundMode] = useState(false);
 
   useEffect(() => {
     request<Project[]>("/projects").then((data) => { setProjects(data); if (data.length) setProject(data[0]); }).catch((e) => setNotice(e.message));
@@ -126,11 +125,6 @@ export default function Home() {
     if (!prompt.trim() || !session || !project || busy) return;
     const content = prompt; setPrompt(""); setBusy(true); setMessages((current) => [...current, { role: "user", content }]);
     try {
-      if (backgroundMode) {
-        await request(`/projects/${project.id}/jobs`, { method: "POST", body: JSON.stringify({ session_id: session.id, prompt: content, source: "composer" }) });
-        setMessages((current) => [...current, { role: "assistant", content: "This task is queued in the background. You can continue using Olladex and open the result from Jobs when it completes." }]);
-        setTab("jobs"); return;
-      }
       const answer = await request<Message>(`/sessions/${session.id}/messages`, { method: "POST", body: JSON.stringify({ content }) });
       setMessages((current) => [...current, answer]); await refreshTree();
       request<{ summary: string }>(`/sessions/${session.id}/summary`).then((summary) => {
@@ -142,13 +136,21 @@ export default function Home() {
     finally { setBusy(false); }
   }
 
-  async function openSessionById(sessionId: number, targetTab: Tab = "files") {
+  async function queuePrompt() {
+    if (!prompt.trim() || !project || !session) return;
+    const content = prompt.trim(); setPrompt("");
+    try {
+      await request(`/projects/${project.id}/tasks`, { method: "POST", body: JSON.stringify({ prompt: content, session_id: session.id }) });
+      setTab("tasks"); setNotice("Task queued in the background");
+    } catch (error) { setPrompt(content); setNotice(error instanceof Error ? error.message : String(error)); }
+  }
+
+  async function openTaskSession(sessionId: number) {
     if (!project) return;
     const data = await request<Session[]>(`/projects/${project.id}/sessions`);
     setSessions(data);
-    const target = data.find((item) => item.id === sessionId);
-    if (target) setSession(target);
-    setTab(targetTab);
+    const selectedSession = data.find((item) => item.id === sessionId);
+    if (selectedSession) { setSession(selectedSession); setTab("files"); }
   }
 
   const filteredTree = useMemo(() => search.trim() ? filterTree(tree, search.toLowerCase()) : tree, [tree, search]);
@@ -185,6 +187,7 @@ export default function Home() {
       <div className="project-selector"><span>Repository</span><select value={project?.id || ""} onChange={(e) => setProject(projects.find((p) => p.id === Number(e.target.value)) || null)}><option value="">Open a repository</option>{projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
       <button className="global-search" onClick={() => setTab("files")}>⌕ Search this repository <kbd>⌘ K</kbd></button>
       <div className={`connection ${status?.ollama.connected ? "online" : ""}`}><i />{status?.ollama.connected ? `${project?.profile_chat_model || project?.model || status.ollama.models[0] || "Ollama"}` : "Ollama offline"}</div>
+      <DesktopUpdateBadge />
       <button className="avatar">GA</button>
     </header>
 
@@ -192,9 +195,9 @@ export default function Home() {
       <button className="active"><span>✦</span><small>Agent</small></button>
       <button onClick={() => setTab("files")}><span>▦</span><small>Files</small></button>
       <button onClick={() => setTab("terminal")}><span>⌘</span><small>Terminal</small></button>
-      <button onClick={() => setTab("jobs")}><span>◷</span><small>Jobs</small></button>
       <button onClick={() => setTab("diagrams")}><span>◇</span><small>Diagrams</small></button>
       <button onClick={() => setTab("office")}><span>▤</span><small>Office</small></button>
+      <button onClick={() => setTab("tasks")}><span>◷</span><small>Queue</small></button>
       <div className="rail-bottom"><button onClick={() => setTab("project")}><span>⚙</span><small>Project</small></button></div>
     </aside>
 
@@ -214,23 +217,22 @@ export default function Home() {
           {messages.map((message, index) => <article className={`message ${message.role}`} key={`${message.role}-${message.id || index}`}><div className="message-avatar">{message.role === "assistant" ? "O" : "G"}</div><div className="message-stack"><div className="bubble">{message.content}</div>{message.activities?.map((activity, i) => <details className="activity-card" key={i}><summary><span>{activityIcon(activity.tool)}</span><div><strong>{activity.tool.replaceAll("_", " ")}</strong><small>{activity.summary}</small></div><b>⌄</b></summary><pre>{JSON.stringify(activity.result || activity.arguments, null, 2)}</pre>{activity.tool === "run_command" && activity.result?.status === "pending" && <div className="activity-actions"><button className="primary" onClick={() => approveCommand(activity)}>Approve command</button><button onClick={() => setTab("terminal")}>Open terminal</button></div>}{activity.tool === "write_file" && activity.result?.change_id && <div className="activity-actions"><button className="primary" onClick={() => setTab("changes")}>Review proposed change</button></div>}</details>)}</div></article>)}
           {busy && <article className="message assistant"><div className="message-avatar">O</div><div className="typing"><i/><i/><i/></div></article>}
         </div>
-        <form className="composer" onSubmit={send}><textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder={project ? "Ask Olladex to inspect, change or test this repository…" : "Open a repository to begin…"} disabled={!project || !session} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} /><div className="composer-actions"><div><button type="button" onClick={() => setTab("files")}>＋ Context</button><button type="button" onClick={() => setTab("terminal")}>⌘ Shell</button><button type="button" className={backgroundMode ? "active" : ""} onClick={() => setBackgroundMode((value) => !value)}>◷ Background</button></div><div className="model-chip">{project?.profile_chat_model || project?.model || "qwen3:14b"}</div><button className="send primary" disabled={busy || !prompt.trim()}>➤</button></div></form>
+        <form className="composer" onSubmit={send}><textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder={project ? "Ask Olladex to inspect, change or test this repository…" : "Open a repository to begin…"} disabled={!project || !session} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} /><div className="composer-actions"><div><button type="button" onClick={() => setTab("files")}>＋ Context</button><button type="button" onClick={() => setTab("terminal")}>⌘ Shell</button><button type="button" onClick={queuePrompt} disabled={!prompt.trim()}>◷ Queue</button></div><div className="model-chip">{project?.profile_chat_model || project?.model || "qwen3:14b"}</div><button className="send primary" disabled={busy || !prompt.trim()}>➤</button></div></form>
       </section>
 
       <section className="inspector-panel">
-        <div className="inspector-tabs">{(["files", "changes", "terminal", "jobs", "diagrams", "office", "project"] as Tab[]).map((item) => <button key={item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item}{item === "changes" && changes.filter((change) => change.status === "proposed").length ? <span>{changes.filter((change) => change.status === "proposed").length}</span> : null}</button>)}</div>
+        <div className="inspector-tabs">{(["files", "changes", "terminal", "diagrams", "office", "tasks", "project"] as Tab[]).map((item) => <button key={item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item}{item === "changes" && changes.filter((change) => change.status === "proposed").length ? <span>{changes.filter((change) => change.status === "proposed").length}</span> : null}</button>)}</div>
         {project ? <>
           {tab === "files" && <div className="file-workspace"><aside className="file-sidebar"><div className="file-search"><span>⌕</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter files" /></div><FileTree items={filteredTree} selected={selected?.path} onSelect={selectFile} /></aside><div className="editor-pane">{selected?.type === "file" ? <><div className="editor-head"><div><span className="file-icon">□</span><strong>{selected.path}</strong>{fileDraft !== fileContent && <i>Modified</i>}</div><button className="primary" onClick={saveFile} disabled={fileDraft === fileContent}>Save</button></div><textarea className="code-editor" value={fileDraft} onChange={(e) => setFileDraft(e.target.value)} spellCheck={false} /></> : <EmptyWorkspace onOpen={() => setShowOpen(true)} />}</div></div>}
           {tab === "changes" && <div className="changes-panel">
-            <GitControls projectId={project.id} git={git} onRefresh={() => refreshGit(project.id)} />
-            {git?.repository && <GitHubPanel projectId={project.id} git={git} onJobCreated={(sessionId) => openSessionById(sessionId, "jobs")} />}
+            <GitControls projectId={project.id} git={git} onRefresh={() => refreshGit(project.id)} onTaskQueued={() => setTab("tasks")} />
             {gitDiff && <article><header><div><strong>Current Git diff</strong><small>Working tree and staged changes</small></div><span>git</span></header><pre>{gitDiff}</pre></article>}
             {changes.length ? changes.map((change) => <article className={change.status === "proposed" ? "proposed-change" : ""} key={change.id}><header><div><strong>{change.path}</strong><small>{new Date(change.created_at).toLocaleString()}</small></div><span className={`change-status ${change.status}`}>{change.status}</span></header>{change.status === "proposed" ? <div className="hunk-list">{change.hunks.map((hunk) => <label className="diff-hunk" key={hunk.index}><div><input type="checkbox" checked={(selectedHunks[change.id] || []).includes(hunk.index)} onChange={() => toggleHunk(change.id, hunk.index)} /><strong>{hunk.header}</strong><span>{hunk.changes} changed lines</span></div><pre>{hunk.lines.join("\n")}</pre></label>)}<div className="change-actions"><button className="primary" disabled={!(selectedHunks[change.id] || []).length} onClick={() => changeAction(change, "apply")}>Apply selected hunks</button><button onClick={() => changeAction(change, "reject")}>Reject proposal</button></div></div> : <><pre>{change.diff || "No textual diff"}</pre>{change.status === "applied" && <div className="change-actions"><button onClick={() => changeAction(change, "revert")}>Revert safely</button></div>}</>}</article>) : !gitDiff && <div className="empty-panel"><span>◫</span><h3>No changes yet</h3><p>Edits made by you or Olladex will appear here for review.</p></div>}
           </div>}
           {tab === "terminal" && <TerminalPanel projectId={project.id} />}
-          {tab === "jobs" && <BackgroundJobs projectId={project.id} onOpenSession={(sessionId) => openSessionById(sessionId, "files")} />}
           {tab === "diagrams" && <DiagramStudio initialSource={diagramSource} initialEngine={diagramEngine} />}
           {tab === "office" && <OfficePanel projectId={project.id} selectedPath={selected?.path} onCreated={refreshTree} />}
+          {tab === "tasks" && <BackgroundTasksPanel projectId={project.id} onOpenSession={openTaskSession} />}
           {tab === "project" && <ProjectPanel project={project} onUpdated={(updated) => { setProject(updated); setProjects((items) => items.map((item) => item.id === updated.id ? updated : item)); }} />}
         </> : <EmptyWorkspace onOpen={() => setShowOpen(true)} />}
       </section>

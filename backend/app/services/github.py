@@ -1,78 +1,89 @@
 from __future__ import annotations
 
+import json
 import re
-from urllib.parse import urlparse
+import shlex
+import shutil
+import subprocess
 
-import httpx
-
-from ..config import settings
 from . import git
+from .workspace import project_root
 
 
-def repository(project: dict) -> tuple[str, str]:
-    remotes = git.summary(project).get("remotes", [])
-    remote = next((item for item in remotes if item["name"] == "origin"), remotes[0] if remotes else None)
-    if not remote:
-        raise ValueError("This repository has no Git remote")
-    url = remote["url"]
-    match = re.match(r"git@[^:]+:([^/]+)/(.+?)(?:\.git)?$", url)
-    if match:
-        return match.group(1), re.sub(r"\.git$", "", match.group(2))
-    parsed = urlparse(url)
-    parts = [part for part in parsed.path.split("/") if part]
-    if len(parts) < 2:
-        raise ValueError("The Git remote is not a recognised GitHub repository")
-    return parts[-2], re.sub(r"\.git$", "", parts[-1])
+def repository_slug(project: dict, remote: str = "origin") -> str:
+    code, url = git._git(project, "remote", "get-url", remote)
+    if code:
+        raise ValueError(url.strip() or f"Could not resolve Git remote: {remote}")
+    value = url.strip()
+    patterns = (
+        r"^https?://github\.com/([^/]+/[^/]+?)(?:\.git)?$",
+        r"^git@github\.com:([^/]+/[^/]+?)(?:\.git)?$",
+        r"^ssh://git@github\.com/([^/]+/[^/]+?)(?:\.git)?$",
+    )
+    for pattern in patterns:
+        match = re.match(pattern, value)
+        if match:
+            return match.group(1)
+    raise ValueError("The selected repository does not have a supported GitHub origin remote")
 
 
-def _client() -> httpx.Client:
-    headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
-    if settings.github_token:
-        headers["Authorization"] = f"Bearer {settings.github_token}"
-    return httpx.Client(base_url=settings.github_api_url.rstrip("/"), headers=headers, timeout=httpx.Timeout(20, connect=5))
+def _gh(project: dict, args: list[str], timeout: int = 45) -> tuple[int, str]:
+    if not shutil.which("gh"):
+        return 127, "GitHub CLI (gh) is not installed"
+    completed = subprocess.run(
+        ["gh", *args], cwd=project_root(project), text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout, check=False,
+    )
+    return completed.returncode, completed.stdout
 
 
-def _request(method: str, path: str, **kwargs) -> dict | list:
+def status(project: dict) -> dict:
     try:
-        with _client() as client:
-            response = client.request(method, path, **kwargs)
-            response.raise_for_status()
-            return response.json()
-    except httpx.HTTPStatusError as exc:
-        detail = exc.response.json().get("message", exc.response.text) if exc.response.content else str(exc)
-        raise ValueError(f"GitHub returned {exc.response.status_code}: {detail}") from exc
-    except httpx.HTTPError as exc:
-        raise ValueError(f"Could not reach GitHub: {exc}") from exc
+        slug = repository_slug(project)
+    except ValueError as exc:
+        return {"available": False, "authenticated": False, "repository": "", "error": str(exc)}
+    if not shutil.which("gh"):
+        return {"available": False, "authenticated": False, "repository": slug, "error": "Install GitHub CLI to enable issue and pull-request workflows"}
+    code, output = _gh(project, ["auth", "status", "--hostname", "github.com"])
+    return {"available": True, "authenticated": code == 0, "repository": slug, "error": "" if code == 0 else output.strip()[-1000:]}
 
 
-def overview(project: dict) -> dict:
-    owner, repo = repository(project)
-    issues_data = _request("GET", f"/repos/{owner}/{repo}/issues", params={"state": "open", "per_page": 30})
-    pulls_data = _request("GET", f"/repos/{owner}/{repo}/pulls", params={"state": "open", "per_page": 20})
-    issues = [
-        {"number": item["number"], "title": item["title"], "body": item.get("body") or "", "url": item["html_url"], "labels": [label["name"] for label in item.get("labels", [])]}
-        for item in issues_data if "pull_request" not in item
-    ]
-    pulls = [
-        {"number": item["number"], "title": item["title"], "url": item["html_url"], "head": item["head"]["ref"], "base": item["base"]["ref"], "draft": item.get("draft", False)}
-        for item in pulls_data
-    ]
-    return {"repository": f"{owner}/{repo}", "authenticated": bool(settings.github_token), "issues": issues, "pull_requests": pulls}
+def issues(project: dict) -> list[dict]:
+    slug = repository_slug(project)
+    code, output = _gh(project, ["issue", "list", "--repo", slug, "--state", "open", "--limit", "50", "--json", "number,title,body,url,labels,updatedAt"])
+    if code:
+        raise ValueError(output.strip() or "Could not list GitHub issues")
+    try:
+        return json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise ValueError("GitHub CLI returned invalid issue data") from exc
 
 
 def issue(project: dict, number: int) -> dict:
-    owner, repo = repository(project)
-    item = _request("GET", f"/repos/{owner}/{repo}/issues/{number}")
-    if "pull_request" in item:
-        raise ValueError("That number identifies a pull request, not an issue")
-    return {"repository": f"{owner}/{repo}", "number": item["number"], "title": item["title"], "body": item.get("body") or "", "url": item["html_url"]}
+    slug = repository_slug(project)
+    code, output = _gh(project, ["issue", "view", str(number), "--repo", slug, "--json", "number,title,body,url,labels"])
+    if code:
+        raise ValueError(output.strip() or f"Could not load GitHub issue #{number}")
+    return json.loads(output)
 
 
-def create_pull_request(project: dict, operation: dict) -> dict:
-    owner, repo = repository(project)
-    if f"{owner}/{repo}" != operation["repository"]:
-        raise ValueError("The GitHub repository changed after this pull request was proposed")
-    if not settings.github_token:
-        raise ValueError("Set OLLADEX_GITHUB_TOKEN before creating a pull request")
-    result = _request("POST", f"/repos/{owner}/{repo}/pulls", json={"title": operation["title"], "body": operation["body"], "head": operation["head"], "base": operation["base"], "draft": bool(operation["draft"])})
-    return {"number": result["number"], "url": result["html_url"], "state": result["state"], "title": result["title"]}
+def prepare_pull_request(project: dict, title: str, body: str, base: str) -> dict:
+    slug = repository_slug(project)
+    summary = git.summary(project)
+    head = summary.get("branch", "")
+    if not head or head == "detached":
+        raise ValueError("Create or switch to a named branch before opening a pull request")
+    git.validate_branch(project, base)
+    args = ["pr", "create", "--repo", slug, "--title", title, "--body", body, "--base", base, "--head", head]
+    return {"action": "create_pr", "repository": slug, "title": title, "body": body, "head": head, "base": base, "args": args, "command": shlex.join(["gh", *args])}
+
+
+def execute_pull_request(project: dict, operation: dict) -> dict:
+    prepared = prepare_pull_request(project, operation["title"], operation["body"], operation["base"])
+    for field in ("repository", "head", "base", "command"):
+        if prepared[field] != operation[field]:
+            raise ValueError("The pull-request operation changed after approval; prepare it again")
+    code, output = _gh(project, prepared["args"], timeout=90)
+    if code:
+        raise ValueError(output.strip() or "GitHub pull-request creation failed")
+    return {"output": output.strip(), "url": next((part for part in output.split() if part.startswith("https://")), "")}

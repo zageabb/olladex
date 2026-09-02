@@ -2,7 +2,6 @@
   "name": "olladex-desktop",
   "version": "0.6.0",
   "private": true,
-  "author": "Gez",
   "description": "Desktop shell for the local Olladex development agent",
   "main": "main.cjs",
   "scripts": {
@@ -26,12 +25,44 @@
       "package.json"
     ],
     "extraResources": [
-      { "from": "../frontend/.next/standalone", "to": "frontend" },
-      { "from": "dist-api/olladex-api", "to": "api" }
+      {
+        "from": "../frontend/.next/standalone",
+        "to": "frontend"
+      },
+      {
+        "from": "dist-api/olladex-api",
+        "to": "api"
+      }
     ],
-    "linux": { "target": ["AppImage", "deb"], "category": "Development" },
-    "mac": { "target": ["dmg"], "category": "public.app-category.developer-tools" },
-    "win": { "target": ["nsis"] },
-    "publish": [{ "provider": "github", "owner": "zageabb", "repo": "olladex-" }]
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "zageabb",
+        "repo": "olladex-",
+        "private": true,
+        "releaseType": "release"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }

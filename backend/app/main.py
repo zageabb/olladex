@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -11,21 +10,26 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import __version__
 from .config import settings
 from .database import connect, decode_json, init_db, now, rows
-from .schemas import AgentJobRequest, ChangeApplyRequest, ChatRequest, CommandRequest, FileWriteRequest, GitBranchRequest, GitCheckoutRequest, GitCommitRequest, GitHubPullRequestRequest, GitPathsRequest, GitRemoteOperationRequest, ModelProfileRequest, OfficeCreateRequest, ProjectCreate, ProjectSettingsRequest, SessionCreate, TerminalInputRequest, TerminalResizeRequest
+from .schemas import BackgroundTaskRequest, ChangeApplyRequest, ChatRequest, CommandRequest, FileWriteRequest, GitBranchRequest, GitCheckoutRequest, GitCommitRequest, GitHubPullRequestRequest, GitPathsRequest, GitRemoteOperationRequest, ModelProfileRequest, OfficeCreateRequest, ProjectCreate, ProjectSettingsRequest, SessionCreate, TerminalInputRequest, TerminalResizeRequest
 from .services import changes as change_service
-from .services import agent_runner, background_jobs, git, github, office, ollama, repository_index, terminal, terminal_jobs, workspace
+from .services import git, office, ollama, repository_index, task_queue, terminal, terminal_jobs, windows_pty, workspace
+from .services import github as github_service
 from .services.session_summary import build as build_session_summary
 
 
-@asynccontextmanager
-async def lifespan(_app: FastAPI):
-    init_db()
-    background_jobs.start(get_project)
-    yield
-
-
-app = FastAPI(title="Olladex API", version=__version__, lifespan=lifespan)
+app = FastAPI(title="Olladex API", version=__version__)
 app.add_middleware(CORSMiddleware, allow_origins=[x.strip() for x in settings.cors_origins.split(",")], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+
+@app.on_event("startup")
+def startup() -> None:
+    init_db()
+    task_queue.start(process_background_task)
+
+
+@app.on_event("shutdown")
+def shutdown() -> None:
+    task_queue.stop()
 
 
 def get_project(project_id: int) -> dict:
@@ -75,7 +79,7 @@ def health():
 
 @app.get("/api/status")
 def api_status():
-    return {"version": __version__, "ollama": ollama.status(), "shell": terminal.shell_command("")[0]}
+    return {"version": __version__, "ollama": ollama.status(), "shell": terminal.shell_command("")[0], "terminal_backend": windows_pty.backend_name()}
 
 
 @app.get("/api/projects")
@@ -140,15 +144,21 @@ def create_model_profile(body: ModelProfileRequest):
         return dict(conn.execute("SELECT * FROM model_profiles WHERE id=?", (cursor.lastrowid,)).fetchone())
 
 
-@app.patch("/api/model-profiles/{profile_id}")
+@app.put("/api/model-profiles/{profile_id}")
 def update_model_profile(profile_id: int, body: ModelProfileRequest):
-    with connect() as conn:
-        if not conn.execute("SELECT id FROM model_profiles WHERE id=?", (profile_id,)).fetchone():
-            raise HTTPException(404, "Model profile not found")
-        try:
-            conn.execute("UPDATE model_profiles SET name=?,chat_model=?,embedding_model=?,temperature=?,max_steps=?,context_files=?,context_chars=?,updated_at=? WHERE id=?", (body.name, body.chat_model, body.embedding_model, body.temperature, body.max_steps, body.context_files, body.context_chars, now(), profile_id))
-        except sqlite3.IntegrityError as exc:
-            raise HTTPException(409, "A model profile with that name already exists") from exc
+    try:
+        with connect() as conn:
+            current = conn.execute("SELECT id,name,is_builtin FROM model_profiles WHERE id=?", (profile_id,)).fetchone()
+            if not current:
+                raise HTTPException(404, "Model profile not found")
+            if current["is_builtin"] and body.name != current["name"]:
+                raise HTTPException(409, "Built-in model profile names cannot be changed")
+            conn.execute(
+                "UPDATE model_profiles SET name=?,chat_model=?,embedding_model=?,temperature=?,max_steps=?,context_files=?,context_chars=?,updated_at=? WHERE id=?",
+                (body.name, body.chat_model, body.embedding_model, body.temperature, body.max_steps, body.context_files, body.context_chars, now(), profile_id),
+            )
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(409, "A model profile with that name already exists") from exc
     with connect() as conn:
         return dict(conn.execute("SELECT * FROM model_profiles WHERE id=?", (profile_id,)).fetchone())
 
@@ -159,10 +169,10 @@ def delete_model_profile(profile_id: int):
         profile = conn.execute("SELECT * FROM model_profiles WHERE id=?", (profile_id,)).fetchone()
         if not profile:
             raise HTTPException(404, "Model profile not found")
-        if profile["name"] in {"Balanced local", "Fast review", "Deep implementation"}:
+        if profile["is_builtin"]:
             raise HTTPException(409, "Built-in model profiles cannot be deleted")
         conn.execute("DELETE FROM model_profiles WHERE id=?", (profile_id,))
-    return {"id": profile_id, "deleted": True}
+    return {"id": profile_id, "status": "deleted"}
 
 
 @app.get("/api/projects/{project_id}/intelligence")
@@ -231,6 +241,45 @@ def create_session(project_id: int, body: SessionCreate):
     return {"id": cursor.lastrowid, "project_id": project_id, "title": body.title, "summary": "", "last_summarized_message_id": 0, "created_at": stamp, "updated_at": stamp}
 
 
+@app.get("/api/projects/{project_id}/tasks")
+def background_tasks(project_id: int):
+    get_project(project_id)
+    return task_queue.list_for_project(project_id)
+
+
+@app.post("/api/projects/{project_id}/tasks")
+def create_background_task(project_id: int, body: BackgroundTaskRequest):
+    get_project(project_id)
+    stamp = now()
+    title = body.title or body.prompt.strip().splitlines()[0][:100]
+    with connect() as conn:
+        if body.session_id:
+            session = conn.execute("SELECT id FROM sessions WHERE id=? AND project_id=?", (body.session_id, project_id)).fetchone()
+            if not session:
+                raise HTTPException(404, "Session not found in this project")
+            session_id = body.session_id
+        else:
+            cursor = conn.execute("INSERT INTO sessions(project_id,title,created_at,updated_at) VALUES(?,?,?,?)", (project_id, title, stamp, stamp))
+            session_id = cursor.lastrowid
+    return task_queue.enqueue(project_id, session_id, title, body.prompt, body.source_kind, body.source_ref)
+
+
+@app.get("/api/tasks/{task_id}")
+def background_task(task_id: int):
+    task = task_queue.get(task_id)
+    if not task:
+        raise HTTPException(404, "Background task not found")
+    return task
+
+
+@app.delete("/api/tasks/{task_id}")
+def cancel_background_task(task_id: int):
+    task = task_queue.cancel(task_id)
+    if not task:
+        raise HTTPException(404, "Background task not found")
+    return task
+
+
 @app.get("/api/sessions/{session_id}/messages")
 def list_messages(session_id: int):
     with connect() as conn:
@@ -240,50 +289,57 @@ def list_messages(session_id: int):
     return result
 
 
+def run_session_agent(session_id: int, content: str) -> dict:
+    with connect() as conn:
+        session = conn.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
+        if not session:
+            raise ValueError("Session not found")
+        history = rows(conn.execute("SELECT role,content FROM messages WHERE session_id=? ORDER BY id", (session_id,)))
+        conn.execute("INSERT INTO messages(session_id,role,content,created_at) VALUES(?,?,?,?)", (session_id, "user", content, now()))
+    project = get_project(session["project_id"])
+    answer, activities = ollama.chat(project, [*history, {"role": "user", "content": content}], session_summary=session["summary"] or "")
+    stamp = now()
+    with connect() as conn:
+        for activity in activities:
+            if activity.get("tool") == "write_file" and isinstance(activity.get("result"), dict):
+                result = activity["result"]
+                hunks = change_service.build_hunks(result.get("before", ""), result.get("after", ""))
+                change_cursor = conn.execute(
+                    "INSERT INTO file_changes(project_id,session_id,path,before_content,after_content,diff,hunks,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (project["id"], session_id, result.get("path", ""), result.get("before", ""), result.get("after", ""), result.get("diff", ""), json.dumps(hunks), "proposed", stamp, stamp),
+                )
+                result["change_id"] = change_cursor.lastrowid
+                result["hunks"] = hunks
+                result.pop("before", None)
+                result.pop("after", None)
+            if activity.get("tool") == "run_command" and isinstance(activity.get("result"), dict):
+                result = activity["result"]
+                command_cursor = conn.execute(
+                    "INSERT INTO command_runs(project_id,command,output,exit_code,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                    (project["id"], result.get("command", ""), result.get("output", ""), result.get("exit_code", -1), result.get("status", "completed"), stamp, stamp),
+                )
+                result["command_run_id"] = command_cursor.lastrowid
+        cursor = conn.execute("INSERT INTO messages(session_id,role,content,activities,created_at) VALUES(?,?,?,?,?)", (session_id, "assistant", answer, json.dumps(activities, default=str), stamp))
+        conn.execute("UPDATE sessions SET updated_at=? WHERE id=?", (stamp, session_id))
+        last_message_id = cursor.lastrowid
+        summary_messages = rows(conn.execute("SELECT role,content,activities FROM messages WHERE session_id=? ORDER BY id", (session_id,)))
+        summary = build_session_summary(summary_messages)
+        conn.execute("UPDATE sessions SET summary=?,last_summarized_message_id=? WHERE id=?", (summary, last_message_id, session_id))
+    return {"id": cursor.lastrowid, "role": "assistant", "content": answer, "activities": activities, "created_at": stamp}
+
+
+def process_background_task(task: dict) -> str:
+    return run_session_agent(task["session_id"], task["prompt"])["content"]
+
+
 @app.post("/api/sessions/{session_id}/messages")
 def chat_message(session_id: int, body: ChatRequest):
-    with connect() as conn:
-        session = conn.execute("SELECT project_id FROM sessions WHERE id=?", (session_id,)).fetchone()
-        if not session:
-            raise HTTPException(404, "Session not found")
-    project = get_project(session["project_id"])
     try:
-        return agent_runner.run(session_id, project, body.content)
+        return run_session_agent(session_id, body.content)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(502, f"Ollama request failed: {exc}") from exc
-
-
-@app.get("/api/projects/{project_id}/jobs")
-def project_jobs(project_id: int):
-    get_project(project_id)
-    return background_jobs.list_for_project(project_id)
-
-
-@app.post("/api/projects/{project_id}/jobs")
-def create_agent_job(project_id: int, body: AgentJobRequest):
-    get_project(project_id)
-    try:
-        return background_jobs.enqueue(project_id, body.session_id, body.prompt, body.source)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-
-
-@app.get("/api/projects/{project_id}/jobs/{job_id}")
-def agent_job(project_id: int, job_id: int):
-    get_project(project_id)
-    job = background_jobs.get(job_id)
-    if not job or job["project_id"] != project_id:
-        raise HTTPException(404, "Background job not found")
-    return job
-
-
-@app.delete("/api/projects/{project_id}/jobs/{job_id}")
-def cancel_agent_job(project_id: int, job_id: int):
-    get_project(project_id)
-    try:
-        return background_jobs.cancel(job_id, project_id)
-    except ValueError as exc:
-        raise HTTPException(409, str(exc)) from exc
 
 
 @app.post("/api/projects/{project_id}/terminal")
@@ -302,7 +358,7 @@ def start_terminal(project_id: int, body: CommandRequest):
     with connect() as conn:
         cursor = conn.execute("INSERT INTO command_runs(project_id,command,output,exit_code,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", (project_id, body.command, "", -1, "pending", stamp, stamp))
         run_id = cursor.lastrowid
-    return {"command": body.command, **terminal_jobs.start(project, run_id, body.command, body.timeout_seconds or 600)}
+    return {"command": body.command, **terminal_jobs.start(project, run_id, body.command, body.timeout_seconds or 600, body.columns, body.rows)}
 
 
 @app.get("/api/terminal/{run_id}")
@@ -512,49 +568,54 @@ def reject_git_operation(project_id: int, operation_id: int):
 
 
 @app.get("/api/projects/{project_id}/github")
-def github_overview(project_id: int):
+def github_status(project_id: int):
+    return github_service.status(get_project(project_id))
+
+
+@app.get("/api/projects/{project_id}/github/issues")
+def github_issues(project_id: int):
     try:
-        return github.overview(get_project(project_id))
+        return github_service.issues(get_project(project_id))
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 
 
-@app.post("/api/projects/{project_id}/github/issues/{issue_number}/jobs")
-def import_github_issue(project_id: int, issue_number: int):
+@app.post("/api/projects/{project_id}/github/issues/{issue_number}/task")
+def github_issue_task(project_id: int, issue_number: int):
     project = get_project(project_id)
     try:
-        issue = github.issue(project, issue_number)
-    except ValueError as exc:
+        issue = github_service.issue(project, issue_number)
+    except (ValueError, json.JSONDecodeError) as exc:
         raise HTTPException(409, str(exc)) from exc
+    title = f"Issue #{issue['number']}: {issue['title']}"
+    prompt = f"Implement GitHub issue #{issue['number']}: {issue['title']}\n\n{issue.get('body') or 'No issue description provided.'}\n\nSource: {issue.get('url', '')}"
     stamp = now()
     with connect() as conn:
-        cursor = conn.execute("INSERT INTO sessions(project_id,title,created_at,updated_at) VALUES(?,?,?,?)", (project_id, f"Issue #{issue_number}: {issue['title'][:180]}", stamp, stamp))
+        cursor = conn.execute("INSERT INTO sessions(project_id,title,created_at,updated_at) VALUES(?,?,?,?)", (project_id, title[:200], stamp, stamp))
         session_id = cursor.lastrowid
-    prompt = f"Implement GitHub issue #{issue_number}: {issue['title']}\n\n{issue['body']}\n\nSource: {issue['url']}\n\nInspect the repository, create reviewable changes, run appropriate checks, and report the result."
-    return {"issue": issue, "session_id": session_id, "job": background_jobs.enqueue(project_id, session_id, prompt, source=f"github-issue:{issue_number}")}
+    return task_queue.enqueue(project_id, session_id, title[:200], prompt, "github_issue", issue.get("url", ""))
 
 
 @app.get("/api/projects/{project_id}/github/operations")
 def github_operations(project_id: int):
     get_project(project_id)
     with connect() as conn:
-        return rows(conn.execute("SELECT * FROM github_operations WHERE project_id=? ORDER BY id DESC LIMIT 30", (project_id,)))
+        return rows(conn.execute("SELECT * FROM github_operations WHERE project_id=? ORDER BY id DESC LIMIT 20", (project_id,)))
 
 
 @app.post("/api/projects/{project_id}/github/pull-requests")
 def propose_github_pull_request(project_id: int, body: GitHubPullRequestRequest):
     project = get_project(project_id)
     try:
-        owner, repo = github.repository(project)
-        git.validate_branch(project, body.head)
-        git.validate_branch(project, body.base)
-        if body.head == body.base:
-            raise ValueError("Pull request head and base branches must be different")
+        prepared = github_service.prepare_pull_request(project, body.title, body.body, body.base)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
     stamp = now()
     with connect() as conn:
-        cursor = conn.execute("INSERT INTO github_operations(project_id,action,repository,title,body,head,base,draft,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)", (project_id, "create_pull_request", f"{owner}/{repo}", body.title, body.body, body.head, body.base, int(body.draft), "pending", stamp, stamp))
+        cursor = conn.execute(
+            "INSERT INTO github_operations(project_id,action,repository,title,body,head,base,command,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (project_id, prepared["action"], prepared["repository"], prepared["title"], prepared["body"], prepared["head"], prepared["base"], prepared["command"], "pending", stamp, stamp),
+        )
     return get_github_operation(cursor.lastrowid)
 
 
@@ -566,15 +627,19 @@ def approve_github_operation(project_id: int, operation_id: int):
         raise HTTPException(404, "GitHub operation not found in this project")
     if operation["status"] != "pending":
         raise HTTPException(409, "Only pending GitHub operations can be approved")
+    with connect() as conn:
+        claimed = conn.execute("UPDATE github_operations SET status='running',updated_at=? WHERE id=? AND status='pending'", (now(), operation_id))
+        if claimed.rowcount != 1:
+            raise HTTPException(409, "This GitHub operation is already being processed")
     try:
-        result = github.create_pull_request(project, operation)
+        result = github_service.execute_pull_request(project, operation)
     except ValueError as exc:
         with connect() as conn:
-            conn.execute("UPDATE github_operations SET status='failed',response=?,updated_at=? WHERE id=?", (str(exc), now(), operation_id))
+            conn.execute("UPDATE github_operations SET status='failed',output=?,updated_at=? WHERE id=?", (str(exc), now(), operation_id))
         raise HTTPException(409, str(exc)) from exc
     with connect() as conn:
-        conn.execute("UPDATE github_operations SET status='completed',response=?,updated_at=? WHERE id=?", (json.dumps(result), now(), operation_id))
-    return {**get_github_operation(operation_id), "result": result}
+        conn.execute("UPDATE github_operations SET status='completed',output=?,updated_at=? WHERE id=?", (result["output"], now(), operation_id))
+    return {**get_github_operation(operation_id), **result}
 
 
 @app.post("/api/projects/{project_id}/github/operations/{operation_id}/reject")

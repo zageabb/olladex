@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS model_profiles (
   max_steps INTEGER NOT NULL DEFAULT 8,
   context_files INTEGER NOT NULL DEFAULT 8,
   context_chars INTEGER NOT NULL DEFAULT 32000,
+  is_builtin INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -100,15 +101,18 @@ CREATE TABLE IF NOT EXISTS repository_index (
   indexed_at TEXT NOT NULL,
   PRIMARY KEY(project_id,path)
 );
-CREATE TABLE IF NOT EXISTS agent_jobs (
+CREATE TABLE IF NOT EXISTS background_tasks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
   prompt TEXT NOT NULL,
-  source TEXT NOT NULL DEFAULT 'manual',
+  source_kind TEXT NOT NULL DEFAULT 'manual',
+  source_ref TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'queued',
-  result_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+  result TEXT NOT NULL DEFAULT '',
   error TEXT NOT NULL DEFAULT '',
+  cancel_requested INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   started_at TEXT NOT NULL DEFAULT '',
   completed_at TEXT NOT NULL DEFAULT ''
@@ -122,9 +126,9 @@ CREATE TABLE IF NOT EXISTS github_operations (
   body TEXT NOT NULL DEFAULT '',
   head TEXT NOT NULL,
   base TEXT NOT NULL,
-  draft INTEGER NOT NULL DEFAULT 0,
+  command TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending',
-  response TEXT NOT NULL DEFAULT '',
+  output TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -137,6 +141,9 @@ ADDITIVE_COLUMNS = {
         "git_author_name": "TEXT NOT NULL DEFAULT 'Olladex User'",
         "git_author_email": "TEXT NOT NULL DEFAULT 'olladex@local'",
         "model_profile_id": "INTEGER REFERENCES model_profiles(id) ON DELETE SET NULL",
+    },
+    "model_profiles": {
+        "is_builtin": "INTEGER NOT NULL DEFAULT 0",
     },
     "sessions": {
         "summary": "TEXT NOT NULL DEFAULT ''",
@@ -172,12 +179,13 @@ def init_db() -> None:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
         stamp = now()
         defaults = [
-            ("Balanced local", settings.ollama_model, settings.ollama_embedding_model, 0.2, 8, 8, 32000),
-            ("Fast review", settings.ollama_model, settings.ollama_embedding_model, 0.1, 6, 6, 20000),
-            ("Deep implementation", settings.ollama_model, settings.ollama_embedding_model, 0.15, 12, 12, 48000),
+            ("Balanced local", settings.ollama_model, settings.ollama_embedding_model, 0.2, 8, 8, 32000, 1),
+            ("Fast review", settings.ollama_model, settings.ollama_embedding_model, 0.1, 6, 6, 20000, 1),
+            ("Deep implementation", settings.ollama_model, settings.ollama_embedding_model, 0.15, 12, 12, 48000, 1),
         ]
         for profile in defaults:
-            conn.execute("INSERT OR IGNORE INTO model_profiles(name,chat_model,embedding_model,temperature,max_steps,context_files,context_chars,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)", (*profile, stamp, stamp))
+            conn.execute("INSERT OR IGNORE INTO model_profiles(name,chat_model,embedding_model,temperature,max_steps,context_files,context_chars,is_builtin,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)", (*profile, stamp, stamp))
+        conn.execute("UPDATE model_profiles SET is_builtin=1 WHERE name IN ('Balanced local','Fast review','Deep implementation')")
 
 
 @contextmanager

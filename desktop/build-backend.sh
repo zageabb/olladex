@@ -5,5 +5,7 @@ desktop_root="$(cd "$(dirname "$0")" && pwd)"
 project_root="$(cd "$desktop_root/.." && pwd)"
 cd "$project_root"
 
-.venv/bin/pip install "pyinstaller>=6,<7"
+if ! .venv/bin/python -c "import PyInstaller" 2>/dev/null; then
+  .venv/bin/pip install "pyinstaller>=6,<7"
+fi
 .venv/bin/python desktop/scripts/build_backend.py

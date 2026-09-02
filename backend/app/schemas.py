@@ -17,15 +17,11 @@ class ChatRequest(BaseModel):
     content: str = Field(min_length=1, max_length=100_000)
 
 
-class AgentJobRequest(BaseModel):
-    session_id: int = Field(ge=1)
-    prompt: str = Field(min_length=1, max_length=100_000)
-    source: str = Field(default="manual", min_length=1, max_length=80)
-
-
 class CommandRequest(BaseModel):
     command: str = Field(min_length=1, max_length=4_000)
     timeout_seconds: int | None = Field(default=None, ge=1, le=600)
+    columns: int = Field(default=120, ge=20, le=500)
+    rows: int = Field(default=32, ge=5, le=200)
 
 
 class TerminalInputRequest(BaseModel):
@@ -65,6 +61,20 @@ class ModelProfileRequest(BaseModel):
     context_chars: int = Field(default=32000, ge=4000, le=200000)
 
 
+class BackgroundTaskRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=100_000)
+    title: str | None = Field(default=None, max_length=200)
+    session_id: int | None = Field(default=None, ge=1)
+    source_kind: str = Field(default="manual", pattern="^(manual|github_issue)$")
+    source_ref: str = Field(default="", max_length=500)
+
+
+class GitHubPullRequestRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=256)
+    body: str = Field(default="", max_length=100_000)
+    base: str = Field(default="main", min_length=1, max_length=200)
+
+
 class GitPathsRequest(BaseModel):
     paths: list[str] = Field(min_length=1, max_length=200)
 
@@ -86,14 +96,6 @@ class GitRemoteOperationRequest(BaseModel):
     action: Literal["fetch", "pull", "push"]
     remote: str = Field(default="origin", min_length=1, max_length=120)
     branch: str | None = Field(default=None, max_length=120)
-
-
-class GitHubPullRequestRequest(BaseModel):
-    title: str = Field(min_length=1, max_length=256)
-    body: str = Field(default="", max_length=100_000)
-    head: str = Field(min_length=1, max_length=120)
-    base: str = Field(default="main", min_length=1, max_length=120)
-    draft: bool = False
 
 
 class DiagramRequest(BaseModel):

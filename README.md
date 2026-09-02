@@ -12,6 +12,7 @@ The interface follows the navy, blue, white and split-workspace design language 
 - Open and persist local repositories.
 - Connect to local or network-hosted Ollama and discover installed models.
 - Persistent projects, task sessions, messages and activity records in SQLite.
+- Persistent background task queue that processes Ollama jobs one at a time and writes results into normal sessions.
 - Bounded Ollama tool loop with visible tool activity.
 - Repository tree, UTF-8 file viewer/editor and text/code search.
 - Review-first agent file proposals with selectable diff hunks, apply, reject and conflict-safe revert.
@@ -22,21 +23,20 @@ The interface follows the navy, blue, white and split-workspace design language 
 - Review, Assisted and Autonomous command-approval modes.
 - Controlled Git branch creation/switching, per-file stage/unstage, commit, status, history and staged/unstaged diff view.
 - Two-step Git fetch, fast-forward pull and push proposals showing the exact command before explicit approval.
+- GitHub CLI integration for viewing open issues, queueing issue implementation and approval-gated pull-request creation.
 - Project instructions automatically supplied to the Ollama agent.
 - Tree-sitter repository intelligence covering languages, frameworks, scripts and detected symbols, with a portable fallback parser.
 - Persistent incremental repository index with hybrid lexical/Ollama-embedding ranking, cached vectors, automatic stale-file cleanup and transparent lexical fallback.
 - Reusable local model profiles controlling chat model, embedding model, temperature, tool-step budget and context limits.
-- Create, edit and remove custom model profiles without restarting Olladex.
-- Persistent background agent queue with visible queued, running, completed, failed and cancelled states.
-- Import GitHub issues into dedicated background agent sessions.
-- Read open GitHub issues and pull requests from the selected repository remote.
-- Review-first GitHub pull-request creation with separate proposal, approval and rejection actions.
+- Create, edit and delete custom model profiles while protecting the three built-in profiles.
 - Persistent compact session summaries carried into future model requests.
 - Mermaid and Graphviz/DOT live editors with SVG preview and export.
 - DOCX, XLSX, PPTX and PDF inspection.
 - Create basic Word documents, Excel workbooks and PowerPoint presentations.
 - Responsive Context Studio-style three-pane interface.
-- Hardened Electron desktop shell and automated Linux, macOS and Windows PyInstaller/Electron Builder release pipeline.
+- Hardened Electron desktop shell with update checks and generated updater metadata.
+- Automated Linux, macOS and Windows release pipeline with tests, frozen-API smoke checks and installer validation.
+- Native Windows ConPTY terminal through pywinpty, with a pipe fallback when ConPTY is unavailable.
 - Recoverable tool errors and repeated-call guards that help local models correct failed agent steps.
 
 ## Architecture
@@ -48,8 +48,9 @@ Browser or Electron / Next.js (port 5081)
 FastAPI (port 8001) ---- SQLite
         |
         +---- Ollama (configurable endpoint)
+        +---- persistent background queue
         +---- selected local repository
-        +---- Bash and Git CLI
+        +---- local shell, Git and GitHub CLI
         +---- python-docx / openpyxl / python-pptx / pypdf
 
 Mermaid and Graphviz/DOT are rendered locally in the browser.
@@ -62,6 +63,7 @@ Prerequisites:
 - Python 3.11+
 - Node.js 22+
 - Git
+- GitHub CLI (`gh`) for issue and pull-request workflows
 - Ollama running locally or on your network
 
 ```bash
@@ -90,14 +92,6 @@ ollama pull nomic-embed-text
 
 If it is not installed or cannot be reached, Olladex continues with lexical ranking.
 
-For private GitHub issue/PR workflows, add a token to `.env`. The token is read from the environment and is never written to Olladex's database:
-
-```bash
-OLLADEX_GITHUB_TOKEN=github_pat_...
-```
-
-Public repository issues can be read without a token. Creating a pull request always requires a token and explicit in-app approval.
-
 ## Desktop app
 
 Launch the desktop shell in development mode:
@@ -116,6 +110,8 @@ npm --prefix desktop run dist
 The packaging pipeline builds the production Next.js application, freezes the FastAPI service with PyInstaller, and creates an AppImage/DEB, DMG or NSIS installer with Electron Builder. Native installers should be built on their target operating system. Tags matching `v*` also trigger `.github/workflows/release-desktop.yml`, which builds all three platforms and attaches the artifacts to a GitHub release.
 
 macOS and Windows signing is optional. Configure `CSC_LINK` and `CSC_KEY_PASSWORD` as repository secrets; for Apple notarization also configure `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID`. Unsigned artifacts are produced when those credentials are absent.
+
+Packaged builds expose a manual update check. Because the current GitHub repository is private, set `OLLADEX_GITHUB_TOKEN` in the desktop process environment to permit release checks. Set `OLLADEX_AUTO_UPDATE_CHECK=1` to check automatically after launch. Olladex never writes this token to its database.
 
 A portable Linux x64 ZIP can be built with `npm --prefix desktop run portable:linux`.
 
@@ -144,8 +140,10 @@ npm --prefix frontend run build
 3. Ask: `Inspect this project and explain its architecture.`
 4. Ask: `Add a health endpoint, run the relevant tests and show the changes.`
 5. Review agent activity, the file editor, Git diff and terminal output.
-6. Open the Diagrams tab to create Mermaid or DOT output.
-7. Open an Office file from the tree or create one in the Office tab.
+6. Use **Queue** to let another prompt run persistently in the background.
+7. Connect GitHub CLI to import an issue or prepare a pull request for explicit approval.
+8. Open the Diagrams tab to create Mermaid or DOT output.
+9. Open an Office file from the tree or create one in the Office tab.
 
 ## Safety boundary
 
@@ -154,13 +152,14 @@ Olladex resolves every agent file path against the selected repository and rejec
 ## v0.6 limitations
 
 - Office editing is structured and practical, not a pixel-perfect replacement for Word, Excel or PowerPoint.
-- Desktop installers are unsigned unless signing credentials are configured. Release builds now generate updater metadata, but the in-app updater transport is not enabled for private GitHub releases.
+- Desktop installers are unsigned unless signing credentials are configured. Private-repository update checks require an environment token.
 - Git remote commands inherit credentials already configured on the machine; Olladex does not store Git credentials.
+- GitHub workflows require the `gh` CLI to be installed and authenticated on the local machine.
+- Background tasks run serially. Cancelling a running task is cooperative and takes effect after the current Ollama request returns.
 - Repository content and embedding vectors are stored in Olladex's local SQLite data directory; the first semantic index may take time on large repositories and is capped at 500 new embeddings per refresh.
-- Windows uses Git Bash when available, then PowerShell, then Command Prompt; native ConPTY screen semantics are not yet implemented.
+- Windows prefers native ConPTY and uses Git Bash, PowerShell or Command Prompt as the command shell.
 - Session summaries are deterministic and local rather than generated by a second model call.
-- Running background jobs finish their current model request before shutdown or cancellation; only queued jobs can currently be cancelled immediately.
 
 ## Next release direction
 
-v0.7 should focus on parallel job limits, pausing running jobs, native Windows ConPTY, issue comments/status updates, authenticated private-release updates and visual browser testing.
+v0.7 should focus on interruptible streaming Ollama requests, parallel worktree-backed jobs, GitHub PR review/comments, a public signed update channel and deeper Office editing.

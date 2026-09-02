@@ -15,6 +15,7 @@ if os.name != "nt":
 
 from ..database import connect, now
 from .terminal import blocked, shell_command
+from . import windows_pty
 from .workspace import project_root
 
 
@@ -22,7 +23,7 @@ _jobs: dict[int, dict] = {}
 _lock = threading.Lock()
 
 
-def start(project: dict, run_id: int, command: str, timeout_seconds: int = 600) -> dict:
+def start(project: dict, run_id: int, command: str, timeout_seconds: int = 600, columns: int = 120, rows: int = 32) -> dict:
     if blocked(command):
         with connect() as conn:
             conn.execute("UPDATE command_runs SET output=?,exit_code=?,status=?,updated_at=? WHERE id=?", ("Command blocked by Olladex safety policy.", 126, "blocked", now(), run_id))
@@ -30,11 +31,16 @@ def start(project: dict, run_id: int, command: str, timeout_seconds: int = 600) 
     env = os.environ.copy()
     env["TERM"] = "xterm-256color"
     if os.name == "nt":
-        process = subprocess.Popen(
-            shell_command(command), cwd=project_root(project), env=env,
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
-        )
+        if windows_pty.available():
+            process = windows_pty.spawn(shell_command(command), str(project_root(project)), env, rows, columns)
+            backend = "conpty"
+        else:
+            process = subprocess.Popen(
+                shell_command(command), cwd=project_root(project), env=env,
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+            )
+            backend = "windows-pipes"
         master = None
     else:
         master, slave = pty.openpty()
@@ -44,7 +50,8 @@ def start(project: dict, run_id: int, command: str, timeout_seconds: int = 600) 
             start_new_session=True, close_fds=True,
         )
         os.close(slave)
-    job = {"process": process, "master": master, "output": "", "status": "running", "exit_code": -1, "started": time.monotonic(), "timeout": timeout_seconds}
+        backend = "posix-pty"
+    job = {"process": process, "master": master, "backend": backend, "output": "", "status": "running", "exit_code": -1, "started": time.monotonic(), "timeout": timeout_seconds}
     with _lock:
         _jobs[run_id] = job
     with connect() as conn:
@@ -60,13 +67,14 @@ def _collect(run_id: int) -> None:
     timed_out = False
     if os.name == "nt":
         reader = _collect_windows_output(job)
-        while process.poll() is None:
+        while _process_alive(job):
             if time.monotonic() - job["started"] > job["timeout"]:
                 timed_out = True
-                process.terminate()
+                _terminate(job)
                 break
             time.sleep(0.05)
-        process.wait()
+        if job["backend"] == "windows-pipes":
+            process.wait()
         reader.join(timeout=1)
         _finish(run_id, job, timed_out)
         return
@@ -106,6 +114,17 @@ def _collect(run_id: int) -> None:
 
 def _collect_windows_output(job: dict) -> threading.Thread:
     def read_pipe() -> None:
+        if job["backend"] == "conpty":
+            while True:
+                try:
+                    chunk = job["process"].read(65536)
+                except (EOFError, OSError):
+                    return
+                if not chunk:
+                    return
+                with _lock:
+                    job["output"] = (job["output"] + chunk)[-500_000:]
+            return
         stream = job["process"].stdout
         if stream is None:
             return
@@ -123,7 +142,8 @@ def _collect_windows_output(job: dict) -> threading.Thread:
 
 def _finish(run_id: int, job: dict, timed_out: bool) -> None:
     process = job["process"]
-    exit_code = process.returncode if process.returncode is not None else 1
+    exit_code = getattr(process, "exitstatus", None) if job.get("backend") == "conpty" else process.returncode
+    exit_code = exit_code if exit_code is not None else 1
     final_status = "timed_out" if timed_out else ("cancelled" if job.get("cancelled") else "completed")
     with _lock:
         job["exit_code"] = 124 if timed_out else exit_code
@@ -137,7 +157,7 @@ def status(run_id: int) -> dict:
     with _lock:
         job = _jobs.get(run_id)
         if job:
-            return {"id": run_id, "output": job["output"], "exit_code": job["exit_code"], "status": job["status"]}
+            return {"id": run_id, "output": job["output"], "exit_code": job["exit_code"], "status": job["status"], "backend": job.get("backend", "")}
     with connect() as conn:
         row = conn.execute("SELECT * FROM command_runs WHERE id=?", (run_id,)).fetchone()
     return dict(row) if row else {}
@@ -152,7 +172,7 @@ def cancel(run_id: int) -> dict:
         process = job["process"]
     try:
         if os.name == "nt":
-            process.terminate()
+            _terminate(job)
         else:
             os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -168,10 +188,13 @@ def write_input(run_id: int, data: str) -> dict:
         master = job["master"]
         process = job["process"]
     if os.name == "nt":
-        if process.stdin is None:
-            raise ValueError("The command does not accept input")
-        process.stdin.write(data.encode("utf-8"))
-        process.stdin.flush()
+        if job["backend"] == "conpty":
+            process.write(data)
+        else:
+            if process.stdin is None:
+                raise ValueError("The command does not accept input")
+            process.stdin.write(data.encode("utf-8"))
+            process.stdin.flush()
     else:
         os.write(master, data.encode("utf-8"))
     return status(run_id)
@@ -183,6 +206,21 @@ def resize(run_id: int, columns: int, rows: int) -> dict:
         if not job or job["status"] != "running":
             raise ValueError("The command is not running or no longer accepts terminal resize events")
         master = job["master"]
-    if os.name != "nt":
+    if os.name == "nt" and job.get("backend") == "conpty":
+        job["process"].setwinsize(rows, columns)
+    elif os.name != "nt":
         fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
     return status(run_id)
+
+
+def _process_alive(job: dict) -> bool:
+    if job.get("backend") == "conpty":
+        return bool(job["process"].isalive())
+    return job["process"].poll() is None
+
+
+def _terminate(job: dict) -> None:
+    if job.get("backend") == "conpty":
+        job["process"].terminate(force=True)
+    else:
+        job["process"].terminate()

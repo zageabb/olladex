@@ -1,4 +1,6 @@
-const { app, BrowserWindow, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
+let autoUpdater = null;
+try { ({ autoUpdater } = require("electron-updater")); } catch {}
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -6,6 +8,41 @@ const path = require("node:path");
 const API_PORT = "8001";
 const UI_PORT = "5081";
 const processes = [];
+let updateState = { status: app.isPackaged && autoUpdater ? "idle" : "disabled", message: app.isPackaged && autoUpdater ? "Updates not checked" : "Updates are unavailable in this build", version: "" };
+
+function publishUpdateState(next) {
+  updateState = { ...updateState, ...next };
+  for (const window of BrowserWindow.getAllWindows()) window.webContents.send("olladex:update-status", updateState);
+}
+
+function configureUpdates() {
+  ipcMain.handle("olladex:update-state", () => updateState);
+  ipcMain.handle("olladex:check-updates", async () => {
+    if (!app.isPackaged || !autoUpdater) return updateState;
+    await autoUpdater.checkForUpdates();
+    return updateState;
+  });
+  if (!autoUpdater) return;
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+  const updateToken = process.env.OLLADEX_GITHUB_TOKEN || process.env.GH_TOKEN;
+  if (updateToken) autoUpdater.requestHeaders = { Authorization: `token ${updateToken}` };
+  autoUpdater.on("checking-for-update", () => publishUpdateState({ status: "checking", message: "Checking for updates…" }));
+  autoUpdater.on("update-not-available", () => publishUpdateState({ status: "up-to-date", message: "Olladex is up to date", version: app.getVersion() }));
+  autoUpdater.on("error", (error) => publishUpdateState({ status: "error", message: error?.message || "Update check failed" }));
+  autoUpdater.on("download-progress", (progress) => publishUpdateState({ status: "downloading", message: `Downloading ${Math.round(progress.percent)}%` }));
+  autoUpdater.on("update-available", async (info) => {
+    publishUpdateState({ status: "available", message: `Olladex ${info.version} is available`, version: info.version });
+    const choice = await dialog.showMessageBox({ type: "info", title: "Olladex update", message: `Olladex ${info.version} is available.`, detail: "Download it now and install when Olladex restarts?", buttons: ["Download", "Later"], defaultId: 0, cancelId: 1 });
+    if (choice.response === 0) autoUpdater.downloadUpdate();
+  });
+  autoUpdater.on("update-downloaded", async (info) => {
+    publishUpdateState({ status: "downloaded", message: `Olladex ${info.version} is ready to install`, version: info.version });
+    const choice = await dialog.showMessageBox({ type: "info", title: "Update ready", message: `Olladex ${info.version} has been downloaded.`, buttons: ["Restart and install", "Later"], defaultId: 0, cancelId: 1 });
+    if (choice.response === 0) autoUpdater.quitAndInstall();
+  });
+  if (app.isPackaged && process.env.OLLADEX_AUTO_UPDATE_CHECK === "1") setTimeout(() => autoUpdater.checkForUpdates().catch(() => {}), 8000);
+}
 
 function rootPath() {
   return app.isPackaged ? process.resourcesPath : path.resolve(__dirname, "..");
@@ -67,6 +104,7 @@ function stopServices() {
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.whenReady().then(async () => {
+    configureUpdates();
     startServices();
     try { await createWindow(); } catch (error) { console.error(error); app.quit(); }
   });

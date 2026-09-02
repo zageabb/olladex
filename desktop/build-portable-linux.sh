@@ -7,6 +7,7 @@ version="$(node -p "require('$desktop_root/package.json').version")"
 portable_stage="$(mktemp -d /tmp/olladex-portable.XXXXXX)"
 portable_root="$portable_stage/Olladex-v${version}-linux-x64"
 output_root="$desktop_root/dist"
+output_zip="$output_root/Olladex-v${version}-linux-x64-portable.zip"
 trap 'rm -rf -- "$portable_stage"' EXIT
 
 if [[ "$(uname -s)" != "Linux" || "$(uname -m)" != "x86_64" ]]; then
@@ -23,5 +24,6 @@ cp -a "$project_root/frontend/.next/standalone/." "$portable_root/resources/fron
 cp -a "$desktop_root/dist-api/olladex-api/." "$portable_root/resources/api/"
 mv "$portable_root/electron" "$portable_root/olladex"
 chmod +x "$portable_root/olladex" "$portable_root/resources/api/olladex-api"
-(cd "$portable_stage" && zip -qr "$output_root/Olladex-v${version}-linux-x64-portable.zip" "Olladex-v${version}-linux-x64")
-echo "$output_root/Olladex-v${version}-linux-x64-portable.zip"
+rm -f -- "$output_zip"
+(cd "$portable_stage" && zip -qr "$output_zip" "Olladex-v${version}-linux-x64")
+echo "$output_zip"

@@ -9,3 +9,4 @@ python-pptx>=1.0,<2
 pypdf>=5,<7
 pytest>=8,<9
 tree-sitter-language-pack>=0.9,<1
+pywinpty>=2.0,<3; platform_system == "Windows"

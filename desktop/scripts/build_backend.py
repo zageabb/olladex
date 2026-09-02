@@ -35,6 +35,8 @@ def main() -> None:
         str(DESKTOP),
         str(ROOT / "backend" / "desktop_api.py"),
     ]
+    if sys.platform == "win32":
+        command[3:3] = ["--collect-all", "winpty"]
     subprocess.run(command, cwd=ROOT, check=True)
 
 
