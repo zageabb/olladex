@@ -8,6 +8,7 @@ import { FileTree, TreeNode } from "../components/FileTree";
 import { GitControls, GitSummary } from "../components/GitControls";
 import { OfficePanel } from "../components/OfficePanel";
 import { ProjectPanel } from "../components/ProjectPanel";
+import { TaskOrchestrationPanel } from "../components/TaskOrchestrationPanel";
 import { TerminalPanel } from "../components/TerminalPanel";
 import { request } from "../lib/api";
 
@@ -116,7 +117,7 @@ export default function Home() {
 
   async function saveFile() {
     if (!project || !selected || selected.type !== "file") return;
-    const result = await request<{ diff: string }>(`/projects/${project.id}/files?path=${encodeURIComponent(selected.path)}`, { method: "PUT", body: JSON.stringify({ content: fileDraft, session_id: session?.id }) });
+    await request<{ diff: string }>(`/projects/${project.id}/files?path=${encodeURIComponent(selected.path)}`, { method: "PUT", body: JSON.stringify({ content: fileDraft, session_id: session?.id }) });
     setFileContent(fileDraft); await refreshChanges(project.id); setNotice(`Saved ${selected.path}`);
   }
 
@@ -183,7 +184,7 @@ export default function Home() {
 
   return <main className="app-shell">
     <header className="topbar">
-      <div className="brand"><span className="brand-mark">O</span><span>Olladex</span><em>v0.6</em></div>
+      <div className="brand"><span className="brand-mark">O</span><span>Olladex</span><em>{status?.version ? `v${status.version}` : "local"}</em></div>
       <div className="project-selector"><span>Repository</span><select value={project?.id || ""} onChange={(e) => setProject(projects.find((p) => p.id === Number(e.target.value)) || null)}><option value="">Open a repository</option>{projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
       <button className="global-search" onClick={() => setTab("files")}>⌕ Search this repository <kbd>⌘ K</kbd></button>
       <div className={`connection ${status?.ollama.connected ? "online" : ""}`}><i />{status?.ollama.connected ? `${project?.profile_chat_model || project?.model || status.ollama.models[0] || "Ollama"}` : "Ollama offline"}</div>
@@ -232,7 +233,7 @@ export default function Home() {
           {tab === "terminal" && <TerminalPanel projectId={project.id} />}
           {tab === "diagrams" && <DiagramStudio initialSource={diagramSource} initialEngine={diagramEngine} />}
           {tab === "office" && <OfficePanel projectId={project.id} selectedPath={selected?.path} onCreated={refreshTree} />}
-          {tab === "tasks" && <BackgroundTasksPanel projectId={project.id} onOpenSession={openTaskSession} />}
+          {tab === "tasks" && <div className="tasks-workspace"><TaskOrchestrationPanel projectId={project.id} onCreated={() => setNotice("Orchestrated task queued")} /><BackgroundTasksPanel projectId={project.id} onOpenSession={openTaskSession} /></div>}
           {tab === "project" && <ProjectPanel project={project} onUpdated={(updated) => { setProject(updated); setProjects((items) => items.map((item) => item.id === updated.id ? updated : item)); }} />}
         </> : <EmptyWorkspace onOpen={() => setShowOpen(true)} />}
       </section>
