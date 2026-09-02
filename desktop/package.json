@@ -1,6 +1,6 @@
 {
   "name": "olladex-desktop",
-  "version": "0.8.1-dev.8",
+  "version": "0.8.1",
   "private": true,
   "description": "Desktop shell for the local Olladex development agent",
   "main": "main.cjs",
@@ -57,7 +57,7 @@
         "provider": "github",
         "owner": "zageabb",
         "repo": "olladex",
-        "private": true,
+        "private": false,
         "releaseType": "release"
       }
     ]
