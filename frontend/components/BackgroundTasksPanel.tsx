@@ -8,6 +8,7 @@ type BackgroundTask = {
   status: "queued" | "running" | "completed" | "cancelled" | "failed"; result: string; error: string;
   cancel_requested: number; created_at: string; started_at: string; completed_at: string;
   worktree_path?: string; worktree_branch?: string;
+  pull_request_number?: number; pull_request_url?: string; pull_request_state?: string;
 };
 
 type WorktreeSummary = {
@@ -15,11 +16,18 @@ type WorktreeSummary = {
   changes: string[]; branch_diff: string; working_diff: string;
 };
 
+type TaskLifecycle = {
+  task_id: number; pull_request_number: number; pull_request_url: string; pull_request_state: string;
+  review_decision?: string; mergeable?: string; checks: { overall: "none" | "passing" | "pending" | "failing"; checks: { name: string; state: string }[] };
+  worktree_cleaned: boolean; cleanup_blocked?: string;
+};
+
 type PromotionDraft = { commit: string; title: string; body: string; base: string };
 
 export function BackgroundTasksPanel({ projectId, onOpenSession }: { projectId: number; onOpenSession: (sessionId: number) => void }) {
   const [tasks, setTasks] = useState<BackgroundTask[]>([]);
   const [worktrees, setWorktrees] = useState<Record<number, WorktreeSummary>>({});
+  const [lifecycles, setLifecycles] = useState<Record<number, TaskLifecycle>>({});
   const [drafts, setDrafts] = useState<Record<number, PromotionDraft>>({});
   const [prompt, setPrompt] = useState("");
   const [notice, setNotice] = useState("");
@@ -37,12 +45,36 @@ export function BackgroundTasksPanel({ projectId, onOpenSession }: { projectId: 
           for (const task of data) if (!next[task.id]) next[task.id] = { commit: task.title, title: task.title, body: `Implemented by Olladex background task #${task.id}.`, base: "main" };
           return next;
         });
+        const linked = data.filter((task) => Number(task.pull_request_number || 0) > 0);
+        if (linked.length) {
+          const lifecycleResults = await Promise.all(linked.map(async (task) => {
+            try {
+              return await request<TaskLifecycle>(`/tasks/${task.id}/lifecycle`, { method: "POST", body: JSON.stringify({ cleanup_merged: true }) });
+            } catch { return null; }
+          }));
+          if (!disposed) {
+            setLifecycles((current) => {
+              const next = { ...current };
+              for (const item of lifecycleResults) if (item) next[item.task_id] = item;
+              return next;
+            });
+            const cleanedIds = new Set(lifecycleResults.filter((item) => item?.worktree_cleaned).map((item) => item!.task_id));
+            if (cleanedIds.size) {
+              setTasks((current) => current.map((task) => cleanedIds.has(task.id) ? { ...task, worktree_path: "", worktree_branch: "", pull_request_state: "MERGED" } : task));
+              setWorktrees((current) => {
+                const next = { ...current };
+                for (const id of cleanedIds) delete next[id];
+                return next;
+              });
+            }
+          }
+        }
       } catch (error) {
         if (!disposed) setNotice(error instanceof Error ? error.message : String(error));
       }
     }
     refresh();
-    const timer = window.setInterval(refresh, 1000);
+    const timer = window.setInterval(refresh, 5000);
     return () => { disposed = true; window.clearInterval(timer); };
   }, [projectId]);
 
@@ -68,6 +100,27 @@ export function BackgroundTasksPanel({ projectId, onOpenSession }: { projectId: 
       const summary = await request<WorktreeSummary>(`/tasks/${task.id}/worktree?base=${encodeURIComponent(drafts[task.id]?.base || "main")}`);
       setWorktrees((current) => ({ ...current, [task.id]: summary }));
       setNotice(`Loaded ${summary.branch}`);
+    } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); }
+    finally { setBusyTask(null); }
+  }
+
+  async function syncLifecycle(task: BackgroundTask) {
+    if (!task.pull_request_number) return;
+    setBusyTask(task.id);
+    try {
+      const lifecycle = await request<TaskLifecycle>(`/tasks/${task.id}/lifecycle`, { method: "POST", body: JSON.stringify({ cleanup_merged: true }) });
+      setLifecycles((current) => ({ ...current, [task.id]: lifecycle }));
+      setTasks((current) => current.map((item) => item.id === task.id ? {
+        ...item,
+        pull_request_url: lifecycle.pull_request_url,
+        pull_request_state: lifecycle.pull_request_state,
+        ...(lifecycle.worktree_cleaned ? { worktree_path: "", worktree_branch: "" } : {}),
+      } : item));
+      if (lifecycle.worktree_cleaned) {
+        setWorktrees((current) => { const next = { ...current }; delete next[task.id]; return next; });
+        setNotice(`PR #${lifecycle.pull_request_number} merged — task worktree cleaned up`);
+      } else if (lifecycle.cleanup_blocked) setNotice(lifecycle.cleanup_blocked);
+      else setNotice(`PR #${lifecycle.pull_request_number} is ${lifecycle.pull_request_state.toLowerCase()}`);
     } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); }
     finally { setBusyTask(null); }
   }
@@ -102,10 +155,12 @@ export function BackgroundTasksPanel({ projectId, onOpenSession }: { projectId: 
     if (!draft?.title.trim()) return;
     setBusyTask(task.id);
     try {
-      const result = await request<{ url: string; branch: string }>(`/tasks/${task.id}/worktree/pull-request`, {
+      const result = await request<{ url: string; branch: string; pull_request_number: number }>(`/tasks/${task.id}/worktree/pull-request`, {
         method: "POST", body: JSON.stringify({ title: draft.title.trim(), body: draft.body, base: draft.base || "main" }),
       });
+      setTasks((current) => current.map((item) => item.id === task.id ? { ...item, pull_request_number: result.pull_request_number, pull_request_url: result.url, pull_request_state: "OPEN" } : item));
       setNotice(result.url ? `Pull request created: ${result.url}` : `Pull request created from ${result.branch}`);
+      window.setTimeout(() => syncLifecycle({ ...task, pull_request_number: result.pull_request_number, pull_request_url: result.url, pull_request_state: "OPEN" }), 500);
     } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); }
     finally { setBusyTask(null); }
   }
@@ -125,18 +180,21 @@ export function BackgroundTasksPanel({ projectId, onOpenSession }: { projectId: 
     <section className="queue-compose"><div><p className="eyebrow">Parallel background agents</p><h3>Queue development work</h3><p>Git repositories run queued jobs in isolated task branches and worktrees, so multiple agents can work safely in parallel.</p></div><form onSubmit={enqueue}><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Describe a task Olladex can work through in the background…" /><button className="primary" disabled={!prompt.trim()}>Queue task</button></form></section>
     <section className="queue-list"><div className="queue-head"><div><p className="eyebrow">Persistent queue</p><h3>{tasks.length} recent tasks</h3></div><span>{tasks.filter((task) => task.status === "queued" || task.status === "running").length} active</span></div>
       {tasks.length ? tasks.map((task) => {
-        const worktree = worktrees[task.id]; const draft = drafts[task.id];
+        const worktree = worktrees[task.id]; const draft = drafts[task.id]; const lifecycle = lifecycles[task.id];
+        const prState = lifecycle?.pull_request_state || task.pull_request_state || "";
+        const checkState = lifecycle?.checks.overall || "none";
         return <article key={task.id} className={`queue-task ${task.status}`}>
-          <header><div><strong>{task.title}</strong><small>{task.source_kind === "github_issue" ? "GitHub issue" : "Manual task"} · {new Date(task.created_at).toLocaleString()}</small>{task.worktree_branch && <small>Branch · {task.worktree_branch}</small>}</div><span>{task.cancel_requested && task.status === "running" ? "stopping" : task.status}</span></header>
+          <header><div><strong>{task.title}</strong><small>{task.source_kind === "github_issue" ? "GitHub issue" : "Manual task"} · {new Date(task.created_at).toLocaleString()}</small>{task.worktree_branch && <small>Branch · {task.worktree_branch}</small>}{task.pull_request_number ? <small>PR #{task.pull_request_number} · {prState || "OPEN"}{checkState !== "none" ? ` · checks ${checkState}` : ""}</small> : null}</div><span>{task.cancel_requested && task.status === "running" ? "stopping" : task.status}</span></header>
           <p>{task.prompt}</p>{task.result && <pre>{task.result}</pre>}{task.error && <pre className="queue-error">{task.error}</pre>}
+          {task.pull_request_number ? <div className="task-pr-status"><div><strong>PR #{task.pull_request_number}</strong><span className={`pr-state ${prState.toLowerCase()}`}>{prState || "OPEN"}</span><span className={`check-state ${checkState}`}>checks {checkState}</span>{lifecycle?.review_decision ? <span>{lifecycle.review_decision}</span> : null}</div><div><button disabled={busyTask === task.id} onClick={() => syncLifecycle(task)}>Refresh PR</button>{task.pull_request_url ? <button onClick={() => window.open(task.pull_request_url, "_blank", "noopener,noreferrer")}>Open GitHub</button> : null}</div>{lifecycle?.checks.checks.length ? <ul>{lifecycle.checks.checks.slice(0, 8).map((check) => <li key={`${check.name}-${check.state}`}><span>{check.name}</span><b>{check.state}</b></li>)}</ul> : null}{lifecycle?.cleanup_blocked ? <small>{lifecycle.cleanup_blocked}</small> : null}</div> : null}
           {worktree && <details className="activity-card" open><summary><span>⑂</span><div><strong>{worktree.branch}</strong><small>{worktree.changes.length} working changes · base {worktree.base}</small></div><b>⌄</b></summary>
             <div className="task-promotion-form">
               <label>Commit message<input value={draft?.commit || ""} onChange={(event) => updateDraft(task.id, "commit", event.target.value)} /></label>
               <div className="activity-actions"><button disabled={busyTask === task.id || worktree.changes.length === 0 || !draft?.commit.trim()} className="primary" onClick={() => commitTask(task)}>Commit approved work</button><button disabled={busyTask === task.id} onClick={() => pushTask(task)}>Push branch</button></div>
-              <label>PR title<input value={draft?.title || ""} onChange={(event) => updateDraft(task.id, "title", event.target.value)} /></label>
+              {!task.pull_request_number ? <><label>PR title<input value={draft?.title || ""} onChange={(event) => updateDraft(task.id, "title", event.target.value)} /></label>
               <label>Base<input value={draft?.base || "main"} onChange={(event) => updateDraft(task.id, "base", event.target.value)} /></label>
-              <label>Description<textarea value={draft?.body || ""} onChange={(event) => updateDraft(task.id, "body", event.target.value)} /></label>
-              <div className="activity-actions"><button disabled={busyTask === task.id || !draft?.title.trim()} onClick={() => createPullRequest(task)}>Create PR</button>{task.status !== "running" && task.status !== "queued" && <button disabled={busyTask === task.id} onClick={() => cleanupTask(task)}>Clean up worktree</button>}</div>
+              <label>Description<textarea value={draft?.body || ""} onChange={(event) => updateDraft(task.id, "body", event.target.value)} /></label></> : null}
+              <div className="activity-actions">{!task.pull_request_number ? <button disabled={busyTask === task.id || !draft?.title.trim()} onClick={() => createPullRequest(task)}>Create PR</button> : <button disabled={busyTask === task.id} onClick={() => syncLifecycle(task)}>Sync PR lifecycle</button>}{task.status !== "running" && task.status !== "queued" && <button disabled={busyTask === task.id} onClick={() => cleanupTask(task)}>Clean up worktree</button>}</div>
             </div>
             {(worktree.working_diff || worktree.branch_diff) ? <pre>{worktree.working_diff || worktree.branch_diff}</pre> : <p>No diff against {worktree.base}.</p>}
           </details>}
