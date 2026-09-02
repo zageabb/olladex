@@ -7,6 +7,7 @@ def test_task_and_pr_review_routes_are_mounted():
     assert "/api/tasks/{task_id}/worktree/commit" in paths
     assert "/api/tasks/{task_id}/worktree/push" in paths
     assert "/api/tasks/{task_id}/worktree/pull-request" in paths
+    assert "/api/tasks/{task_id}/worktree/cleanup" in paths
     assert "/api/projects/{project_id}/github/pull-requests/review" in paths
     assert "/api/projects/{project_id}/github/pull-requests/{number}/diff" in paths
     assert "/api/projects/{project_id}/github/pull-requests/{number}/comments" in paths
