@@ -14,6 +14,7 @@ from openpyxl.utils import get_column_letter
 from pptx import Presentation
 from pypdf import PdfReader
 
+from .office_word import inspect_docx, mutate_docx
 from .workspace import project_root, safe_path
 
 
@@ -28,18 +29,7 @@ def inspect(project: dict, relative: str) -> dict:
 def _inspect_path(path: Path) -> dict:
     suffix = path.suffix.lower()
     if suffix == ".docx":
-        doc = Document(path)
-        paragraphs = [
-            {
-                "text": p.text,
-                "style": p.style.name if p.style else "",
-                "runs": [{"text": r.text, "bold": r.bold, "italic": r.italic} for r in p.runs],
-            }
-            for p in doc.paragraphs
-        ]
-        headings = [p for p in paragraphs if str(p.get("style", "")).lower().startswith("heading")]
-        tables = [[[c.text for c in row.cells] for row in table.rows] for table in doc.tables]
-        return {"kind": "word", "paragraphs": paragraphs, "headings": headings, "tables": tables, "sections": len(doc.sections)}
+        return inspect_docx(path)
     if suffix == ".xlsx":
         book = load_workbook(path, read_only=False, data_only=False)
         sheets = []
@@ -167,7 +157,7 @@ def preview_edit(project: dict, relative: str, operations: list[dict[str, Any]])
     with tempfile.TemporaryDirectory(prefix="olladex-office-preview-") as directory:
         preview_path = Path(directory) / source.name
         shutil.copy2(source, preview_path)
-        _mutate(preview_path, operations)
+        _mutate(project, preview_path, operations)
         after = _inspect_path(preview_path)
     return {
         "status": "preview",
@@ -183,18 +173,16 @@ def edit(project: dict, relative: str, operations: list[dict[str, Any]]) -> dict
     source = _editable_path(project, relative)
     normalized = _normalized_relative(project, source)
     before = _inspect_path(source)
-
     temporary = source.with_name(f".{source.stem}.olladex-edit-{os.getpid()}{source.suffix}")
     shutil.copy2(source, temporary)
     try:
-        _mutate(temporary, operations)
+        _mutate(project, temporary, operations)
         after = _inspect_path(temporary)
         backup = _backup_file(project, source, normalized)
         os.replace(temporary, source)
     except Exception:
         temporary.unlink(missing_ok=True)
         raise
-
     return {
         "status": "applied",
         "path": normalized,
@@ -229,39 +217,18 @@ def _backup_file(project: dict, source: Path, normalized: str) -> str:
     return backup.relative_to(project_root(project)).as_posix()
 
 
-def _mutate(path: Path, operations: list[dict[str, Any]]) -> None:
+def _mutate(project: dict, path: Path, operations: list[dict[str, Any]]) -> None:
     if not operations:
         raise ValueError("At least one Office edit operation is required")
     suffix = path.suffix.lower()
     if suffix == ".docx":
-        _mutate_docx(path, operations)
+        mutate_docx(project, path, operations)
     elif suffix == ".xlsx":
         _mutate_xlsx(path, operations)
     elif suffix == ".pptx":
         _mutate_pptx(path, operations)
     else:
         raise ValueError("Structured editing supports DOCX, XLSX and PPTX")
-
-
-def _mutate_docx(path: Path, operations: list[dict[str, Any]]) -> None:
-    doc = Document(path)
-    for operation in operations:
-        action = operation.get("action")
-        if action == "set_paragraph":
-            index = _index(operation, "paragraph_index", len(doc.paragraphs))
-            doc.paragraphs[index].text = str(operation.get("text", ""))
-        elif action == "append_paragraph":
-            style = operation.get("style")
-            doc.add_paragraph(str(operation.get("text", "")), style=str(style) if style else None)
-        elif action == "set_table_cell":
-            table_index = _index(operation, "table_index", len(doc.tables))
-            table = doc.tables[table_index]
-            row_index = _index(operation, "row_index", len(table.rows))
-            column_index = _index(operation, "column_index", len(table.rows[row_index].cells))
-            table.rows[row_index].cells[column_index].text = str(operation.get("text", ""))
-        else:
-            raise ValueError(f"Unsupported DOCX edit action: {action}")
-    doc.save(path)
 
 
 def _mutate_xlsx(path: Path, operations: list[dict[str, Any]]) -> None:
