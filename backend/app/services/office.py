@@ -122,7 +122,13 @@ def _format_sheet(sheet) -> None:
         sheet.column_dimensions[letter].width = width
 
 
-def create(project: dict, kind: str, relative: str, title: str, content: str, data: list[list]) -> dict:
+def create(project: dict, kind: str, relative: str, title: str, content: str, data: list[Any]) -> dict:
+    if kind in {"preview", "edit"}:
+        if not all(isinstance(item, dict) for item in data):
+            raise ValueError("Office edit data must contain structured operation objects")
+        operations = [dict(item) for item in data]
+        return preview_edit(project, relative, operations) if kind == "preview" else edit(project, relative, operations)
+
     path = safe_path(project, relative)
     path.parent.mkdir(parents=True, exist_ok=True)
     if kind == "docx":
@@ -135,6 +141,8 @@ def create(project: dict, kind: str, relative: str, title: str, content: str, da
         sheet = book.active
         sheet.title = title[:31] or "Sheet1"
         for row in data or [[title], [content]]:
+            if not isinstance(row, list):
+                raise ValueError("Excel creation data must contain rows")
             sheet.append(row)
         _format_sheet(sheet)
         book.save(path)
