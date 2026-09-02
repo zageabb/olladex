@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import difflib
-from pathlib import Path
 
 from fastapi import HTTPException
 
+from ..database import connect
 from . import workspace
 
 
@@ -66,25 +66,43 @@ def selected_content(before: str, after: str, hunk_indexes: list[int] | None) ->
     return "".join(output)
 
 
+def _target_project(project: dict, change: dict) -> dict:
+    session_id = change.get("session_id")
+    if not session_id:
+        return project
+    with connect() as conn:
+        task = conn.execute(
+            "SELECT worktree_path,worktree_branch FROM background_tasks WHERE session_id=? AND worktree_path<>'' ORDER BY id DESC LIMIT 1",
+            (session_id,),
+        ).fetchone()
+    if not task:
+        return project
+    target = dict(project)
+    target["path"] = task["worktree_path"]
+    target["task_branch"] = task["worktree_branch"]
+    return target
+
+
 def apply(project: dict, change: dict, hunk_indexes: list[int] | None) -> str:
     if change["status"] != "proposed":
         raise HTTPException(409, "Only proposed changes can be applied")
-    path = workspace.safe_path(project, change["path"])
+    target = _target_project(project, change)
+    path = workspace.safe_path(target, change["path"])
     current = path.read_text(encoding="utf-8") if path.exists() else ""
     if current != change["before_content"]:
         raise HTTPException(409, "The file changed after this proposal was created; review a fresh diff")
     content = selected_content(change["before_content"], change["after_content"], hunk_indexes)
-    workspace.write_text(project, change["path"], content)
+    workspace.write_text(target, change["path"], content)
     return content
 
 
 def revert(project: dict, change: dict) -> None:
     if change["status"] != "applied":
         raise HTTPException(409, "Only applied changes can be reverted")
-    path = workspace.safe_path(project, change["path"])
+    target = _target_project(project, change)
+    path = workspace.safe_path(target, change["path"])
     current = path.read_text(encoding="utf-8") if path.exists() else ""
     expected = change.get("applied_content") or change["after_content"]
     if current != expected:
         raise HTTPException(409, "The file has changed since this edit was applied; automatic revert was stopped")
-    workspace.write_text(project, change["path"], change["before_content"])
-
+    workspace.write_text(target, change["path"], change["before_content"])
