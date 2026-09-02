@@ -2,7 +2,7 @@ import os
 
 import uvicorn
 
-from backend.app.main import app
+from backend.app.api import app
 
 
 if __name__ == "__main__":
