@@ -14,7 +14,7 @@ npm --prefix frontend install --cache "$npm_cache_dir"
 mkdir -p data
 
 OLLADEX_DATA_ROOT="${OLLADEX_DATA_ROOT:-$project_root/data}" \
-  .venv/bin/uvicorn backend.app.main:app --host 0.0.0.0 --port "${OLLADEX_API_PORT:-8001}" &
+  .venv/bin/uvicorn backend.app.api:app --host 0.0.0.0 --port "${OLLADEX_API_PORT:-8001}" &
 backend_pid=$!
 trap 'kill "$backend_pid" 2>/dev/null || true' EXIT
 
