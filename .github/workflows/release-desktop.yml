@@ -75,11 +75,21 @@ jobs:
       - name: Package macOS
         if: matrix.platform == 'macos'
         working-directory: desktop
-        run: npx electron-builder --mac dmg --publish never
+        shell: bash
+        run: |
+          if [[ -z "${CSC_LINK:-}" ]]; then
+            unset CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
+          fi
+          npx electron-builder --mac dmg --publish never
       - name: Package Windows
         if: matrix.platform == 'windows'
         working-directory: desktop
-        run: npx electron-builder --win nsis --publish never
+        shell: pwsh
+        run: |
+          if (-not $env:CSC_LINK) {
+            Remove-Item Env:CSC_LINK, Env:CSC_KEY_PASSWORD -ErrorAction SilentlyContinue
+          }
+          npx electron-builder --win nsis --publish never
       - uses: actions/upload-artifact@v4
         with:
           name: Olladex-${{ matrix.platform }}-${{ runner.arch }}
