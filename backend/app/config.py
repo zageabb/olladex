@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     command_timeout_seconds: int = 120
     max_file_bytes: int = 2_000_000
     context_candidate_files: int = 24
+    task_workers: int = 3
 
     @property
     def database_path(self) -> Path:
