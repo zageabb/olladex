@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { request } from "../lib/api";
+import { WordStudio } from "./WordStudio";
 
 type OfficePreview = Record<string, unknown>;
 type OfficeOperation = Record<string, unknown>;
@@ -33,10 +34,8 @@ export function OfficeEditor({
   onPreviewChanged: (preview: OfficePreview) => void;
 }) {
   const kind = String(preview.kind || "");
-  const paragraphs = useMemo(() => records(preview.paragraphs), [preview]);
   const sheets = useMemo(() => records(preview.sheets), [preview]);
   const slides = useMemo(() => records(preview.slides), [preview]);
-  const [paragraphIndex, setParagraphIndex] = useState(0);
   const [sheetName, setSheetName] = useState("");
   const [cell, setCell] = useState("A1");
   const [slideIndex, setSlideIndex] = useState(0);
@@ -46,11 +45,7 @@ export function OfficeEditor({
 
   useEffect(() => {
     setStatus("");
-    if (kind === "word") {
-      const index = paragraphs.length > 1 ? 1 : 0;
-      setParagraphIndex(index);
-      setText(String(paragraphs[index]?.text ?? ""));
-    } else if (kind === "excel") {
+    if (kind === "excel") {
       const first = sheets[0];
       const name = String(first?.name ?? "");
       setSheetName(name);
@@ -64,11 +59,10 @@ export function OfficeEditor({
       setShapeIndex(firstTextShape);
       setText(String(shapes[firstTextShape]?.text ?? ""));
     }
-  }, [kind, paragraphs, sheets, slides, selectedPath]);
+  }, [kind, sheets, slides, selectedPath]);
 
-  function selectParagraph(index: number) {
-    setParagraphIndex(index);
-    setText(String(paragraphs[index]?.text ?? ""));
+  if (kind === "word") {
+    return <WordStudio projectId={projectId} selectedPath={selectedPath} preview={preview} onPreviewChanged={onPreviewChanged} />;
   }
 
   function selectCell(nextSheet: string, address: string, value: unknown) {
@@ -84,15 +78,8 @@ export function OfficeEditor({
   }
 
   function operation(): OfficeOperation {
-    if (kind === "word") {
-      return { action: "set_paragraph", paragraph_index: paragraphIndex, text };
-    }
-    if (kind === "excel") {
-      return { action: "set_cell", sheet: sheetName, cell, value: text };
-    }
-    if (kind === "powerpoint") {
-      return { action: "set_shape_text", slide_index: slideIndex, shape_index: shapeIndex, text };
-    }
+    if (kind === "excel") return { action: "set_cell", sheet: sheetName, cell, value: text };
+    if (kind === "powerpoint") return { action: "set_shape_text", slide_index: slideIndex, shape_index: shapeIndex, text };
     throw new Error("This Office file is read-only in the structured editor");
   }
 
@@ -104,12 +91,9 @@ export function OfficeEditor({
         body: JSON.stringify({ kind: mode, path: selectedPath, title: "", content: "", data: [operation()] }),
       });
       const after = response.after;
-      if (after && typeof after === "object" && !Array.isArray(after)) {
-        onPreviewChanged(after as OfficePreview);
-      }
-      if (mode === "preview") {
-        setStatus("Preview generated. The file has not been changed.");
-      } else {
+      if (after && typeof after === "object" && !Array.isArray(after)) onPreviewChanged(after as OfficePreview);
+      if (mode === "preview") setStatus("Preview generated. The file has not been changed.");
+      else {
         const backup = String(response.backup_path || "");
         setStatus(backup ? `Applied. Backup: ${backup}` : "Applied with history backup.");
       }
@@ -118,21 +102,13 @@ export function OfficeEditor({
     }
   }
 
-  if (!selectedPath || !["word", "excel", "powerpoint"].includes(kind)) {
+  if (!selectedPath || !["excel", "powerpoint"].includes(kind)) {
     return <section className="office-create"><p className="eyebrow">Structured editor</p><h3>Read-only preview</h3><p>Editing is currently available for DOCX, XLSX and PPTX files.</p></section>;
   }
 
   return <section className="office-create">
     <p className="eyebrow">Structured editor</p>
-    <h3>Edit {kind === "word" ? "Word" : kind === "excel" ? "Excel" : "PowerPoint"}</h3>
-
-    {kind === "word" && <>
-      <label>Paragraph
-        <select value={paragraphIndex} onChange={(event) => selectParagraph(Number(event.target.value))}>
-          {paragraphs.map((paragraph, index) => <option key={index} value={index}>P{index} · {String(paragraph.style || "Normal")} · {String(paragraph.text || "").slice(0, 60)}</option>)}
-        </select>
-      </label>
-    </>}
+    <h3>Edit {kind === "excel" ? "Excel" : "PowerPoint"}</h3>
 
     {kind === "excel" && <>
       <label>Sheet
