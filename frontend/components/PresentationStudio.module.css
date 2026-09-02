@@ -1,0 +1,26 @@
+.studio { display: grid; gap: 10px; }
+.layout { display: grid; grid-template-columns: 150px minmax(0, 1fr) 250px; gap: 10px; align-items: start; }
+.thumbRail { max-height: 620px; overflow: auto; display: grid; gap: 8px; }
+.thumb { padding: 7px; background: #fff; border: 1px solid var(--line); border-radius: 8px; text-align: left; }
+.thumb.active { border-color: #8ab5f2; background: #edf5ff; }
+.thumbSlide { aspect-ratio: 16 / 9; overflow: hidden; padding: 6px; background: #fff; border: 1px solid #dce3ed; box-shadow: 0 2px 7px #172a4412; font-size: 6px; }
+.canvasWrap { overflow: auto; padding: 18px; background: #e9edf3; border: 1px solid var(--line); border-radius: 10px; }
+.canvas { position: relative; width: min(100%, 820px); aspect-ratio: 16 / 9; margin: 0 auto; overflow: hidden; background: #fff; box-shadow: 0 8px 25px #182c4818; }
+.shape { position: absolute; overflow: hidden; padding: 4px; border: 1px solid transparent; background: transparent; color: #202124; text-align: left; white-space: pre-wrap; }
+.shape:hover { border-color: #b9c9dc; }
+.shape.selected { border-color: var(--blue); background: #edf5ff70; }
+.sidebar { display: grid; gap: 10px; }
+.card { padding: 11px; background: #fff; border: 1px solid var(--line); border-radius: 9px; }
+.card h4 { margin: 0 0 8px; font-size: 10px; }
+.card label { margin-top: 6px; display: grid; gap: 4px; color: #66768b; font-size: 8px; font-weight: 700; text-transform: uppercase; }
+.card input, .card textarea, .card select { width: 100%; padding: 7px; border: 1px solid var(--line); border-radius: 6px; font-size: 9px; text-transform: none; }
+.card textarea { min-height: 72px; resize: vertical; }
+.card button { margin: 6px 4px 0 0; padding: 6px 8px; font-size: 8px; }
+.toolbar { padding: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; background: #f7f9fc; border: 1px solid var(--line); border-radius: 9px; }
+.toolbar input, .toolbar select { min-height: 30px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 6px; background: #fff; font-size: 9px; }
+.toolbar input[type="number"] { width: 68px; }
+.toolbar input[type="color"] { width: 38px; padding: 3px; }
+.toolbar button { padding: 6px 8px; font-size: 9px; }
+.status { color: var(--muted); font-size: 9px; }
+@media (max-width: 1050px) { .layout { grid-template-columns: 120px 1fr; } .sidebar { grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .layout { grid-template-columns: 1fr; } .thumbRail { display: flex; } .thumb { min-width: 120px; } .sidebar { grid-template-columns: 1fr; } }
