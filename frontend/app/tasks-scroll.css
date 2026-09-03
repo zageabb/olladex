@@ -1,0 +1,33 @@
+.tasks-workspace,
+.tasks-dashboard {
+  min-height: 0;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #9aa9bd #eef2f7;
+}
+
+.tasks-workspace::-webkit-scrollbar,
+.tasks-dashboard::-webkit-scrollbar {
+  width: 10px;
+}
+
+.tasks-workspace::-webkit-scrollbar-track,
+.tasks-dashboard::-webkit-scrollbar-track {
+  background: #eef2f7;
+}
+
+.tasks-workspace::-webkit-scrollbar-thumb,
+.tasks-dashboard::-webkit-scrollbar-thumb {
+  background: #9aa9bd;
+  border: 2px solid #eef2f7;
+  border-radius: 999px;
+}
+
+.tasks-workspace::-webkit-scrollbar-thumb:hover,
+.tasks-dashboard::-webkit-scrollbar-thumb:hover {
+  background: #7789a1;
+}
