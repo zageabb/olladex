@@ -45,6 +45,7 @@ def test_background_task_write_file_updates_only_the_isolated_worktree(tmp_path,
     assert result["task_id"] == 42
     assert activity["tool"] == "task_write_file"
     assert "isolated task workspace" in activity["summary"]
+    assert activity["result"] == {"path": "app.txt", "status": "applied", "task_id": 42, "workspace": "task_worktree"}
 
 
 def test_background_task_write_is_blocked_without_an_isolated_worktree(tmp_path, monkeypatch):
