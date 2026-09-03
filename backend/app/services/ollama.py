@@ -17,7 +17,7 @@ TOOLS = [
     {"type": "function", "function": {"name": "get_project_tree", "description": "List the repository tree", "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "read_file", "description": "Read a UTF-8 repository file", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
     {"type": "function", "function": {"name": "search_code", "description": "Search filenames and text", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
-    {"type": "function", "function": {"name": "write_file", "description": "Propose a complete UTF-8 file change for user review. Use only when the user asks for changes.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
+    {"type": "function", "function": {"name": "write_file", "description": "Write or propose a complete UTF-8 file change. In a background task, write directly to the isolated task worktree. In interactive chat, propose the change for user review. Use only when the user asks for changes.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
     {"type": "function", "function": {"name": "run_command", "description": "Run a bash command in the project", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
 ]
 
@@ -72,20 +72,36 @@ def _execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
         result = workspace.search(project, args.get("query", ""))
     elif name == "write_file":
         path = args.get("path", "")
-        try:
-            before = workspace.read_text(project, path)
-        except Exception:
-            before = ""
         after = args.get("content", "")
-        import difflib
-        diff = "".join(difflib.unified_diff(before.splitlines(True), after.splitlines(True), fromfile=f"a/{path}", tofile=f"b/{path}"))
-        result = {"path": path, "diff": diff, "before": before, "after": after, "status": "proposed"}
+        task_id = task_queue.current_task_id()
+        if task_id:
+            if not task_queue.current_worktree_path():
+                raise ValueError("Background task file writes require an isolated Git worktree; the main project was left unchanged")
+            before, after, diff = workspace.write_text(project, path, after)
+            result = {
+                "path": path,
+                "diff": diff,
+                "before": before,
+                "after": after,
+                "status": "applied",
+                "task_id": task_id,
+                "workspace": "task_worktree",
+            }
+        else:
+            try:
+                before = workspace.read_text(project, path)
+            except Exception:
+                before = ""
+            import difflib
+            diff = "".join(difflib.unified_diff(before.splitlines(True), after.splitlines(True), fromfile=f"a/{path}", tofile=f"b/{path}"))
+            result = {"path": path, "diff": diff, "before": before, "after": after, "status": "proposed"}
     elif name == "run_command":
         command = args.get("command", "")
         result = {"command": command, "output": "Awaiting approval", "exit_code": -1, "status": "pending"} if requires_approval(project, command) else {**run_command(project, command), "status": "completed"}
     else:
         result = {"error": f"Unknown tool: {name}"}
-    activity = {"tool": name, "arguments": args, "summary": summarize(name, result), "result": result}
+    activity_name = "task_write_file" if name == "write_file" and isinstance(result, dict) and result.get("status") == "applied" else name
+    activity = {"tool": activity_name, "arguments": args, "summary": summarize(name, result), "result": result}
     return result, activity
 
 
@@ -109,6 +125,8 @@ def summarize(name: str, result: Any) -> str:
     if name == "get_project_tree":
         return "Mapped repository"
     if name == "write_file":
+        if result.get("status") == "applied":
+            return f"Wrote {result.get('path')} in the isolated task workspace"
         return f"Proposed {result.get('path')} for review"
     if name == "run_command":
         return "Awaiting command approval" if result.get("status") == "pending" else f"Exited with code {result.get('exit_code')}"
@@ -149,6 +167,13 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
     intelligence["symbols"] = intelligence.get("symbols", [])[:40]
     embedding_model = project.get("profile_embedding_model") or settings.ollama_embedding_model
     selected_context = ranked_context(project, request, embedder=lambda texts: embed_texts(texts, embedding_model), embedding_model=embedding_model, max_files=project.get("profile_context_files") or 8, max_chars=project.get("profile_context_chars") or 32000)
+    task_context = ""
+    if task_queue.current_task_id():
+        task_context = (
+            "\n\nBackground task mode: you are working inside an isolated Git worktree. "
+            "When changes are requested, use write_file to apply them directly in this task worktree. "
+            "You may edit multiple files and run appropriate checks. Do not merely describe edits that should be made."
+        )
     system = (
         "You are Olladex, a careful local software-development agent. Work only inside the selected repository. "
         "Use tools to inspect evidence before answering. Keep the user informed in concise language. "
@@ -158,6 +183,7 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
         + "\n\nRepository intelligence:\n" + json.dumps(intelligence, default=str)[:20_000]
         + ("\n\nPersistent session summary:\n" + session_summary if session_summary else "")
         + "\n\nAutomatically ranked repository context:\n" + format_context(selected_context)
+        + task_context
     )
     messages: list[dict] = [{"role": "system", "content": system}, *history[-30:]]
     activities: list[dict] = []
