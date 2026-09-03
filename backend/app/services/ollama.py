@@ -101,7 +101,10 @@ def _execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
     else:
         result = {"error": f"Unknown tool: {name}"}
     activity_name = "task_write_file" if name == "write_file" and isinstance(result, dict) and result.get("status") == "applied" else name
-    activity = {"tool": activity_name, "arguments": args, "summary": summarize(name, result), "result": result}
+    activity_result = result
+    if activity_name == "task_write_file":
+        activity_result = {key: result.get(key) for key in ("path", "status", "task_id", "workspace")}
+    activity = {"tool": activity_name, "arguments": args, "summary": summarize(name, result), "result": activity_result}
     return result, activity
 
 
