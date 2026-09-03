@@ -46,10 +46,14 @@ def create_for_task(project: dict, task_id: int, start_ref: str = "HEAD") -> dic
         if code == 0:
             return {"path": str(path), "branch": head.strip() or branch, "reused": True}
         shutil.rmtree(path, ignore_errors=True)
-    code, output = _git(root, "worktree", "add", "-b", branch, str(path), start_ref, timeout=120)
+    branch_exists, _ = _git(root, "show-ref", "--verify", "--quiet", f"refs/heads/{branch}")
+    if branch_exists == 0:
+        code, output = _git(root, "worktree", "add", str(path), branch, timeout=120)
+    else:
+        code, output = _git(root, "worktree", "add", "-b", branch, str(path), start_ref, timeout=120)
     if code:
         raise ValueError(output.strip() or "Could not create isolated Git worktree")
-    return {"path": str(path), "branch": branch, "reused": False}
+    return {"path": str(path), "branch": branch, "reused": branch_exists == 0}
 
 
 def inherit_branches(project: dict, path: str, branches: list[str]) -> dict:
