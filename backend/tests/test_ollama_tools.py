@@ -32,6 +32,7 @@ def test_background_task_write_file_updates_only_the_isolated_worktree(tmp_path,
     (worktree_root / "app.txt").write_text("task copy\n", encoding="utf-8")
     project = {"id": 1, "name": "Tools", "path": str(project_root), "model": "test"}
 
+    monkeypatch.setattr(task_queue, "cancel_requested", lambda: False)
     monkeypatch.setattr(task_queue, "current_task_id", lambda: 42)
     monkeypatch.setattr(task_queue, "current_worktree_path", lambda: str(worktree_root))
 
@@ -51,6 +52,7 @@ def test_background_task_write_is_blocked_without_an_isolated_worktree(tmp_path,
     target.write_text("main copy\n", encoding="utf-8")
     project = {"id": 1, "name": "Tools", "path": str(tmp_path), "model": "test"}
 
+    monkeypatch.setattr(task_queue, "cancel_requested", lambda: False)
     monkeypatch.setattr(task_queue, "current_task_id", lambda: 99)
     monkeypatch.setattr(task_queue, "current_worktree_path", lambda: "")
 
