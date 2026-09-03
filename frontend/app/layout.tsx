@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import "./chat-scroll.css";
 import "./chat-history.css";
+import "./tasks-scroll.css";
 
 export const metadata: Metadata = {
   title: "Olladex — Local AI Development Agent",
