@@ -32,7 +32,7 @@ def task_project(project: dict, path: str) -> dict:
     return {**project, "path": str(target)}
 
 
-def create_for_task(project: dict, task_id: int) -> dict:
+def create_for_task(project: dict, task_id: int, start_ref: str = "HEAD") -> dict:
     root = project_root(project)
     code, inside = _git(root, "rev-parse", "--is-inside-work-tree")
     if code or inside.strip() != "true":
@@ -46,10 +46,39 @@ def create_for_task(project: dict, task_id: int) -> dict:
         if code == 0:
             return {"path": str(path), "branch": head.strip() or branch, "reused": True}
         shutil.rmtree(path, ignore_errors=True)
-    code, output = _git(root, "worktree", "add", "-b", branch, str(path), "HEAD", timeout=120)
+    code, output = _git(root, "worktree", "add", "-b", branch, str(path), start_ref, timeout=120)
     if code:
         raise ValueError(output.strip() or "Could not create isolated Git worktree")
     return {"path": str(path), "branch": branch, "reused": False}
+
+
+def inherit_branches(project: dict, path: str, branches: list[str]) -> dict:
+    task = task_project(project, path)
+    root = project_root(task)
+    unique: list[str] = []
+    for branch in branches:
+        branch = str(branch or "").strip()
+        if not branch:
+            continue
+        if not branch.startswith("olladex/task-"):
+            raise ValueError(f"Refusing non-task dependency branch: {branch}")
+        if branch not in unique:
+            unique.append(branch)
+    for branch in unique:
+        ancestor_code, _ = _git(root, "merge-base", "--is-ancestor", branch, "HEAD")
+        if ancestor_code == 0:
+            continue
+        code, output = _git(
+            root,
+            "-c", f"user.name={project.get('git_author_name') or 'Olladex User'}",
+            "-c", f"user.email={project.get('git_author_email') or 'olladex@local'}",
+            "merge", "--no-edit", branch,
+            timeout=180,
+        )
+        if code:
+            _git(root, "merge", "--abort")
+            raise ValueError(f"Dependency branch {branch} could not be inherited: {output.strip()}")
+    return summary(project, path)
 
 
 def summary(project: dict, path: str, base: str = "main") -> dict:
