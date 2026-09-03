@@ -180,6 +180,30 @@ def _dependency_context(task: dict) -> str:
     return "\n".join(parts)
 
 
+def _dependency_branches(task: dict) -> list[str]:
+    dependency_ids = _dependency_ids(task)
+    if not dependency_ids:
+        return []
+    placeholders = ",".join("?" for _ in dependency_ids)
+    with connect() as conn:
+        rows = [dict(row) for row in conn.execute(
+            f"SELECT id,status,worktree_branch FROM background_tasks WHERE id IN ({placeholders}) ORDER BY id",
+            dependency_ids,
+        )]
+    by_id = {int(row["id"]): row for row in rows}
+    branches: list[str] = []
+    for dependency_id in dependency_ids:
+        item = by_id.get(dependency_id)
+        if not item or item.get("status") != "completed":
+            raise ValueError(f"Dependency task #{dependency_id} is not ready for workspace hand-off")
+        branch = str(item.get("worktree_branch") or "").strip()
+        if not branch:
+            raise ValueError(f"Dependency task #{dependency_id} has no isolated task branch to inherit")
+        if branch not in branches:
+            branches.append(branch)
+    return branches
+
+
 def _claim_next() -> dict | None:
     with connect() as conn:
         candidates = [dict(row) for row in conn.execute("SELECT * FROM background_tasks WHERE status='queued' ORDER BY id LIMIT 100")]
@@ -200,24 +224,46 @@ def _claim_next() -> dict | None:
     return None
 
 
-def _prepare_isolation(task: dict) -> threading.Lock | None:
-    from . import worktrees
+def _project_for_task(task: dict) -> dict:
     with connect() as conn:
         row = conn.execute("SELECT * FROM projects WHERE id=?", (task["project_id"],)).fetchone()
     if not row:
         raise ValueError("Project not found")
-    project = dict(row)
+    return dict(row)
+
+
+def _prepare_isolation(task: dict) -> threading.Lock | None:
+    from . import worktrees
+    project = _project_for_task(task)
+    dependency_ids = _dependency_ids(task)
+    strict_isolation = task.get("source_kind") == "lead_specialist" or (bool(dependency_ids) and task.get("source_kind") != "lead_consolidation")
     try:
         isolated = worktrees.create_for_task(project, task["id"])
         set_worktree(task["id"], isolated["path"], isolated["branch"])
         task["worktree_path"] = isolated["path"]
         task["worktree_branch"] = isolated["branch"]
+        if dependency_ids and task.get("source_kind") != "lead_consolidation":
+            worktrees.inherit_branches(project, isolated["path"], _dependency_branches(task))
         return None
     except ValueError:
+        if strict_isolation:
+            raise
         with _lock:
             fallback = _fallback_project_locks.setdefault(task["project_id"], threading.Lock())
         fallback.acquire()
         return fallback
+
+
+def _auto_commit_specialist(task: dict) -> str:
+    if task.get("source_kind") != "lead_specialist" or not task.get("worktree_path"):
+        return ""
+    from . import worktrees
+    project = _project_for_task(task)
+    summary = worktrees.summary(project, task["worktree_path"])
+    if not summary.get("changes"):
+        return ""
+    committed = worktrees.commit_all(project, task["worktree_path"], f"Olladex task #{task['id']}: {task['title']}")
+    return str(committed.get("sha") or "")
 
 
 def _finalize_parent(task: dict, final_status: str, result: str = "", error: str = "") -> None:
@@ -257,6 +303,11 @@ def run_once() -> bool:
         with connect() as conn:
             current = conn.execute("SELECT cancel_requested FROM background_tasks WHERE id=?", (task["id"],)).fetchone()
             final_status = "cancelled" if current and current["cancel_requested"] else "completed"
+        if final_status == "completed":
+            commit_sha = _auto_commit_specialist(task)
+            if commit_sha:
+                result = f"{result}\n\nTask branch auto-committed as {commit_sha[:12]}."
+        with connect() as conn:
             conn.execute("UPDATE background_tasks SET status=?,result=?,completed_at=? WHERE id=?", (final_status, result, now(), task["id"]))
         _finalize_parent(task, final_status, result=result, error="Lead consolidation task was cancelled")
     except Exception as exc:
