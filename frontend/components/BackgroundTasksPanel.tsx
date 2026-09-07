@@ -5,7 +5,7 @@ import { request } from "../lib/api";
 
 type BackgroundTask = {
   id: number; session_id: number; title: string; prompt: string; source_kind: string; source_ref: string;
-  status: "queued" | "running" | "completed" | "cancelled" | "failed"; result: string; error: string;
+  status: "queued" | "running" | "completed" | "cancelled" | "failed" | "interrupted" | "budget_exhausted" | "waiting_for_approval" | "waiting_for_input"; result: string; error: string;
   cancel_requested: number; created_at: string; started_at: string; completed_at: string;
   worktree_path?: string; worktree_branch?: string;
   pull_request_number?: number; pull_request_url?: string; pull_request_state?: string;
@@ -194,11 +194,11 @@ export function BackgroundTasksPanel({ projectId, onOpenSession }: { projectId: 
               {!task.pull_request_number ? <><label>PR title<input value={draft?.title || ""} onChange={(event) => updateDraft(task.id, "title", event.target.value)} /></label>
               <label>Base<input value={draft?.base || "main"} onChange={(event) => updateDraft(task.id, "base", event.target.value)} /></label>
               <label>Description<textarea value={draft?.body || ""} onChange={(event) => updateDraft(task.id, "body", event.target.value)} /></label></> : null}
-              <div className="activity-actions">{!task.pull_request_number ? <button disabled={busyTask === task.id || !draft?.title.trim()} onClick={() => createPullRequest(task)}>Create PR</button> : <button disabled={busyTask === task.id} onClick={() => syncLifecycle(task)}>Sync PR lifecycle</button>}{task.status !== "running" && task.status !== "queued" && <button disabled={busyTask === task.id} onClick={() => cleanupTask(task)}>Clean up worktree</button>}</div>
+              <div className="activity-actions">{!task.pull_request_number ? <button disabled={busyTask === task.id || !draft?.title.trim()} onClick={() => createPullRequest(task)}>Create PR</button> : <button disabled={busyTask === task.id} onClick={() => syncLifecycle(task)}>Sync PR lifecycle</button>}{!["running", "queued", "waiting_for_approval", "waiting_for_input"].includes(task.status) && <button disabled={busyTask === task.id} onClick={() => cleanupTask(task)}>Clean up worktree</button>}</div>
             </div>
             {(worktree.working_diff || worktree.branch_diff) ? <pre>{worktree.working_diff || worktree.branch_diff}</pre> : <p>No diff against {worktree.base}.</p>}
           </details>}
-          <footer><button onClick={() => onOpenSession(task.session_id)}>Open session</button>{task.worktree_path && <button onClick={() => inspectWorktree(task)} disabled={busyTask === task.id}>{busyTask === task.id ? "Working…" : worktree ? "Refresh branch" : "Review branch"}</button>}{(task.status === "queued" || task.status === "running") && <button onClick={() => cancel(task)}>{task.status === "running" ? "Request stop" : "Cancel"}</button>}</footer>
+          <footer><button onClick={() => onOpenSession(task.session_id)}>Open session</button>{task.worktree_path && <button onClick={() => inspectWorktree(task)} disabled={busyTask === task.id}>{busyTask === task.id ? "Working…" : worktree ? "Refresh branch" : "Review branch"}</button>}{(["queued", "running", "waiting_for_approval", "waiting_for_input"].includes(task.status)) && <button onClick={() => cancel(task)}>{task.status === "running" ? "Request stop" : "Cancel"}</button>}</footer>
         </article>;
       }) : <div className="empty-panel"><span>◷</span><h3>No queued work</h3><p>Queue a prompt here or import an open GitHub issue from the Changes panel.</p></div>}
     </section>{notice && <div className="queue-notice">{notice}</div>}

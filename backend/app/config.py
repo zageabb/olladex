@@ -1,4 +1,6 @@
 from pathlib import Path
+import secrets
+from pydantic import Field
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -15,6 +17,8 @@ class Settings(BaseSettings):
     max_file_bytes: int = 2_000_000
     context_candidate_files: int = 24
     task_workers: int = 3
+    api_token: str = Field(default_factory=lambda: secrets.token_urlsafe(32), min_length=24)
+    context_tokens: int = Field(default=16384, ge=8192, le=262144)
 
     @property
     def database_path(self) -> Path:

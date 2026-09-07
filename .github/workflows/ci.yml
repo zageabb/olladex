@@ -22,7 +22,7 @@ jobs:
       - name: Install backend dependencies
         run: python -m pip install --upgrade pip && pip install -r backend/requirements.txt
       - name: Run pytest
-        run: python -m pytest backend/tests -q
+        run: python -m pytest backend/tests -q -W error::pytest.PytestUnhandledThreadExceptionWarning
 
   frontend:
     name: Frontend build
@@ -43,6 +43,10 @@ jobs:
         run: npx tsc --noEmit
       - name: Build frontend
         run: npm run build
+      - name: Install browser
+        run: npx playwright install --with-deps chromium
+      - name: Conversation browser tests
+        run: npm run test:e2e
 
   desktop:
     name: Desktop checks

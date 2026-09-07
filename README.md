@@ -1,4 +1,4 @@
-# Olladex v0.6.0
+# Olladex
 
 **Local AI development agent for Ollama**  
 *Code locally. Build autonomously.*
@@ -7,13 +7,27 @@ Olladex is a Codex-style, repository-first development workspace powered by mode
 
 The interface follows the navy, blue, white and split-workspace design language established in Context Studio while focusing specifically on software-development work.
 
+## Conversation and execution
+
+Start with `./start-local.sh` and paste its connection token into the browser. Desktop builds connect automatically using an ephemeral token delivered through the preload bridge. The API requires bearer authentication; CORS is an additional origin check. Both development services bind to localhost.
+
+Messages stream while the agent works. Add guidance in the composer at any time, answer inline questions, or press **Stop**. Shell approvals show the exact command and working directory. Interactive file proposals pause execution until you apply or reject them, so subsequent checks use the reviewed content. Background edits stay in their task worktree.
+
+Turns, tool intentions/results and conversation checkpoints are stored in SQLite. Reopening a chat replays its activity and reconnects to active work. Restarted turns are marked **interrupted**, not automatically replayed. **Continue from saved context** preserves the original task workspace and tells the model to inspect uncertain tool outcomes before acting again. A tool budget limit is shown as **budget exhausted**, not success.
+
+Use **Saved preferences and decisions** to inspect, edit or clear persistent conversation memory. The agent can also save preferences you explicitly ask it to remember. Model profiles expose a context-token budget; configure it within the selected model's supported context length. Context sizing uses a conservative character estimate, reserves output space and keeps complete tool-response groups; it is not a model-specific tokenizer.
+
+File tools reject path escapes and skip symlink files when searching/indexing. **Shell execution is not an OS sandbox**: approved commands and Autonomous mode have your operating-system permissions. Review and Assisted modes require approval for arbitrary shell strings, including test scripts. Manually entered terminal commands are treated as explicit user instructions. Autonomous mode is an explicit trust choice.
+
+See [runtime architecture and verification](docs/conversation-runtime.md) for endpoint details, recovery semantics and remaining limitations.
+
 ## Core capabilities
 
 - Open and persist local repositories.
 - Connect to local or network-hosted Ollama and discover installed models.
 - Persistent projects, task sessions, messages and activity records in SQLite.
-- Persistent background task queue that processes Ollama jobs one at a time and writes results into normal sessions.
-- Bounded Ollama tool loop with visible tool activity.
+- Persistent background task queue with isolated worktrees and configurable worker concurrency.
+- Live streamed conversation, tool activity, inline questions, steering, Stop, and resumable saved context.
 - Repository tree, UTF-8 file viewer/editor and text/code search.
 - Review-first agent file proposals with selectable diff hunks, apply, reject and conflict-safe revert.
 - Project-scoped manual file writes with unified diffs and timestamped `.olladex/history` backups.
@@ -111,7 +125,7 @@ The packaging pipeline builds the production Next.js application, freezes the Fa
 
 macOS and Windows signing is optional. Configure `CSC_LINK` and `CSC_KEY_PASSWORD` as repository secrets; for Apple notarization also configure `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID`. Unsigned artifacts are produced when those credentials are absent.
 
-Packaged builds expose a manual update check. Because the current GitHub repository is private, set `OLLADEX_GITHUB_TOKEN` in the desktop process environment to permit release checks. Set `OLLADEX_AUTO_UPDATE_CHECK=1` to check automatically after launch. Olladex never writes this token to its database.
+Packaged builds expose a manual update check. For private GitHub repositories, set `OLLADEX_GITHUB_TOKEN` in the desktop process environment to permit release checks. Set `OLLADEX_AUTO_UPDATE_CHECK=1` to check automatically after launch. Olladex never writes this token to its database.
 
 A portable Linux x64 ZIP can be built with `npm --prefix desktop run portable:linux`.
 
@@ -122,8 +136,10 @@ python3 -m venv .venv
 .venv/bin/pip install -r backend/requirements.txt
 npm --prefix frontend install
 
-OLLADEX_DATA_ROOT="$PWD/data" .venv/bin/uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8001
-npm --prefix frontend run dev -- --hostname 0.0.0.0 --port 5081
+export OLLADEX_API_TOKEN="$(.venv/bin/python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+printf "Connection token: %s\n" "$OLLADEX_API_TOKEN"
+OLLADEX_DATA_ROOT="$PWD/data" .venv/bin/uvicorn backend.app.api:app --reload --host 127.0.0.1 --port 8001
+npm --prefix frontend run dev -- --hostname 127.0.0.1 --port 5081
 ```
 
 Run verification:

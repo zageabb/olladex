@@ -101,6 +101,18 @@ CREATE TABLE IF NOT EXISTS repository_index (
   indexed_at TEXT NOT NULL,
   PRIMARY KEY(project_id,path)
 );
+CREATE TABLE IF NOT EXISTS workspace_index (
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  workspace TEXT NOT NULL,
+  path TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  mtime_ns INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  vector TEXT NOT NULL DEFAULT '',
+  embedding_model TEXT NOT NULL DEFAULT '',
+  indexed_at TEXT NOT NULL,
+  PRIMARY KEY(project_id,workspace,path)
+);
 CREATE TABLE IF NOT EXISTS background_tasks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -158,10 +170,11 @@ ADDITIVE_COLUMNS = {
         "git_author_email": "TEXT NOT NULL DEFAULT 'olladex@local'",
         "model_profile_id": "INTEGER REFERENCES model_profiles(id) ON DELETE SET NULL",
     },
-    "model_profiles": {"is_builtin": "INTEGER NOT NULL DEFAULT 0"},
-    "sessions": {"summary": "TEXT NOT NULL DEFAULT ''", "last_summarized_message_id": "INTEGER NOT NULL DEFAULT 0"},
-    "file_changes": {"hunks": "TEXT NOT NULL DEFAULT '[]'", "applied_content": "TEXT NOT NULL DEFAULT ''", "updated_at": "TEXT NOT NULL DEFAULT ''"},
-    "command_runs": {"status": "TEXT NOT NULL DEFAULT 'completed'", "updated_at": "TEXT NOT NULL DEFAULT ''"},
+    "model_profiles": {"context_tokens": "INTEGER NOT NULL DEFAULT 16384","is_builtin": "INTEGER NOT NULL DEFAULT 0"},
+    "messages": {"run_id": "INTEGER"},
+    "sessions": {"memory": "TEXT NOT NULL DEFAULT ''","summary": "TEXT NOT NULL DEFAULT ''", "last_summarized_message_id": "INTEGER NOT NULL DEFAULT 0"},
+    "file_changes": {"workspace_path": "TEXT NOT NULL DEFAULT ''","hunks": "TEXT NOT NULL DEFAULT '[]'", "applied_content": "TEXT NOT NULL DEFAULT ''", "updated_at": "TEXT NOT NULL DEFAULT ''"},
+    "command_runs": {"task_id": "INTEGER", "run_id": "INTEGER", "cwd": "TEXT NOT NULL DEFAULT ''","status": "TEXT NOT NULL DEFAULT 'completed'", "updated_at": "TEXT NOT NULL DEFAULT ''"},
     "git_operations": {"remote_url": "TEXT NOT NULL DEFAULT ''"},
     "background_tasks": {
         "worktree_path": "TEXT NOT NULL DEFAULT ''", "worktree_branch": "TEXT NOT NULL DEFAULT ''",

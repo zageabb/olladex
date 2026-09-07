@@ -8,6 +8,11 @@ const path = require("node:path");
 const API_PORT = "8001";
 const UI_PORT = "5081";
 const processes = [];
+const apiToken = require("node:crypto").randomBytes(32).toString("hex");
+ipcMain.handle("olladex:connection", (event) => {
+  if (new URL(event.senderFrame.url).origin !== `http://127.0.0.1:${UI_PORT}`) throw new Error("Untrusted connection request");
+  return { token: apiToken };
+});
 let updateState = { status: app.isPackaged && autoUpdater ? "idle" : "disabled", message: app.isPackaged && autoUpdater ? "Updates not checked" : "Updates are unavailable in this build", version: "" };
 
 function publishUpdateState(next) {
@@ -56,7 +61,7 @@ function startServices() {
   const root = rootPath();
   const dataRoot = path.join(app.getPath("userData"), "data");
   fs.mkdirSync(dataRoot, { recursive: true });
-  const common = { ...process.env, OLLADEX_DATA_ROOT: dataRoot, OLLADEX_API_PORT: API_PORT };
+  const common = { ...process.env, OLLADEX_DATA_ROOT: dataRoot, OLLADEX_API_PORT: API_PORT, OLLADEX_API_TOKEN: apiToken };
 
   if (app.isPackaged) {
     processes.push(spawn(path.join(root, "api", executable("olladex-api")), [], { cwd: root, env: common, stdio: "inherit" }));
@@ -92,8 +97,9 @@ async function createWindow() {
     title: "Olladex",
     webPreferences: { preload: path.join(__dirname, "preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
-  window.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: "deny" }; });
-  window.webContents.on("will-navigate", (event, url) => { if (!url.startsWith(`http://127.0.0.1:${UI_PORT}`)) { event.preventDefault(); shell.openExternal(url); } });
+  const openExternal = (url) => { try { if (["https:", "http:"].includes(new URL(url).protocol)) shell.openExternal(url); } catch {} };
+  window.webContents.setWindowOpenHandler(({ url }) => { openExternal(url); return { action: "deny" }; });
+  window.webContents.on("will-navigate", (event, url) => { if (new URL(url).origin !== `http://127.0.0.1:${UI_PORT}`) { event.preventDefault(); openExternal(url); } });
   await window.loadURL(`http://127.0.0.1:${UI_PORT}`);
 }
 

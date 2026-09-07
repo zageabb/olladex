@@ -35,6 +35,8 @@ def ranked_context(project: dict, query: str, max_files: int = 8, max_chars: int
         dirs[:] = [directory for directory in dirs if directory not in IGNORED]
         for name in files:
             path = Path(base) / name
+            if path.is_symlink():
+                continue
             if name in SKIP_NAMES or path.suffix.lower() not in TEXT_SUFFIXES:
                 continue
             try:

@@ -1,5 +1,6 @@
 "use client";
 
+import DOMPurify from "dompurify";
 import { useEffect, useRef, useState } from "react";
 
 const MERMAID_SAMPLE = `flowchart TD
@@ -37,14 +38,14 @@ export function DiagramStudio({ initialSource, initialEngine }: { initialSource?
         setError("");
         if (engine === "mermaid") {
           const mermaid = (await import("mermaid")).default;
-          mermaid.initialize({ startOnLoad: false, theme: "base", securityLevel: "strict", themeVariables: { primaryColor: "#eaf2ff", primaryBorderColor: "#1768e5", primaryTextColor: "#15233a", lineColor: "#64748b" } });
+          mermaid.initialize({ startOnLoad: false, htmlLabels: false, theme: "base", securityLevel: "strict", themeVariables: { primaryColor: "#eaf2ff", primaryBorderColor: "#1768e5", primaryTextColor: "#15233a", lineColor: "#64748b" } });
           const rendered = await mermaid.render(`olladex-diagram-${++id.current}`, source);
-          if (!cancelled) setSvg(rendered.svg);
+          if (!cancelled) setSvg(DOMPurify.sanitize(rendered.svg, { USE_PROFILES: { svg: true, svgFilters: true } }));
         } else {
           const { instance } = await import("@viz-js/viz");
           const viz = await instance();
           const rendered = viz.renderSVGElement(source);
-          if (!cancelled) setSvg(rendered.outerHTML);
+          if (!cancelled) setSvg(DOMPurify.sanitize(rendered.outerHTML, { USE_PROFILES: { svg: true, svgFilters: true } }));
         }
       } catch (err) {
         if (!cancelled) { setSvg(""); setError(err instanceof Error ? err.message : String(err)); }

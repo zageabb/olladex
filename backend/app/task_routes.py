@@ -157,7 +157,7 @@ def sync_task_lifecycle(task_id: int, body: TaskLifecycleRequest):
     checks = _check_summary(pr.get("statusCheckRollup"))
     cleaned = False
     cleanup_blocked = ""
-    if body.cleanup_merged and state == "MERGED" and task.get("worktree_path"):
+    if body.cleanup_merged and state == "MERGED" and task.get("worktree_path") and task.get("status") not in {"queued", "running", "waiting_for_approval", "waiting_for_input"}:
         try:
             summary = worktrees.summary(project, task["worktree_path"])
             if summary.get("changes"):
@@ -194,7 +194,7 @@ def sync_task_lifecycle(task_id: int, body: TaskLifecycleRequest):
 @router.post("/{task_id}/worktree/cleanup")
 def cleanup_task_worktree(task_id: int, body: TaskCleanupRequest):
     task, project = _task(task_id)
-    if task.get("status") in {"queued", "running"}:
+    if task.get("status") in {"queued", "running", "waiting_for_approval", "waiting_for_input"}:
         raise HTTPException(409, "Running or queued task worktrees cannot be removed")
     try:
         summary = worktrees.summary(project, task["worktree_path"])

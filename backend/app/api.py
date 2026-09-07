@@ -12,6 +12,10 @@ from .task_routes import router as task_router
 
 runtime_settings.load()
 
+from .conversation_routes import router as conversation_router
+app.include_router(conversation_router)
+from .terminal_routes import router as terminal_router
+app.include_router(terminal_router)
 app.include_router(task_router)
 app.include_router(chat_router)
 app.include_router(github_review_router)

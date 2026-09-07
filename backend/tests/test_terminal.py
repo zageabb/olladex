@@ -7,7 +7,7 @@ def project(path, mode="assisted"):
 
 def test_approval_modes(tmp_path):
     assert requires_approval(project(tmp_path, "review"), "pytest -q")
-    assert not requires_approval(project(tmp_path, "assisted"), "pytest -q")
+    assert requires_approval(project(tmp_path, "assisted"), "pytest -q")
     assert requires_approval(project(tmp_path, "assisted"), "pip install package")
     assert not requires_approval(project(tmp_path, "autonomous"), "pip install package")
 
