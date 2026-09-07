@@ -104,8 +104,16 @@ class DiagramRequest(BaseModel):
 
 
 class OfficeCreateRequest(BaseModel):
-    kind: Literal["docx", "xlsx", "pptx"]
+    kind: Literal[
+        "docx", "xlsx", "pptx", "preview", "edit",
+        "validate", "recalculate", "export_csv", "import_csv", "context",
+    ]
     path: str
     title: str = "Untitled"
     content: str = ""
-    data: list[list[Any]] = []
+    data: list[Any] = []
+
+
+class OfficeEditRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=4_000)
+    operations: list[dict[str, Any]] = Field(min_length=1, max_length=200)
