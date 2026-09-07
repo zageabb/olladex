@@ -60,6 +60,10 @@ export function SpreadsheetStudio({
   const [tableName, setTableName] = useState("Table1");
   const [rowIndex, setRowIndex] = useState(2);
   const [columnIndex, setColumnIndex] = useState(2);
+  const [sortColumn, setSortColumn] = useState(1);
+  const [chartType, setChartType] = useState("bar");
+  const [chartTitle, setChartTitle] = useState("Chart");
+  const [csvPath, setCsvPath] = useState("data/import.csv");
 
   const sheet = useMemo(() => sheets.find((item) => String(item.name) === sheetName) || sheets[0], [sheets, sheetName]);
   const rows = useMemo(() => Array.isArray(sheet?.rows) ? sheet.rows as unknown[][] : [], [sheet]);
@@ -111,10 +115,39 @@ export function SpreadsheetStudio({
       });
       const after = response.after;
       if (after && typeof after === "object" && !Array.isArray(after)) onPreviewChanged(after as Preview);
-      if (mode === "preview") setStatus(success || "Preview generated. The XLSX file has not been changed.");
+      const comparison = response.comparison as Record<string, unknown> | undefined;
+      const changeCount = Array.isArray(comparison?.changes) ? comparison.changes.length : 0;
+      if (mode === "preview") setStatus(success || `Preview generated · ${changeCount} cell/structure changes · source unchanged.`);
       else {
         const backup = String(response.backup_path || "");
-        setStatus(success || (backup ? `Applied. Backup: ${backup}` : "Applied with Office history backup."));
+        setStatus(success || (backup ? `Applied · ${changeCount} changes · backup: ${backup}` : `Applied · ${changeCount} changes.`));
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function utility(kind: "validate" | "recalculate" | "export_csv" | "import_csv" | "context", data: Record<string, unknown> = {}) {
+    setStatus(`${kind.replaceAll("_", " ")}…`);
+    try {
+      const response = await request<Record<string, unknown>>(`/projects/${projectId}/office`, {
+        method: "POST",
+        body: JSON.stringify({ kind, path: selectedPath, title: "", content: "", data: [data] }),
+      });
+      const after = response.after;
+      if (after && typeof after === "object" && !Array.isArray(after)) onPreviewChanged(after as Preview);
+      if (kind === "validate") {
+        const issues = Array.isArray(response.issues) ? response.issues : [];
+        setStatus(`${String(response.formulas || 0)} formulas checked · ${issues.length ? `${issues.length} issue(s)` : "valid"}.`);
+      } else if (kind === "recalculate") {
+        setStatus(response.recalculated ? `Recalculated with ${String(response.engine)} · backup: ${String(response.backup_path || "history")}` : String(response.message || "Recalculation unavailable"));
+      } else if (kind === "export_csv") {
+        setStatus(`CSV exported to ${String(response.path || "export")}`);
+      } else if (kind === "import_csv") {
+        const summary = response.summary as Record<string, unknown> | undefined;
+        setStatus(`CSV imported: ${String(summary?.rows || 0)} rows × ${String(summary?.columns || 0)} columns · backup: ${String(response.backup_path || "history")}`);
+      } else {
+        setStatus(String(response.context || "Selection context prepared."));
       }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
@@ -139,7 +172,7 @@ export function SpreadsheetStudio({
   }
 
   return <section className={styles.studio}>
-    <div><p className="eyebrow">Spreadsheet Studio · Office 0.3</p><h3>Edit {selectedPath}</h3></div>
+    <div><p className="eyebrow">Spreadsheet Studio · Office 0.5</p><h3>Edit {selectedPath}</h3></div>
 
     <div className={styles.sheetTabs}>
       {sheets.map((item) => <button type="button" key={String(item.name)} className={sheetName === String(item.name) ? styles.active : ""} onClick={() => { setSheetName(String(item.name)); setCell("A1"); }}>{String(item.name)}</button>)}
@@ -204,11 +237,30 @@ export function SpreadsheetStudio({
         <button type="button" onClick={() => send([{ action: "rename_sheet", sheet: sheetName, name: newSheetName }], "edit", "Worksheet renamed with history backup.")}>Rename current</button>
         {sheets.length > 1 && <button type="button" onClick={() => send([{ action: "delete_sheet", sheet: sheetName }], "edit", "Worksheet deleted with history backup.")}>Delete current</button>}
         <label>Range<input value={range} onChange={(event) => setRange(event.target.value.toUpperCase())} placeholder="A1:B5" /></label>
+        <button type="button" onClick={() => send([{ action: "fill", sheet: sheetName, source: cell, range }], "preview")}>Preview formula-aware fill</button>
+        <button type="button" onClick={() => send([{ action: "fill", sheet: sheetName, source: cell, range }], "edit", `Filled ${range} from ${cell} with translated formulas.`)}>Fill range from {cell}</button>
+        <button type="button" onClick={() => send([{ action: "format", sheet: sheetName, range, style: { bold, italic, wrap, fill: fillColor, font_color: fontColor, number_format: numberFormat, horizontal, border: true } }], "edit", `Formatted ${range} with history backup.`)}>Apply toolbar format to range</button>
         <button type="button" onClick={() => send([{ action: "merge_cells", sheet: sheetName, range }], "edit", "Cells merged with history backup.")}>Merge range</button>
         <button type="button" onClick={() => send([{ action: "unmerge_cells", sheet: sheetName, range }], "edit", "Cells unmerged with history backup.")}>Unmerge range</button>
         <label>Table name<input value={tableName} onChange={(event) => setTableName(event.target.value)} /></label>
         <button type="button" onClick={() => send([{ action: "add_table", sheet: sheetName, range, name: tableName, style: "TableStyleMedium2" }], "edit", "Excel table created with history backup.")}>Create table from range</button>
         <button type="button" onClick={() => send([{ action: "set_auto_filter", sheet: sheetName, range }], "edit", "AutoFilter updated with history backup.")}>Set filter range</button>
+        <label>Sort column in range<input type="number" min={1} value={sortColumn} onChange={(event) => setSortColumn(Number(event.target.value))} /></label>
+        <button type="button" onClick={() => send([{ action: "sort", sheet: sheetName, range, column: sortColumn, direction: "ascending", header: true }], "edit", `Sorted ${range} ascending.`)}>Sort ↑</button>
+        <button type="button" onClick={() => send([{ action: "sort", sheet: sheetName, range, column: sortColumn, direction: "descending", header: true }], "edit", `Sorted ${range} descending.`)}>Sort ↓</button>
+      </aside>
+
+      <aside className={styles.card}>
+        <h4>Analysis & interchange</h4>
+        <label>Chart type<select value={chartType} onChange={(event) => setChartType(event.target.value)}><option value="bar">Bar</option><option value="line">Line</option><option value="pie">Pie</option></select></label>
+        <label>Chart title<input value={chartTitle} onChange={(event) => setChartTitle(event.target.value)} /></label>
+        <button type="button" onClick={() => send([{ action: "chart", sheet: sheetName, range, chart_type: chartType, title: chartTitle, categories: true }], "edit", `Added ${chartType} chart from ${range}.`)}>Add chart</button>
+        <button type="button" onClick={() => utility("validate")}>Validate formulas</button>
+        <button type="button" onClick={() => utility("recalculate")}>Recalculate with LibreOffice</button>
+        <button type="button" onClick={() => utility("context", { sheet: sheetName, range })}>Preview LLM context for range</button>
+        <button type="button" onClick={() => utility("export_csv", { sheet: sheetName })}>Export current sheet to CSV</button>
+        <label>Project CSV path<input value={csvPath} onChange={(event) => setCsvPath(event.target.value)} placeholder="data/import.csv" /></label>
+        <button type="button" onClick={() => utility("import_csv", { csv_path: csvPath, sheet: sheetName, start_cell: cell })}>Import CSV at {cell}</button>
       </aside>
     </div>
 

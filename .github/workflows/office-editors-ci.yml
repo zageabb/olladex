@@ -9,6 +9,7 @@ on:
       - "backend/app/services/office.py"
       - "backend/app/services/office_word.py"
       - "backend/app/services/office_excel.py"
+      - "backend/app/services/office_excel_plus.py"
       - "backend/app/services/office_powerpoint.py"
       - "backend/app/schemas.py"
       - "backend/tests/test_office*.py"

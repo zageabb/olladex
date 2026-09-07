@@ -104,7 +104,10 @@ class DiagramRequest(BaseModel):
 
 
 class OfficeCreateRequest(BaseModel):
-    kind: Literal["docx", "xlsx", "pptx", "preview", "edit"]
+    kind: Literal[
+        "docx", "xlsx", "pptx", "preview", "edit",
+        "validate", "recalculate", "export_csv", "import_csv", "context",
+    ]
     path: str
     title: str = "Untitled"
     content: str = ""

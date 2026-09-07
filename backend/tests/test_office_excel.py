@@ -90,3 +90,58 @@ def test_spreadsheet_studio_sheet_and_dimension_lifecycle(tmp_path):
         ],
     )
     assert [sheet["name"] for sheet in deleted["after"]["sheets"]] == ["Data"]
+
+
+def test_context_studio_formula_fill_sort_and_comparison(tmp_path):
+    item = project(tmp_path)
+    create(item, "xlsx", "book.xlsx", "Data", "", [["Name", "Value", "Double"], ["B", 2, "=B2*2"], ["A", 1, None], ["C", 3, None]])
+
+    preview = preview_edit(
+        item,
+        "book.xlsx",
+        [
+            {"action": "fill", "sheet": "Data", "source": "C2", "range": "C2:C4"},
+            {"action": "sort", "sheet": "Data", "range": "A1:C4", "column": 1, "direction": "ascending", "header": True},
+        ],
+    )
+    assert preview["comparison"]["changes"]
+    assert inspect(item, "book.xlsx")["sheets"][0]["rows"][2][2] is None
+
+    result = edit(
+        item,
+        "book.xlsx",
+        [
+            {"action": "fill", "sheet": "Data", "source": "C2", "range": "C2:C4"},
+            {"action": "sort", "sheet": "Data", "range": "A1:C4", "column": 1, "direction": "ascending", "header": True},
+        ],
+    )
+    rows = result["after"]["sheets"][0]["rows"]
+    assert [row[0] for row in rows[1:4]] == ["A", "B", "C"]
+    assert rows[1][2] == "=B3*2"
+    assert rows[2][2] == "=B2*2"
+    assert rows[3][2] == "=B4*2"
+
+
+def test_formula_validation_context_and_csv_interchange(tmp_path):
+    item = project(tmp_path)
+    create(item, "xlsx", "book.xlsx", "Data", "", [["Name", "Value"], ["A", "=Missing!A1"], ["B", "=#REF!"]])
+
+    validation = create(item, "validate", "book.xlsx", "", "", [])
+    assert validation["formulas"] == 2
+    assert validation["valid"] is False
+    assert len(validation["issues"]) >= 2
+
+    context = create(item, "context", "book.xlsx", "", "", [{"sheet": "Data", "range": "A1:B2"}])
+    assert "WORKBOOK RANGE" in context["context"]
+    assert "B2==Missing!A1" in context["context"]
+
+    exported = create(item, "export_csv", "book.xlsx", "", "", [{"sheet": "Data", "destination": "exports/data.csv"}])
+    assert exported["path"] == "exports/data.csv"
+    assert (tmp_path / "exports" / "data.csv").is_file()
+
+    (tmp_path / "input.csv").write_text("New,10\nOther,20\n", encoding="utf-8")
+    imported = create(item, "import_csv", "book.xlsx", "", "", [{"csv_path": "input.csv", "sheet": "Data", "start_cell": "D1"}])
+    assert imported["summary"]["rows"] == 2
+    sheet = imported["after"]["sheets"][0]
+    assert sheet["rows"][0][3:5] == ["New", 10]
+    assert imported["comparison"]["changes"]
