@@ -13,3 +13,8 @@ desktop/*.spec
 data/*.sqlite3
 data/*.sqlite3-*
 .olladex/
+
+*.tsbuildinfo
+frontend/test-results/
+frontend/playwright-report/
+.DS_Store

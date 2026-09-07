@@ -33,7 +33,9 @@ def project_root(project: dict) -> Path:
 
 def safe_path(project: dict, relative: str) -> Path:
     root = project_root(project)
-    path = (root / relative.lstrip("/")).resolve()
+    if Path(relative).is_absolute():
+        raise HTTPException(400, "Absolute paths are not allowed; path escapes the selected project")
+    path = (root / relative).resolve()
     try:
         path.relative_to(root)
     except ValueError as exc:
@@ -91,12 +93,22 @@ def write_text(project: dict, relative: str, content: str) -> tuple[str, str, st
     from datetime import UTC, datetime
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
     backup_root = project_root(project) / ".olladex" / "history" / stamp
-    backup = backup_root / relative
+    relative = path.relative_to(project_root(project)).as_posix()
+    backup = safe_path(project, (backup_root / relative).relative_to(project_root(project)).as_posix())
     backup.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         backup.write_text(before, encoding="utf-8")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as temporary:
+        temporary.write(content)
+        temp_path = Path(temporary.name)
+    try:
+        if path.exists():
+            temp_path.chmod(path.stat().st_mode)
+        temp_path.replace(path)
+    finally:
+        temp_path.unlink(missing_ok=True)
     diff = "".join(difflib.unified_diff(before.splitlines(True), content.splitlines(True), fromfile=f"a/{relative}", tofile=f"b/{relative}"))
     return before, content, diff
 
@@ -109,6 +121,8 @@ def search(project: dict, query: str, limit: int = 100) -> list[dict]:
         dirs[:] = [d for d in dirs if d not in IGNORED]
         for name in files:
             path = Path(base) / name
+            if path.is_symlink():
+                continue
             rel = path.relative_to(root).as_posix()
             if query_lower in name.lower():
                 results.append({"path": rel, "line": 0, "text": name})
@@ -159,6 +173,8 @@ def repository_intelligence(project: dict) -> dict:
         dirs[:] = [d for d in dirs if d not in IGNORED]
         for name in files:
             path = Path(base) / name
+            if path.is_symlink():
+                continue
             rel = path.relative_to(root).as_posix()
             file_count += 1
             try:
@@ -173,7 +189,7 @@ def repository_intelligence(project: dict) -> dict:
                 symbols.extend(extract(path, rel, 250 - len(symbols)))
             except OSError:
                 continue
-    package = root / "package.json"
+    package = safe_path(project, "package.json")
     if package.exists():
         try:
             import json
@@ -187,8 +203,8 @@ def repository_intelligence(project: dict) -> dict:
             build_commands.extend(f"npm run {name}" for name in scripts if name in {"build", "check", "lint"})
         except Exception:
             pass
-    requirements = root / "requirements.txt"
-    pyproject = root / "pyproject.toml"
+    requirements = safe_path(project, "requirements.txt")
+    pyproject = safe_path(project, "pyproject.toml")
     dependency_text = ""
     for candidate in (requirements, pyproject):
         if candidate.exists():

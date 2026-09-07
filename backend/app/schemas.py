@@ -34,6 +34,7 @@ class TerminalResizeRequest(BaseModel):
 
 
 class FileWriteRequest(BaseModel):
+    expected_content: str | None = None
     content: str
     session_id: int | None = None
 
@@ -52,6 +53,7 @@ class ProjectSettingsRequest(BaseModel):
 
 
 class ModelProfileRequest(BaseModel):
+    context_tokens: int = Field(default=16384, ge=8192, le=262144)
     name: str = Field(min_length=1, max_length=120)
     chat_model: str = Field(min_length=1, max_length=200)
     embedding_model: str = Field(default="", max_length=200)

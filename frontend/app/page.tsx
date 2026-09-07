@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState, useRef } from "react";
 import { DiagramStudio } from "../components/DiagramStudio";
 import { BackgroundTasksPanel } from "../components/BackgroundTasksPanel";
 import { DesktopUpdateBadge } from "../components/DesktopUpdateBadge";
@@ -10,6 +10,7 @@ import { OfficePanel } from "../components/OfficePanel";
 import { ProjectPanel } from "../components/ProjectPanel";
 import { TaskOrchestrationPanel } from "../components/TaskOrchestrationPanel";
 import { TerminalPanel } from "../components/TerminalPanel";
+import { Conversation } from "../components/Conversation";
 import { request } from "../lib/api";
 
 type Project = { id: number; name: string; path: string; model: string; approval_mode: "review" | "assisted" | "autonomous"; instructions: string; git_author_name: string; git_author_email: string; model_profile_id?: number; profile_name?: string; profile_chat_model?: string; profile_embedding_model?: string; profile_temperature?: number; profile_max_steps?: number; profile_context_files?: number; profile_context_chars?: number };
@@ -24,11 +25,14 @@ type Tab = "files" | "changes" | "terminal" | "diagrams" | "office" | "tasks" | 
 const WELCOME: Message = { role: "assistant", content: "Welcome to Olladex. Open a local repository, then ask me to inspect, change and test it. Repository tools, your local shell, diagrams and Office files stay on your machine." };
 
 export default function Home() {
+  const [authRequired, setAuthRequired] = useState(false);
+  const [token, setToken] = useState("");
+  const selectedProject = useRef<number | undefined>(undefined);
+  const selectedFile = useRef<string>("");
   const [projects, setProjects] = useState<Project[]>([]);
   const [project, setProject] = useState<Project | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [session, setSession] = useState<Session | null>(null);
-  const [messages, setMessages] = useState<Message[]>([WELCOME]);
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [selected, setSelected] = useState<TreeNode | null>(null);
   const [fileContent, setFileContent] = useState("");
@@ -39,12 +43,18 @@ export default function Home() {
   const [gitDiff, setGitDiff] = useState("");
   const [tab, setTab] = useState<Tab>("files");
   const [status, setStatus] = useState<Status | null>(null);
-  const [prompt, setPrompt] = useState("");
-  const [busy, setBusy] = useState(false);
   const [openPath, setOpenPath] = useState("");
   const [showOpen, setShowOpen] = useState(false);
   const [notice, setNotice] = useState("");
   const [search, setSearch] = useState("");
+
+  selectedProject.current = project?.id;
+
+  useEffect(() => {
+    const handler = () => setAuthRequired(true);
+    window.addEventListener("olladex-auth-required", handler);
+    return () => window.removeEventListener("olladex-auth-required", handler);
+  }, []);
 
   useEffect(() => {
     request<Project[]>("/projects").then((data) => { setProjects(data); if (data.length) setProject(data[0]); }).catch((e) => setNotice(e.message));
@@ -53,24 +63,23 @@ export default function Home() {
 
   useEffect(() => {
     if (!project) return;
+    let disposed = false;
+    setSelected(null); selectedFile.current = ""; setFileContent(""); setFileDraft(""); setTree([]); setChanges([]); setGit(null); setGitDiff(""); setSession(null); setSessions([]);
     refreshTree();
-    request<Session[]>(`/projects/${project.id}/sessions`).then((data) => { setSessions(data); setSession(data[0] || null); });
+    request<Session[]>(`/projects/${project.id}/sessions`).then((data) => { if (!disposed) { setSessions(data); setSession(data[0] || null); } }).catch(e => { if (!disposed) setNotice(e.message); });
     refreshChanges(project.id);
     refreshGit(project.id);
+    return () => { disposed = true; };
   }, [project?.id]);
 
-  useEffect(() => {
-    if (!session) { setMessages([WELCOME]); return; }
-    request<Message[]>(`/sessions/${session.id}/messages`).then((data) => setMessages(data.length ? data : [WELCOME])).catch(() => setMessages([WELCOME]));
-  }, [session?.id]);
-
   async function refreshTree() {
-    if (project) setTree(await request<TreeNode[]>(`/projects/${project.id}/tree`));
+    if (project) { const id = project.id; const data = await request<TreeNode[]>(`/projects/${id}/tree`); if (selectedProject.current === id) setTree(data); }
   }
 
   async function refreshChanges(projectId = project?.id) {
     if (!projectId) return;
     const data = await request<Change[]>(`/projects/${projectId}/changes`);
+    if (selectedProject.current !== projectId) return;
     setChanges(data);
     setSelectedHunks((current) => {
       const next = { ...current };
@@ -85,13 +94,14 @@ export default function Home() {
       request<GitSummary>(`/projects/${projectId}/git`),
       request<{ diff: string }>(`/projects/${projectId}/git/diff`),
     ]);
+    if (selectedProject.current !== projectId) return;
     setGit(summary); setGitDiff(currentDiff.diff);
   }
 
   async function refreshSessions(projectId = project?.id) {
     if (!projectId) return [];
     const data = await request<Session[]>(`/projects/${projectId}/sessions`);
-    setSessions(data);
+    if (selectedProject.current === projectId) setSessions(data);
     return data;
   }
 
@@ -107,7 +117,7 @@ export default function Home() {
     if (!project) return;
     try {
       const created = await request<Session>(`/projects/${project.id}/sessions`, { method: "POST", body: JSON.stringify({ title: "New chat" }) });
-      setSessions((current) => [created, ...current]); setSession(created); setMessages([WELCOME]); setPrompt("");
+      setSessions((current) => [created, ...current]); setSession(created);
     } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); }
   }
 
@@ -117,16 +127,9 @@ export default function Home() {
     setNotice("Started a new chat. The previous conversation is saved in Chat history.");
   }
 
-  async function renameSession(sessionId: number, title: string) {
-    try {
-      const updated = await request<Session>(`/sessions/${sessionId}`, { method: "PATCH", body: JSON.stringify({ title }) });
-      setSessions((current) => current.map((item) => item.id === updated.id ? updated : item));
-      setSession((current) => current?.id === updated.id ? { ...current, ...updated } : current);
-    } catch {}
-  }
-
   async function selectFile(item: TreeNode) {
-    setSelected(item);
+    setSelected(item); selectedFile.current = item.path;
+    setFileContent(""); setFileDraft("");
     if (item.type !== "file" || !project) return;
     if (/\.(docx|xlsx|pptx|pdf)$/i.test(item.path)) { setTab("office"); return; }
     if (/\.(mmd|mermaid)$/i.test(item.path)) setTab("diagrams");
@@ -134,44 +137,16 @@ export default function Home() {
     else setTab("files");
     try {
       const data = await request<{ content: string }>(`/projects/${project.id}/files?path=${encodeURIComponent(item.path)}`);
+      if (selectedProject.current !== project.id || selectedFile.current !== item.path) return;
       setFileContent(data.content); setFileDraft(data.content);
-    } catch (error) { setFileContent(""); setFileDraft(""); setNotice(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { if (selectedProject.current !== project.id || selectedFile.current !== item.path) return; setFileContent(""); setFileDraft(""); setNotice(error instanceof Error ? error.message : String(error)); }
   }
 
   async function saveFile() {
     if (!project || !selected || selected.type !== "file") return;
-    await request<{ diff: string }>(`/projects/${project.id}/files?path=${encodeURIComponent(selected.path)}`, { method: "PUT", body: JSON.stringify({ content: fileDraft, session_id: session?.id }) });
+    await request<{ diff: string }>(`/projects/${project.id}/files?path=${encodeURIComponent(selected.path)}`, { method: "PUT", body: JSON.stringify({ content: fileDraft, expected_content: fileContent, session_id: session?.id }) });
+    if (selectedProject.current !== project.id || selectedFile.current !== selected.path) return;
     setFileContent(fileDraft); await refreshChanges(project.id); setNotice(`Saved ${selected.path}`);
-  }
-
-  async function send(event: FormEvent) {
-    event.preventDefault();
-    if (!prompt.trim() || !session || !project || busy) return;
-    const content = prompt; const currentSession = session; setPrompt(""); setBusy(true); setMessages((current) => [...current, { role: "user", content }]);
-    try {
-      const answer = await request<Message>(`/sessions/${currentSession.id}/messages`, { method: "POST", body: JSON.stringify({ content }) });
-      setMessages((current) => [...current, answer]); await refreshTree();
-      if (currentSession.title === "New chat" || currentSession.title === "New task") {
-        const title = content.trim().split(/\r?\n/)[0].replace(/\s+/g, " ").slice(0, 72) || "Chat";
-        await renameSession(currentSession.id, title);
-      }
-      request<{ summary: string }>(`/sessions/${currentSession.id}/summary`).then((summary) => {
-        setSession((current) => current?.id === currentSession.id ? { ...current, summary: summary.summary } : current);
-        setSessions((current) => current.map((item) => item.id === currentSession.id ? { ...item, summary: summary.summary } : item));
-      }).catch(() => {});
-      refreshSessions(project.id).catch(() => {});
-      if (answer.activities?.some((a) => a.tool === "write_file")) { await refreshChanges(project.id); setTab("changes"); }
-    } catch (error) { setMessages((current) => [...current, { role: "assistant", content: `I couldn't complete that request: ${error instanceof Error ? error.message : String(error)}` }]); }
-    finally { setBusy(false); }
-  }
-
-  async function queuePrompt() {
-    if (!prompt.trim() || !project || !session) return;
-    const content = prompt.trim(); setPrompt("");
-    try {
-      await request(`/projects/${project.id}/tasks`, { method: "POST", body: JSON.stringify({ prompt: content, session_id: session.id }) });
-      setTab("tasks"); setNotice("Task queued in the background");
-    } catch (error) { setPrompt(content); setNotice(error instanceof Error ? error.message : String(error)); }
   }
 
   async function openTaskSession(sessionId: number) {
@@ -198,14 +173,6 @@ export default function Home() {
       await Promise.all([refreshChanges(project.id), refreshTree()]);
       refreshGit(project.id);
       setNotice(`${change.path} ${action === "apply" ? "applied" : action === "reject" ? "rejected" : "reverted"}`);
-    } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); }
-  }
-
-  async function approveCommand(activity: Activity) {
-    if (!project || !activity.result?.command_run_id) return;
-    try {
-      await request(`/projects/${project.id}/terminal/${activity.result.command_run_id}/approve`, { method: "POST" });
-      setTab("terminal"); setNotice("Command approved and started");
     } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); }
   }
 
@@ -239,19 +206,14 @@ export default function Home() {
       </aside>
 
       <section className="conversation-panel">
-        <div className="panel-head"><div><p className="eyebrow">Local development agent</p><h1>{session?.title || "Start a chat"}</h1></div><div className="chat-head-actions"><button onClick={clearChat} disabled={!project || busy}>Clear chat</button><button className="approval-mode" onClick={() => setTab("project")}><span>Mode</span><strong>{project?.approval_mode || "assisted"}</strong></button></div></div>
-        <div className="messages">
-          {session?.summary && <details className="session-summary"><summary><span>✦</span><div><strong>Persistent session context</strong><small>Compact memory carried into the next Ollama request</small></div><b>⌄</b></summary><pre>{session.summary}</pre></details>}
-          {messages.map((message, index) => <article className={`message ${message.role}`} key={`${message.role}-${message.id || index}`}><div className="message-avatar">{message.role === "assistant" ? "O" : "G"}</div><div className="message-stack"><div className="bubble">{message.content}</div>{message.activities?.map((activity, i) => <details className="activity-card" key={i}><summary><span>{activityIcon(activity.tool)}</span><div><strong>{activity.tool.replaceAll("_", " ")}</strong><small>{activity.summary}</small></div><b>⌄</b></summary><pre>{JSON.stringify(activity.result || activity.arguments, null, 2)}</pre>{activity.tool === "run_command" && activity.result?.status === "pending" && <div className="activity-actions"><button className="primary" onClick={() => approveCommand(activity)}>Approve command</button><button onClick={() => setTab("terminal")}>Open terminal</button></div>}{activity.tool === "write_file" && activity.result?.change_id && <div className="activity-actions"><button className="primary" onClick={() => setTab("changes")}>Review proposed change</button></div>}</details>)}</div></article>)}
-          {busy && <article className="message assistant"><div className="message-avatar">O</div><div className="typing"><i/><i/><i/></div></article>}
-        </div>
-        <form className="composer" onSubmit={send}><textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder={project ? "Ask Olladex to inspect, change or test this repository…" : "Open a repository to begin…"} disabled={!project || !session} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} /><div className="composer-actions"><div><button type="button" onClick={() => setTab("files")}>＋ Context</button><button type="button" onClick={() => setTab("terminal")}>⌘ Shell</button><button type="button" onClick={queuePrompt} disabled={!prompt.trim()}>◷ Queue</button></div><div className="model-chip">{project?.profile_chat_model || project?.model || status?.ollama.models[0] || "Ollama"}</div><button className="send primary" disabled={busy || !prompt.trim()}>➤</button></div></form>
+        <div className="panel-head"><div><p className="eyebrow">Local development agent</p><h1>{session?.title || "Start a chat"}</h1></div><div className="chat-head-actions"><button onClick={clearChat} disabled={!project}>Clear chat</button><button className="approval-mode" onClick={() => setTab("project")}><span>Mode</span><strong>{project?.approval_mode || "assisted"}</strong></button></div></div>
+        {session ? <Conversation key={session.id} sessionId={session.id} onChanged={() => { refreshChanges(project?.id); refreshGit(project?.id); refreshTree(); }} /> : <p>Open a repository and start a conversation.</p>}
       </section>
 
       <section className="inspector-panel">
         <div className="inspector-tabs">{(["files", "changes", "terminal", "diagrams", "office", "tasks", "project"] as Tab[]).map((item) => <button key={item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item}{item === "changes" && changes.filter((change) => change.status === "proposed").length ? <span>{changes.filter((change) => change.status === "proposed").length}</span> : null}</button>)}</div>
         {project ? <>
-          {tab === "files" && <div className="file-workspace"><aside className="file-sidebar"><div className="file-search"><span>⌕</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter files" /></div><FileTree items={filteredTree} selected={selected?.path} onSelect={selectFile} /></aside><div className="editor-pane">{selected?.type === "file" ? <><div className="editor-head"><div><span className="file-icon">□</span><strong>{selected.path}</strong>{fileDraft !== fileContent && <i>Modified</i>}</div><button className="primary" onClick={saveFile} disabled={fileDraft === fileContent}>Save</button></div><textarea className="code-editor" value={fileDraft} onChange={(e) => setFileDraft(e.target.value)} spellCheck={false} /></> : <EmptyWorkspace onOpen={() => setShowOpen(true)} />}</div></div>}
+          {tab === "files" && <div className="file-workspace"><aside className="file-sidebar"><div className="file-search"><span>⌕</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter files" /></div><FileTree items={filteredTree} selected={selected?.path} onSelect={selectFile} /></aside><div className="editor-pane">{selected?.type === "file" ? <><div className="editor-head"><div><span className="file-icon">□</span><strong>{selected.path}</strong>{fileDraft !== fileContent && <i>Modified</i>}</div><button className="primary" onClick={() => saveFile().catch(error => setNotice(error.message))} disabled={fileDraft === fileContent}>Save</button></div><textarea className="code-editor" value={fileDraft} onChange={(e) => setFileDraft(e.target.value)} spellCheck={false} /></> : <EmptyWorkspace onOpen={() => setShowOpen(true)} />}</div></div>}
           {tab === "changes" && <div className="changes-panel">
             <GitControls projectId={project.id} git={git} onRefresh={() => refreshGit(project.id)} onTaskQueued={() => setTab("tasks")} />
             {gitDiff && <article><header><div><strong>Current Git diff</strong><small>Working tree and staged changes</small></div><span>git</span></header><pre>{gitDiff}</pre></article>}
@@ -266,7 +228,8 @@ export default function Home() {
       </section>
     </div>
 
-    {showOpen && <div className="modal-backdrop" onMouseDown={() => setShowOpen(false)}><div className="modal" onMouseDown={(e) => e.stopPropagation()}><div className="modal-head"><div><p className="eyebrow">Local repository</p><h2>Open in Olladex</h2></div><button onClick={() => setShowOpen(false)}>×</button></div><form onSubmit={openProject}><label>Absolute directory path<input autoFocus value={openPath} onChange={(e) => setOpenPath(e.target.value)} placeholder="/home/gez/projects/my-app" /></label><p>Olladex will be confined to this directory. It can read files, create backups, execute Bash commands and work with its Git repository.</p><div><button type="button" onClick={() => setShowOpen(false)}>Cancel</button><button className="primary">Open repository</button></div></form></div></div>}
+    {authRequired && <div className="modal-backdrop"><form className="modal" onSubmit={async e => { e.preventDefault(); sessionStorage.setItem("olladex-token", token); try { await request("/projects"); window.location.reload(); } catch { setNotice("Token was not accepted"); } }}><h2>Connect to Olladex</h2><p>Paste the connection token printed by start-local.sh.</p><input aria-label="Connection token" type="password" value={token} onChange={e => setToken(e.target.value)} /><button className="primary">Connect</button></form></div>}
+    {showOpen && <div className="modal-backdrop" onMouseDown={() => setShowOpen(false)}><div className="modal" onMouseDown={(e) => e.stopPropagation()}><div className="modal-head"><div><p className="eyebrow">Local repository</p><h2>Open in Olladex</h2></div><button onClick={() => setShowOpen(false)}>×</button></div><form onSubmit={openProject}><label>Absolute directory path<input autoFocus value={openPath} onChange={(e) => setOpenPath(e.target.value)} placeholder="/home/gez/projects/my-app" /></label><p>File tools are restricted to this repository. Approved shell commands run with your operating-system permissions.</p><div><button type="button" onClick={() => setShowOpen(false)}>Cancel</button><button className="primary">Open repository</button></div></form></div></div>}
     {notice && <button className="toast" onClick={() => setNotice("")}>{notice}</button>}
   </main>;
 }

@@ -4,7 +4,9 @@ import json
 import sqlite3
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
+import secrets
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import __version__
@@ -17,24 +19,51 @@ from .services import github as github_service
 from .services.session_summary import build as build_session_summary
 
 
-app = FastAPI(title="Olladex API", version=__version__)
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app):
+    startup()
+    try:
+        yield
+    finally:
+        shutdown()
+
+app = FastAPI(title="Olladex API", version=__version__, lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=[x.strip() for x in settings.cors_origins.split(",")], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
-@app.on_event("startup")
+@app.middleware("http")
+async def authenticate(request: Request, call_next):
+    if request.url.path.startswith("/api/"):
+        origin = request.headers.get("origin")
+        allowed = [value.strip() for value in settings.cors_origins.split(",")]
+        if origin and origin not in allowed:
+            return JSONResponse({"detail": "Origin is not allowed"}, status_code=403)
+        if request.method != "OPTIONS" and settings.api_token and not secrets.compare_digest(
+            request.headers.get("authorization", ""), "Bearer " + settings.api_token
+        ):
+            return JSONResponse({"detail": "Connect using your Olladex API token"}, status_code=401)
+    return await call_next(request)
+
+
 def startup() -> None:
     init_db()
+    from .services import conversation_runtime
+    conversation_runtime.init()
     task_queue.start(process_background_task)
 
 
-@app.on_event("shutdown")
 def shutdown() -> None:
+    from .services import conversation_runtime
+    conversation_runtime.shutdown()
+    terminal_jobs.shutdown()
     task_queue.stop()
 
 
 def get_project(project_id: int) -> dict:
     with connect() as conn:
-        row = conn.execute("SELECT p.*,mp.name AS profile_name,mp.chat_model AS profile_chat_model,mp.embedding_model AS profile_embedding_model,mp.temperature AS profile_temperature,mp.max_steps AS profile_max_steps,mp.context_files AS profile_context_files,mp.context_chars AS profile_context_chars FROM projects p LEFT JOIN model_profiles mp ON mp.id=p.model_profile_id WHERE p.id=?", (project_id,)).fetchone()
+        row = conn.execute("SELECT p.*,mp.name AS profile_name,mp.chat_model AS profile_chat_model,mp.embedding_model AS profile_embedding_model,mp.temperature AS profile_temperature,mp.max_steps AS profile_max_steps,mp.context_files AS profile_context_files,mp.context_chars AS profile_context_chars,mp.context_tokens AS profile_context_tokens FROM projects p LEFT JOIN model_profiles mp ON mp.id=p.model_profile_id WHERE p.id=?", (project_id,)).fetchone()
     if not row:
         raise HTTPException(404, "Project not found")
     return dict(row)
@@ -85,7 +114,7 @@ def api_status():
 @app.get("/api/projects")
 def list_projects():
     with connect() as conn:
-        return rows(conn.execute("SELECT p.*,mp.name AS profile_name,mp.chat_model AS profile_chat_model,mp.embedding_model AS profile_embedding_model,mp.temperature AS profile_temperature,mp.max_steps AS profile_max_steps,mp.context_files AS profile_context_files,mp.context_chars AS profile_context_chars FROM projects p LEFT JOIN model_profiles mp ON mp.id=p.model_profile_id ORDER BY p.last_opened_at DESC"))
+        return rows(conn.execute("SELECT p.*,mp.name AS profile_name,mp.chat_model AS profile_chat_model,mp.embedding_model AS profile_embedding_model,mp.temperature AS profile_temperature,mp.max_steps AS profile_max_steps,mp.context_files AS profile_context_files,mp.context_chars AS profile_context_chars,mp.context_tokens AS profile_context_tokens FROM projects p LEFT JOIN model_profiles mp ON mp.id=p.model_profile_id ORDER BY p.last_opened_at DESC"))
 
 
 @app.post("/api/projects")
@@ -137,7 +166,7 @@ def create_model_profile(body: ModelProfileRequest):
     stamp = now()
     try:
         with connect() as conn:
-            cursor = conn.execute("INSERT INTO model_profiles(name,chat_model,embedding_model,temperature,max_steps,context_files,context_chars,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)", (body.name, body.chat_model, body.embedding_model, body.temperature, body.max_steps, body.context_files, body.context_chars, stamp, stamp))
+            cursor = conn.execute("INSERT INTO model_profiles(name,chat_model,embedding_model,temperature,max_steps,context_files,context_chars,context_tokens,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)", (body.name, body.chat_model, body.embedding_model, body.temperature, body.max_steps, body.context_files, body.context_chars, body.context_tokens, stamp, stamp))
     except sqlite3.IntegrityError as exc:
         raise HTTPException(409, "A model profile with that name already exists") from exc
     with connect() as conn:
@@ -154,8 +183,8 @@ def update_model_profile(profile_id: int, body: ModelProfileRequest):
             if current["is_builtin"] and body.name != current["name"]:
                 raise HTTPException(409, "Built-in model profile names cannot be changed")
             conn.execute(
-                "UPDATE model_profiles SET name=?,chat_model=?,embedding_model=?,temperature=?,max_steps=?,context_files=?,context_chars=?,updated_at=? WHERE id=?",
-                (body.name, body.chat_model, body.embedding_model, body.temperature, body.max_steps, body.context_files, body.context_chars, now(), profile_id),
+                "UPDATE model_profiles SET name=?,chat_model=?,embedding_model=?,temperature=?,max_steps=?,context_files=?,context_chars=?,context_tokens=?,updated_at=? WHERE id=?",
+                (body.name, body.chat_model, body.embedding_model, body.temperature, body.max_steps, body.context_files, body.context_chars, body.context_tokens, now(), profile_id),
             )
     except sqlite3.IntegrityError as exc:
         raise HTTPException(409, "A model profile with that name already exists") from exc
@@ -212,6 +241,11 @@ def read_file(project_id: int, path: str = Query(...)):
 @app.put("/api/projects/{project_id}/files")
 def write_file(project_id: int, path: str, body: FileWriteRequest):
     project = get_project(project_id)
+    if body.expected_content is not None:
+        target = workspace.safe_path(project, path)
+        current = target.read_text(encoding="utf-8") if target.exists() else ""
+        if current != body.expected_content:
+            raise HTTPException(409, "The file changed on disk. Reload before saving.")
     before, after, diff = workspace.write_text(project, path, body.content)
     hunks = change_service.build_hunks(before, after)
     stamp = now()
@@ -289,37 +323,52 @@ def list_messages(session_id: int):
     return result
 
 
+def persist_activity(project, session_id, activity):
+    stamp = now()
+    with connect() as conn:
+        if activity.get("tool") == "write_file" and isinstance(activity.get("result"), dict) and activity["result"].get("status") == "proposed":
+            result = activity["result"]
+            hunks = change_service.build_hunks(result.get("before", ""), result.get("after", ""))
+            change_cursor = conn.execute(
+                "INSERT INTO file_changes(project_id,session_id,path,before_content,after_content,diff,hunks,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (project["id"], session_id, result.get("path", ""), result.get("before", ""), result.get("after", ""), result.get("diff", ""), json.dumps(hunks), "proposed", stamp, stamp),
+            )
+            conn.execute("UPDATE file_changes SET workspace_path=? WHERE id=?", (str(workspace.project_root(project)), change_cursor.lastrowid))
+            result["change_id"] = change_cursor.lastrowid
+            result["hunks"] = hunks
+            result.pop("before", None)
+            result.pop("after", None)
+        if activity.get("tool") == "run_command" and isinstance(activity.get("result"), dict) and not activity["result"].get("command_run_id"):
+            result = activity["result"]
+            command_cursor = conn.execute(
+                "INSERT INTO command_runs(project_id,command,output,exit_code,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                (project["id"], result.get("command", ""), result.get("output", ""), result.get("exit_code", -1), result.get("status", "completed"), stamp, stamp),
+            )
+            result["command_run_id"] = command_cursor.lastrowid
+
+
 def run_session_agent(session_id: int, content: str) -> dict:
+    from .services import conversation_runtime
+    conversation_runtime.emit("user_message", {"content": content})
     with connect() as conn:
         session = conn.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
         if not session:
             raise ValueError("Session not found")
         history = rows(conn.execute("SELECT role,content FROM messages WHERE session_id=? ORDER BY id", (session_id,)))
-        conn.execute("INSERT INTO messages(session_id,role,content,created_at) VALUES(?,?,?,?)", (session_id, "user", content, now()))
+        if not history and session["title"] in {"New chat", "New task"}:
+            title = " ".join(content.split())[:72]
+            conn.execute("UPDATE sessions SET title=? WHERE id=?", (title, session_id))
+        conn.execute("INSERT INTO messages(session_id,role,content,created_at,run_id) VALUES(?,?,?,?,?)", (session_id, "user", content, now(), conversation_runtime.current_id()))
     project = get_project(session["project_id"])
-    answer, activities = ollama.chat(project, [*history, {"role": "user", "content": content}], session_summary=session["summary"] or "")
+    from .services import conversation_runtime
+    conversation_runtime._local.session_id = session_id
+    answer, activities = ollama.chat(project, [*history, {"role": "user", "content": content}], session_summary=(session["summary"] or "") + "\n\nUser-managed preferences and decisions:\n" + (session["memory"] or ""))
+    for activity in activities:
+        if not activity.pop("_persisted", False):
+            persist_activity(project, session_id, activity)
     stamp = now()
     with connect() as conn:
-        for activity in activities:
-            if activity.get("tool") == "write_file" and isinstance(activity.get("result"), dict):
-                result = activity["result"]
-                hunks = change_service.build_hunks(result.get("before", ""), result.get("after", ""))
-                change_cursor = conn.execute(
-                    "INSERT INTO file_changes(project_id,session_id,path,before_content,after_content,diff,hunks,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                    (project["id"], session_id, result.get("path", ""), result.get("before", ""), result.get("after", ""), result.get("diff", ""), json.dumps(hunks), "proposed", stamp, stamp),
-                )
-                result["change_id"] = change_cursor.lastrowid
-                result["hunks"] = hunks
-                result.pop("before", None)
-                result.pop("after", None)
-            if activity.get("tool") == "run_command" and isinstance(activity.get("result"), dict):
-                result = activity["result"]
-                command_cursor = conn.execute(
-                    "INSERT INTO command_runs(project_id,command,output,exit_code,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
-                    (project["id"], result.get("command", ""), result.get("output", ""), result.get("exit_code", -1), result.get("status", "completed"), stamp, stamp),
-                )
-                result["command_run_id"] = command_cursor.lastrowid
-        cursor = conn.execute("INSERT INTO messages(session_id,role,content,activities,created_at) VALUES(?,?,?,?,?)", (session_id, "assistant", answer, json.dumps(activities, default=str), stamp))
+        cursor = conn.execute("INSERT INTO messages(session_id,role,content,activities,created_at,run_id) VALUES(?,?,?,?,?,?)", (session_id, "assistant", answer, json.dumps(activities, default=str), stamp, conversation_runtime.current_id()))
         conn.execute("UPDATE sessions SET updated_at=? WHERE id=?", (stamp, session_id))
         last_message_id = cursor.lastrowid
         summary_messages = rows(conn.execute("SELECT role,content,activities FROM messages WHERE session_id=? ORDER BY id", (session_id,)))
@@ -329,90 +378,40 @@ def run_session_agent(session_id: int, content: str) -> dict:
 
 
 def process_background_task(task: dict) -> str:
-    return run_session_agent(task["session_id"], task["prompt"])["content"]
+    from .services import conversation_runtime as runtime
+    run_id = runtime.create(task["session_id"], task["id"])
+    with runtime.bind(run_id):
+        try:
+            result = run_session_agent(task["session_id"], task["prompt"])
+            runtime.emit("final", result)
+            if runtime.get(run_id)["status"] == "running":
+                runtime.state("completed")
+            elif runtime.get(run_id)["status"] == "budget_exhausted":
+                raise ollama.BudgetExhausted(result["content"])
+            return result["content"]
+        except Exception as exc:
+            runtime.state("cancelled" if isinstance(exc, ollama.AgentCancelled) else "budget_exhausted" if isinstance(exc, ollama.BudgetExhausted) else "failed")
+            raise
 
 
 @app.post("/api/sessions/{session_id}/messages")
 def chat_message(session_id: int, body: ChatRequest):
     try:
-        return run_session_agent(session_id, body.content)
+        from .services import conversation_runtime as runtime
+        run_id = runtime.create(session_id)
+        with runtime.bind(run_id):
+            try:
+                result = run_session_agent(session_id, body.content)
+                if runtime.get(run_id)["status"] == "running":
+                    runtime.state("completed")
+                return result
+            except Exception:
+                runtime.state("failed")
+                raise
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(502, f"Ollama request failed: {exc}") from exc
-
-
-@app.post("/api/projects/{project_id}/terminal")
-def run_terminal(project_id: int, body: CommandRequest):
-    result = terminal.run(get_project(project_id), body.command, body.timeout_seconds)
-    with connect() as conn:
-        stamp = now()
-        cursor = conn.execute("INSERT INTO command_runs(project_id,command,output,exit_code,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", (project_id, body.command, result["output"], result["exit_code"], "completed", stamp, stamp))
-    return {"id": cursor.lastrowid, "status": "completed", **result}
-
-
-@app.post("/api/projects/{project_id}/terminal/start")
-def start_terminal(project_id: int, body: CommandRequest):
-    project = get_project(project_id)
-    stamp = now()
-    with connect() as conn:
-        cursor = conn.execute("INSERT INTO command_runs(project_id,command,output,exit_code,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", (project_id, body.command, "", -1, "pending", stamp, stamp))
-        run_id = cursor.lastrowid
-    return {"command": body.command, **terminal_jobs.start(project, run_id, body.command, body.timeout_seconds or 600, body.columns, body.rows)}
-
-
-@app.get("/api/terminal/{run_id}")
-def terminal_status(run_id: int):
-    result = terminal_jobs.status(run_id)
-    if not result:
-        raise HTTPException(404, "Command run not found")
-    return result
-
-
-@app.delete("/api/terminal/{run_id}")
-def cancel_terminal(run_id: int):
-    command = get_command(run_id)
-    if command["status"] == "pending":
-        with connect() as conn:
-            conn.execute("UPDATE command_runs SET status='cancelled',updated_at=? WHERE id=?", (now(), run_id))
-        return get_command(run_id)
-    return terminal_jobs.cancel(run_id)
-
-
-@app.post("/api/terminal/{run_id}/input")
-def terminal_input(run_id: int, body: TerminalInputRequest):
-    get_command(run_id)
-    try:
-        return terminal_jobs.write_input(run_id, body.data)
-    except ValueError as exc:
-        raise HTTPException(409, str(exc)) from exc
-
-
-@app.post("/api/terminal/{run_id}/resize")
-def terminal_resize(run_id: int, body: TerminalResizeRequest):
-    get_command(run_id)
-    try:
-        return terminal_jobs.resize(run_id, body.columns, body.rows)
-    except ValueError as exc:
-        raise HTTPException(409, str(exc)) from exc
-
-
-@app.post("/api/projects/{project_id}/terminal/{run_id}/approve")
-def approve_terminal(project_id: int, run_id: int):
-    project = get_project(project_id)
-    command = get_command(run_id)
-    if command["project_id"] != project_id:
-        raise HTTPException(404, "Command run not found in this project")
-    if command["status"] != "pending":
-        raise HTTPException(409, "Only pending commands can be approved")
-    return {"command": command["command"], **terminal_jobs.start(project, run_id, command["command"])}
-
-
-@app.get("/api/projects/{project_id}/terminal")
-def terminal_history(project_id: int):
-    get_project(project_id)
-    with connect() as conn:
-        return rows(conn.execute("SELECT * FROM command_runs WHERE project_id=? ORDER BY id DESC LIMIT 40", (project_id,)))
 
 
 @app.get("/api/projects/{project_id}/changes")

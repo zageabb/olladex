@@ -8,12 +8,7 @@ from .workspace import project_root
 
 BLOCKED_EXACT = {"reboot", "shutdown", "poweroff", "halt"}
 BLOCKED_PARTS = ("rm -rf /", "mkfs", "> /dev/", "dd if=", ":(){:|:&};:")
-ASSISTED_PREFIXES = (
-    "git status", "git diff", "git log", "git branch --show-current",
-    "pytest", "python -m pytest", "npm test", "npm run test", "npm run build",
-    "npm run lint", "pnpm test", "pnpm build", "yarn test", "yarn build",
-    "ls", "find ", "rg ", "grep ", "pwd", "cat ", "sed ", "head ", "tail ",
-)
+
 
 
 def shell_command(command: str) -> list[str]:
@@ -36,31 +31,55 @@ def blocked(command: str) -> bool:
 
 def requires_approval(project: dict, command: str) -> bool:
     mode = project.get("approval_mode", "assisted")
-    normalized = command.strip().lower()
-    if mode == "autonomous":
-        return False
-    if mode == "review":
-        return True
-    return not any(normalized == prefix or normalized.startswith(prefix) for prefix in ASSISTED_PREFIXES)
+    return mode != "autonomous"
 
 
 def run(project: dict, command: str, timeout: int | None = None) -> dict:
+    """Bounded output and cancellation of the entire process group."""
+    import threading
+    import time
+    from . import task_queue
+    from .processes import terminate
     if blocked(command):
         return {"command": command, "output": "Command blocked by Olladex safety policy.", "exit_code": 126}
-    env = os.environ.copy()
-    env["TERM"] = "xterm-256color"
+    process = subprocess.Popen(shell_command(command), cwd=project_root(project),
+        env={**os.environ, "TERM": "xterm-256color"}, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
+    chunks = bytearray()
+    from . import conversation_runtime
+    run_id = conversation_runtime.current_id()
+    def collect():
+        emitted = 0
+        while data := process.stdout.read1(8192):
+            chunks.extend(data)
+            if run_id and emitted < 200_000:
+                text = data[:200_000-emitted].decode("utf-8", errors="replace")
+                conversation_runtime.emit("command_output", {"text": text}, run_id)
+                emitted += len(data)
+                if emitted >= 200_000:
+                    conversation_runtime.emit("command_output", {"text": "\n[Live output limit reached; final output retains the last 200 KB.]"}, run_id)
+            if len(chunks) > 200_000:
+                del chunks[:-200_000]
+    reader = threading.Thread(target=collect, daemon=True)
+    reader.start()
+    deadline = time.monotonic() + (timeout or settings.command_timeout_seconds)
+    code = None
     try:
-        completed = subprocess.run(
-            shell_command(command),
-            cwd=project_root(project),
-            env=env,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=timeout or settings.command_timeout_seconds,
-            check=False,
-        )
-        return {"command": command, "output": completed.stdout[-200_000:], "exit_code": completed.returncode}
-    except subprocess.TimeoutExpired as exc:
-        output = (exc.stdout or "") if isinstance(exc.stdout, str) else ""
-        return {"command": command, "output": output + "\nCommand timed out.", "exit_code": 124}
+        while process.poll() is None:
+            from . import conversation_runtime
+            if task_queue.cancel_requested() or conversation_runtime.cancelled():
+                code = 130
+                break
+            if time.monotonic() >= deadline:
+                code = 124
+                break
+            time.sleep(.05)
+    finally:
+        # Reap descendants even when their parent shell has already exited.
+        terminate(process)
+        process.wait()
+        reader.join(timeout=2)
+    output = bytes(chunks).decode("utf-8", errors="replace")
+    if code == 124:
+        output += "\nCommand timed out."
+    return {"command": command, "output": output, "exit_code": code if code is not None else process.returncode}

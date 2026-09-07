@@ -67,6 +67,8 @@ def selected_content(before: str, after: str, hunk_indexes: list[int] | None) ->
 
 
 def _target_project(project: dict, change: dict) -> dict:
+    if change.get("workspace_path"):
+        return {**project, "path": change["workspace_path"]}
     session_id = change.get("session_id")
     if not session_id:
         return project

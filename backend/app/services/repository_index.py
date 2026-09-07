@@ -20,6 +20,8 @@ def _files(project: dict):
         dirs[:] = [directory for directory in dirs if directory not in IGNORED]
         for name in files:
             path = Path(base) / name
+            if path.is_symlink():
+                continue
             if name in SKIP_NAMES or path.suffix.lower() not in TEXT_SUFFIXES:
                 continue
             try:
@@ -33,7 +35,7 @@ def _files(project: dict):
 def refresh(project: dict, embedder: Embedder | None = None, embedding_model: str = "") -> dict:
     project_id = int(project["id"])
     with connect() as conn:
-        existing = {row["path"]: dict(row) for row in conn.execute("SELECT * FROM repository_index WHERE project_id=?", (project_id,))}
+        existing = {row["path"]: dict(row) for row in conn.execute("SELECT * FROM workspace_index WHERE project_id=? AND workspace=?", (project_id, str(project_root(project))))}
     seen: set[str] = set()
     changed = 0
     stamp = now()
@@ -48,21 +50,21 @@ def refresh(project: dict, embedder: Embedder | None = None, embedding_model: st
             except OSError:
                 continue
             conn.execute(
-                "INSERT INTO repository_index(project_id,path,size,mtime_ns,content,vector,embedding_model,indexed_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(project_id,path) DO UPDATE SET size=excluded.size,mtime_ns=excluded.mtime_ns,content=excluded.content,vector='',embedding_model='',indexed_at=excluded.indexed_at",
-                (project_id, relative, stat.st_size, stat.st_mtime_ns, content, "", "", stamp),
+                "INSERT INTO workspace_index(project_id,workspace,path,size,mtime_ns,content,vector,embedding_model,indexed_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(project_id,workspace,path) DO UPDATE SET size=excluded.size,mtime_ns=excluded.mtime_ns,content=excluded.content,vector='',embedding_model='',indexed_at=excluded.indexed_at",
+                (project_id, str(project_root(project)), relative, stat.st_size, stat.st_mtime_ns, content, "", "", stamp),
             )
             changed += 1
         removed = [path for path in existing if path not in seen]
         for relative in removed:
-            conn.execute("DELETE FROM repository_index WHERE project_id=? AND path=?", (project_id, relative))
+            conn.execute("DELETE FROM workspace_index WHERE project_id=? AND workspace=? AND path=?", (project_id, str(project_root(project)), relative))
 
     embedded = 0
-    failure_key = (project_id, embedding_model)
+    failure_key = (project_id, str(project_root(project)), embedding_model)
     last_failure = _embedding_failures.get(failure_key)
     can_embed = bool(embedder and embedding_model and (last_failure is None or time.monotonic() - last_failure > 300))
     if can_embed:
         with connect() as conn:
-            pending = [dict(row) for row in conn.execute("SELECT path,content FROM repository_index WHERE project_id=? AND (vector='' OR embedding_model!=?) ORDER BY path LIMIT 500", (project_id, embedding_model))]
+            pending = [dict(row) for row in conn.execute("SELECT path,content FROM workspace_index WHERE project_id=? AND workspace=? AND (vector='' OR embedding_model!=?) ORDER BY path LIMIT 500", (project_id, str(project_root(project)), embedding_model))]
         try:
             for offset in range(0, len(pending), 16):
                 batch = pending[offset:offset + 16]
@@ -71,7 +73,7 @@ def refresh(project: dict, embedder: Embedder | None = None, embedding_model: st
                     raise ValueError("Incomplete embedding batch")
                 with connect() as conn:
                     for item, vector in zip(batch, vectors):
-                        conn.execute("UPDATE repository_index SET vector=?,embedding_model=?,indexed_at=? WHERE project_id=? AND path=?", (json.dumps(vector), embedding_model, now(), project_id, item["path"]))
+                        conn.execute("UPDATE workspace_index SET vector=?,embedding_model=?,indexed_at=? WHERE project_id=? AND workspace=? AND path=?", (json.dumps(vector), embedding_model, now(), project_id, str(project_root(project)), item["path"]))
                         embedded += 1
             _embedding_failures.pop(failure_key, None)
         except Exception:
@@ -82,7 +84,7 @@ def refresh(project: dict, embedder: Embedder | None = None, embedding_model: st
 
 def status(project: dict) -> dict:
     with connect() as conn:
-        row = conn.execute("SELECT COUNT(*) AS files,SUM(CASE WHEN vector!='' THEN 1 ELSE 0 END) AS embedded,MAX(indexed_at) AS updated_at FROM repository_index WHERE project_id=?", (project["id"],)).fetchone()
+        row = conn.execute("SELECT COUNT(*) AS files,SUM(CASE WHEN vector!='' THEN 1 ELSE 0 END) AS embedded,MAX(indexed_at) AS updated_at FROM workspace_index WHERE project_id=? AND workspace=?", (project["id"], str(project_root(project)))).fetchone()
     return {"files": row["files"] or 0, "embedded": row["embedded"] or 0, "updated_at": row["updated_at"]}
 
 
@@ -92,7 +94,7 @@ def ranked_context(project: dict, query: str, embedder: Embedder | None = None, 
     if not terms:
         return []
     with connect() as conn:
-        records = [dict(row) for row in conn.execute("SELECT path,content,vector,embedding_model FROM repository_index WHERE project_id=?", (project["id"],))]
+        records = [dict(row) for row in conn.execute("SELECT path,content,vector,embedding_model FROM workspace_index WHERE project_id=? AND workspace=?", (project["id"], str(project_root(project))))]
     query_vector = None
     if embedder and any(item["vector"] and item["embedding_model"] == embedding_model for item in records):
         try:

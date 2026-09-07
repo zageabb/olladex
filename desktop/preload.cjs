@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("olladexDesktop", Object.freeze({
   platform: process.platform,
+  connection: () => ipcRenderer.invoke("olladex:connection"),
   versions: Object.freeze({ chrome: process.versions.chrome, electron: process.versions.electron }),
   updates: Object.freeze({
     getState: () => ipcRenderer.invoke("olladex:update-state"),

@@ -370,3 +370,24 @@ button.primary:hover { background: var(--blue-2); }
   .conversation-panel { height: 100%; border: 0; }
   .inspector-panel { display: none; }
 }
+
+.live-progress { color: #64748b; font-size: 13px; padding: 6px 18px; }
+.interaction-card { margin: 12px 16px; padding: 16px; border: 1px solid #cbd5e1; border-radius: 12px; background: #f8fafc; overflow-wrap: anywhere; }
+.interaction-card pre { white-space: pre-wrap; }
+.interaction-card button { margin: 10px 8px 0 0; }
+.run-status { padding: 8px 18px; color: #475569; font-size: 13px; }
+.conversation-error { color: #b91c1c; padding: 8px 16px; }
+.conversation-welcome { padding: 32px; color: #475569; }
+.live-messages .bubble { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.conversation-memory { padding: 8px 20px; font-size: 13px; color: #475569; }
+.conversation-memory textarea { display: block; width: 100%; min-height: 80px; margin: 8px 0; }
+/* Keep the live timeline scrollable with optional memory and error rows. */
+.conversation-panel { display: flex; flex-direction: column; min-height: 0; }
+.conversation-panel > .panel-head { flex: 0 0 70px; }
+.conversation-panel > .messages { flex: 1 1 0; min-height: 0; }
+.conversation-panel > .composer, .conversation-memory, .conversation-error { flex: 0 0 auto; }
+.composer-actions > span { flex: 1; font-size: 11px; color: #64748b; }
+.composer-actions button.primary { background: var(--blue); color: white; font-size: 12px; }
+
+.live-command-output { margin: 8px 16px; padding: 12px; max-height: 240px; overflow: auto; background: #0f172a; color: #e2e8f0; border-radius: 8px; font: 12px/1.5 monospace; white-space: pre-wrap; }

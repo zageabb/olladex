@@ -56,7 +56,9 @@ def start(project: dict, run_id: int, command: str, timeout_seconds: int = 600, 
         _jobs[run_id] = job
     with connect() as conn:
         conn.execute("UPDATE command_runs SET status='running',updated_at=? WHERE id=?", (now(), run_id))
-    threading.Thread(target=_collect, args=(run_id,), daemon=True).start()
+    collector = threading.Thread(target=_collect, args=(run_id,), daemon=True)
+    job["collector"] = collector
+    collector.start()
     return status(run_id)
 
 
@@ -84,10 +86,7 @@ def _collect(run_id: int) -> None:
     while True:
         if time.monotonic() - job["started"] > job["timeout"] and process.poll() is None:
             timed_out = True
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+            _terminate(job)
         ready, _, _ = select.select([master], [], [], 0.1)
         if ready:
             try:
@@ -105,6 +104,7 @@ def _collect(run_id: int) -> None:
             trailing, _, _ = select.select([master], [], [], 0.05)
             if eof or not trailing:
                 break
+    _terminate(job)
     try:
         os.close(master)
     except OSError:
@@ -147,10 +147,12 @@ def _finish(run_id: int, job: dict, timed_out: bool) -> None:
     final_status = "timed_out" if timed_out else ("cancelled" if job.get("cancelled") else "completed")
     with _lock:
         job["exit_code"] = 124 if timed_out else exit_code
-        job["status"] = final_status
         output = job["output"] + ("\nCommand timed out." if timed_out else "")
     with connect() as conn:
         conn.execute("UPDATE command_runs SET output=?,exit_code=?,status=?,updated_at=? WHERE id=?", (output, job["exit_code"], final_status, now(), run_id))
+    with _lock:
+        job["status"] = final_status
+        _jobs.pop(run_id, None)
 
 
 def status(run_id: int) -> dict:
@@ -166,18 +168,26 @@ def status(run_id: int) -> dict:
 def cancel(run_id: int) -> dict:
     with _lock:
         job = _jobs.get(run_id)
-        if not job or job["status"] != "running":
-            return status(run_id)
-        job["cancelled"] = True
-        process = job["process"]
-    try:
-        if os.name == "nt":
-            _terminate(job)
-        else:
-            os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
+        active = bool(job and job["status"] == "running")
+        if active:
+            job["cancelled"] = True
+    if active:
+        _terminate(job)
     return status(run_id)
+
+
+def shutdown() -> None:
+    with _lock:
+        jobs = list(_jobs.values())
+    for job in jobs:
+        if job["status"] == "running":
+            job["cancelled"] = True
+            _terminate(job)
+    for job in jobs:
+        collector = job.get("collector")
+        if collector:
+            collector.join(timeout=3)
+
 
 
 def write_input(run_id: int, data: str) -> dict:
@@ -223,4 +233,5 @@ def _terminate(job: dict) -> None:
     if job.get("backend") == "conpty":
         job["process"].terminate(force=True)
     else:
-        job["process"].terminate()
+        from .processes import terminate
+        terminate(job["process"])

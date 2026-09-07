@@ -8,6 +8,7 @@ declare global {
   interface Window {
     olladexDesktop?: {
       platform: string;
+      connection?: () => Promise<{ token: string }>;
       versions: { chrome: string; electron: string };
       updates: { getState: () => Promise<UpdateState>; check: () => Promise<UpdateState>; onStatus: (callback: (state: UpdateState) => void) => () => void };
     };

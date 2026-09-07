@@ -34,11 +34,13 @@ def start(handler: TaskHandler) -> None:
         _wake.set()
         for thread in alive:
             thread.join(timeout=2)
+        if any(thread.is_alive() for thread in alive):
+            raise RuntimeError("Previous task workers have not stopped")
         _stop.clear()
         _wake.clear()
         with connect() as conn:
             conn.execute("UPDATE background_tasks SET status='cancelled',completed_at=? WHERE status='running' AND cancel_requested=1", (now(),))
-            conn.execute("UPDATE background_tasks SET status='queued',started_at='' WHERE status='running'")
+            conn.execute("UPDATE background_tasks SET status='interrupted',error='Application restarted; inspect completed work before continuing' WHERE status IN ('running','waiting_for_approval','waiting_for_input')")
         _threads = [threading.Thread(target=_worker, name=f"olladex-task-worker-{index + 1}", daemon=True) for index in range(_worker_count())]
         for thread in _threads:
             thread.start()
@@ -51,7 +53,7 @@ def stop() -> None:
     for thread in _threads:
         if thread.is_alive():
             thread.join(timeout=2)
-    _threads = []
+    _threads = [thread for thread in _threads if thread.is_alive()]
 
 
 def enqueue(project_id: int, session_id: int, title: str, prompt: str, source_kind: str = "manual", source_ref: str = "", parent_task_id: int | None = None, depends_on: list[int] | None = None, agent_role: str = "worker") -> dict:
@@ -106,7 +108,7 @@ def cancel(task_id: int) -> dict:
             return {}
         if row["status"] == "queued":
             conn.execute("UPDATE background_tasks SET status='cancelled',cancel_requested=1,completed_at=? WHERE id=?", (now(), task_id))
-        elif row["status"] == "running":
+        elif row["status"] in {"running", "waiting_for_approval", "waiting_for_input"}:
             conn.execute("UPDATE background_tasks SET cancel_requested=1 WHERE id=?", (task_id,))
     _wake.set()
     return get(task_id)
@@ -311,15 +313,17 @@ def run_once() -> bool:
             conn.execute("UPDATE background_tasks SET status=?,result=?,completed_at=? WHERE id=?", (final_status, result, now(), task["id"]))
         _finalize_parent(task, final_status, result=result, error="Lead consolidation task was cancelled")
     except Exception as exc:
+        from .ollama import AgentCancelled
         with connect() as conn:
             current = conn.execute("SELECT cancel_requested FROM background_tasks WHERE id=?", (task["id"],)).fetchone()
-            if current and current["cancel_requested"]:
+            if (current and current["cancel_requested"]) or isinstance(exc, AgentCancelled):
                 conn.execute("UPDATE background_tasks SET status='cancelled',error='',completed_at=? WHERE id=?", (now(), task["id"]))
                 final_status = "cancelled"
                 error = "Lead consolidation task was cancelled"
             else:
+                from .ollama import BudgetExhausted
                 error = str(exc)[:20000]
-                conn.execute("UPDATE background_tasks SET status='failed',error=?,completed_at=? WHERE id=?", (error, now(), task["id"]))
+                conn.execute("UPDATE background_tasks SET status=?,error=?,completed_at=? WHERE id=?", ("budget_exhausted" if isinstance(exc, BudgetExhausted) else "failed", error, now(), task["id"]))
                 final_status = "failed"
         _finalize_parent(task, final_status, error=error)
     finally:
