@@ -1,0 +1,56 @@
+flowchart TB
+    subgraph Client
+        Browser[Browser]
+        Electron[Electron Desktop]
+        UI[Next.js / React UI]
+        Browser --> UI
+        Electron --> UI
+    end
+
+    subgraph Olladex
+        API[FastAPI API]
+        Runtime[Conversation Runtime]
+        Workspace[Workspace + Changes]
+        Queue[Background Task Queue]
+        Orch[Multi-Agent Orchestration]
+        Index[Repository Index + Context]
+        GitSvc[Git Service]
+        GHSvc[GitHub Service]
+        Term[Terminal / PTY]
+        Office[Office Service]
+        DB[(SQLite)]
+    end
+
+    subgraph LocalExecution[Local / Trusted Execution]
+        Ollama[Ollama]
+        Repo[(Selected Repository)]
+        Worktrees[(Managed Task Worktrees)]
+        Git[Git]
+        GH[GitHub CLI]
+        Shell[OS Shell / PTY]
+    end
+
+    UI --> API
+    API --> DB
+    API --> Runtime
+    API --> Workspace
+    API --> Queue
+    API --> Orch
+    API --> Index
+    API --> GitSvc
+    API --> GHSvc
+    API --> Term
+    API --> Office
+
+    Runtime --> Ollama
+    Index --> Ollama
+    Queue --> Ollama
+    Workspace --> Repo
+    Office --> Repo
+    GitSvc --> Git
+    Git --> Repo
+    GHSvc --> GH
+    Term --> Shell
+    Shell --> Repo
+    Queue --> Worktrees
+    Orch --> Worktrees
