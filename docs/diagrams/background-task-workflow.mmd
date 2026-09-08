@@ -1,0 +1,17 @@
+flowchart TD
+    A[Queue task] --> B[Persist task in SQLite]
+    B --> C{Dependencies satisfied?}
+    C -- No --> D[Wait / block]
+    C -- Yes --> E[Worker claims task]
+    E --> F[Create/use managed worktree]
+    F --> G[Run agent in task worktree]
+    G --> H{Cancelled?}
+    H -- Yes --> I[Cooperative cancellation]
+    H -- No --> J[Persist result / error]
+    J --> K[Review branch + changes]
+    K --> L{Promote work?}
+    L -- No --> M[Retain/clean up safely]
+    L -- Yes --> N[Commit / push / PR]
+    N --> O{Merged and worktree clean?}
+    O -- Yes --> P[Safe cleanup]
+    O -- No --> Q[Keep managed worktree]
