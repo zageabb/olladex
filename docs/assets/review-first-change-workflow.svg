@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520" role="img" aria-labelledby="title desc">
+  <title id="title">Olladex review-first change workflow</title>
+  <desc id="desc">Workflow from user request through agent proposal, hunk review, apply, testing and Git commit, with reject and conflict-safe revert paths.</desc>
+  <defs>
+    <marker id="a" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 Z" fill="#64748b"/></marker>
+    <style>.h{font:700 18px Arial,sans-serif;fill:#15233a}.t{font:600 14px Arial,sans-serif;fill:#15233a}.s{font:12px Arial,sans-serif;fill:#64748b}.n{fill:#fff;stroke:#b9c8da;stroke-width:1.5}.blue{fill:#eaf2ff;stroke:#1768e5;stroke-width:1.5}.green{fill:#eaf8ef;stroke:#27a269;stroke-width:1.5}.red{fill:#fff1f1;stroke:#dc5a5a;stroke-width:1.5}.line{stroke:#64748b;stroke-width:2;fill:none;marker-end:url(#a)}</style>
+  </defs>
+  <rect width="1200" height="520" rx="18" fill="#f7f9fc"/>
+  <text x="52" y="48" class="h">Review-first file change workflow</text>
+  <text x="52" y="72" class="s">Agent intent and repository mutation are deliberately separated so the user can inspect the exact patch.</text>
+
+  <rect x="48" y="130" width="132" height="76" rx="12" class="n"/><text x="70" y="160" class="t">1 · Request</text><text x="70" y="182" class="s">Describe outcome</text>
+  <rect x="220" y="130" width="150" height="76" rx="12" class="blue"/><text x="244" y="160" class="t">2 · Agent</text><text x="244" y="182" class="s">Inspect + plan</text>
+  <rect x="410" y="130" width="160" height="76" rx="12" class="blue"/><text x="432" y="160" class="t">3 · Proposal</text><text x="432" y="182" class="s">Diff split into hunks</text>
+  <rect x="610" y="116" width="190" height="104" rx="12" class="n"/><text x="632" y="148" class="t">4 · Human review</text><text x="632" y="172" class="s">Read diff</text><text x="632" y="191" class="s">Select / deselect hunks</text>
+  <rect x="840" y="130" width="142" height="76" rx="12" class="green"/><text x="862" y="160" class="t">5 · Apply</text><text x="862" y="182" class="s">Selected hunks only</text>
+  <rect x="1022" y="130" width="132" height="76" rx="12" class="green"/><text x="1044" y="160" class="t">6 · Verify</text><text x="1044" y="182" class="s">Tests / build</text>
+
+  <path d="M180 168 H220" class="line"/><path d="M370 168 H410" class="line"/><path d="M570 168 H610" class="line"/><path d="M800 168 H840" class="line"/><path d="M982 168 H1022" class="line"/>
+
+  <rect x="610" y="282" width="190" height="72" rx="12" class="red"/><text x="642" y="312" class="t">Reject proposal</text><text x="642" y="334" class="s">Repository unchanged</text>
+  <path d="M705 220 V282" class="line"/>
+
+  <rect x="840" y="282" width="314" height="90" rx="12" class="n"/><text x="862" y="310" class="t">After apply: Git remains authoritative</text><text x="862" y="333" class="s">Review final diff → stage → commit → controlled push/PR</text><text x="862" y="353" class="s">Timestamped .olladex/history backups add local protection</text>
+  <path d="M1088 206 V282" class="line"/>
+
+  <rect x="410" y="410" width="390" height="70" rx="12" class="n"/><text x="432" y="438" class="t">Conflict-safe revert</text><text x="432" y="460" class="s">Revert only when the current file still matches the known applied state; otherwise refuse the blind overwrite.</text>
+  <path d="M911 206 C911 390 780 390 780 410" class="line"/>
+</svg>

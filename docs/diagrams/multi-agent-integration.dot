@@ -1,0 +1,36 @@
+digraph OlladexMultiAgent {
+  rankdir=LR;
+  graph [fontname="Arial", bgcolor="white", nodesep=0.45, ranksep=0.75];
+  node [shape=box, style="rounded,filled", fillcolor="#eef5ff", color="#1768e5", fontname="Arial", fontcolor="#15233a"];
+  edge [color="#64748b", fontname="Arial", fontcolor="#475569"];
+
+  objective [label="User objective"];
+  lead [label="Lead agent\nplan + dependencies", fillcolor="#dbeafe"];
+  backend [label="Backend specialist\nolladex/task-A"];
+  frontend [label="Frontend specialist\nolladex/task-B"];
+  tester [label="Tester specialist\nolladex/task-C"];
+  reviewer [label="Final reviewer\nconsolidation"];
+  preflight [label="Integration preflight\nchanged-file overlaps"];
+  integration [label="Managed integration worktree\nolladex/integration-<lead-id>", fillcolor="#e0f2fe"];
+  checks [label="Combined checks\npytest + TypeScript + build"];
+  push [label="Push integration branch"];
+  pr [label="Final integration PR", fillcolor="#dcfce7", color="#16a34a"];
+  conflict [label="Conflict / failed checks\nreview and fix", fillcolor="#fee2e2", color="#dc2626"];
+
+  objective -> lead;
+  lead -> backend;
+  lead -> frontend;
+  backend -> tester [label="dependency"];
+  frontend -> tester [label="dependency"];
+  backend -> reviewer;
+  frontend -> reviewer;
+  tester -> reviewer;
+  reviewer -> preflight;
+  preflight -> integration [label="compatible"];
+  preflight -> conflict [label="needs review"];
+  integration -> checks;
+  checks -> push [label="pass"];
+  checks -> conflict [label="fail"];
+  push -> pr;
+  conflict -> preflight [label="retry after correction"];
+}

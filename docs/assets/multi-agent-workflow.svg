@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="650" viewBox="0 0 1200 650" role="img" aria-labelledby="title desc">
+  <title id="title">Olladex multi-agent workflow</title>
+  <desc id="desc">Lead agent decomposes an objective into isolated specialist task worktrees, a reviewer consolidates results, then an integration branch is preflighted, checked and promoted to a final pull request.</desc>
+  <defs>
+    <marker id="a" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 Z" fill="#64748b"/></marker>
+    <style>.h{font:700 18px Arial,sans-serif;fill:#15233a}.t{font:600 14px Arial,sans-serif;fill:#15233a}.s{font:12px Arial,sans-serif;fill:#64748b}.n{fill:#fff;stroke:#b9c8da;stroke-width:1.5}.blue{fill:#eaf2ff;stroke:#1768e5;stroke-width:1.5}.cyan{fill:#e8f7fb;stroke:#0f8eac;stroke-width:1.5}.green{fill:#eaf8ef;stroke:#27a269;stroke-width:1.5}.warn{fill:#fff8e7;stroke:#d6982b;stroke-width:1.5}.line{stroke:#64748b;stroke-width:2;fill:none;marker-end:url(#a)}.dep{stroke:#9b6bcc;stroke-width:2;stroke-dasharray:6 5;fill:none;marker-end:url(#a)}</style>
+  </defs>
+  <rect width="1200" height="650" rx="18" fill="#f7f9fc"/>
+  <text x="50" y="48" class="h">Multi-agent orchestration and integration</text>
+  <text x="50" y="72" class="s">Specialists work in managed Git worktrees; dependencies and integration are explicit rather than multiple agents editing the main checkout.</text>
+
+  <rect x="45" y="268" width="135" height="82" rx="12" class="n"/><text x="69" y="299" class="t">Objective</text><text x="69" y="321" class="s">One coherent outcome</text>
+  <rect x="220" y="250" width="160" height="118" rx="12" class="blue"/><text x="245" y="281" class="t">Lead agent</text><text x="245" y="304" class="s">Decompose work</text><text x="245" y="324" class="s">Set dependencies</text><text x="245" y="344" class="s">Create final reviewer</text>
+  <path d="M180 309 H220" class="line"/>
+
+  <rect x="430" y="118" width="180" height="88" rx="12" class="cyan"/><text x="453" y="147" class="t">Backend specialist</text><text x="453" y="170" class="s">olladex/task-A</text><text x="453" y="188" class="s">isolated worktree</text>
+  <rect x="430" y="266" width="180" height="88" rx="12" class="cyan"/><text x="453" y="295" class="t">Frontend specialist</text><text x="453" y="318" class="s">olladex/task-B</text><text x="453" y="336" class="s">isolated worktree</text>
+  <rect x="430" y="414" width="180" height="88" rx="12" class="cyan"/><text x="453" y="443" class="t">Tester specialist</text><text x="453" y="466" class="s">olladex/task-C</text><text x="453" y="484" class="s">after prerequisites</text>
+
+  <path d="M380 285 C404 245 405 175 430 162" class="line"/><path d="M380 309 H430" class="line"/><path d="M380 333 C404 375 405 445 430 458" class="line"/>
+  <path d="M520 206 V414" class="dep"/><path d="M560 354 V414" class="dep"/>
+  <text x="534" y="397" class="s">dependency hand-off</text>
+
+  <rect x="666" y="250" width="160" height="118" rx="12" class="blue"/><text x="692" y="281" class="t">Final reviewer</text><text x="692" y="304" class="s">Consolidate results</text><text x="692" y="324" class="s">Review task branches</text><text x="692" y="344" class="s">Prepare integration view</text>
+  <path d="M610 162 C638 180 638 270 666 285" class="line"/><path d="M610 310 H666" class="line"/><path d="M610 458 C638 438 638 348 666 333" class="line"/>
+
+  <rect x="870" y="118" width="200" height="82" rx="12" class="warn"/><text x="894" y="148" class="t">Overlap preflight</text><text x="894" y="171" class="s">Report files touched by</text><text x="894" y="189" class="s">multiple specialist branches</text>
+  <rect x="870" y="250" width="200" height="94" rx="12" class="cyan"/><text x="894" y="280" class="t">Integration branch</text><text x="894" y="303" class="s">olladex/integration-&lt;lead-id&gt;</text><text x="894" y="324" class="s">conflict-safe combination</text>
+  <rect x="870" y="394" width="200" height="82" rx="12" class="green"/><text x="894" y="424" class="t">Combined checks</text><text x="894" y="447" class="s">Tests · type check · build</text>
+  <rect x="870" y="526" width="200" height="72" rx="12" class="green"/><text x="894" y="555" class="t">Final integration PR</text><text x="894" y="577" class="s">Only after checks pass</text>
+
+  <path d="M826 285 C848 258 848 181 870 159" class="line"/><path d="M970 200 V250" class="line"/><path d="M970 344 V394" class="line"/><path d="M970 476 V526" class="line"/>
+  <path d="M1070 159 C1144 159 1144 297 1070 297" class="line"/>
+  <text x="1080" y="227" class="s">review overlaps</text>
+  <path d="M1070 435 C1155 435 1155 297 1070 297" class="line"/>
+  <text x="1080" y="382" class="s">failed checks → correct</text>
+
+  <rect x="45" y="555" width="700" height="48" rx="10" fill="#eef3f8"/><text x="64" y="584" class="s">Key safety boundary: specialist writes stay in their originating worktrees; integration does not silently modify main when a conflict occurs.</text>
+</svg>
