@@ -1,0 +1,22 @@
+flowchart TD
+    A[User development request] --> B[Agent inspects repository]
+    B --> C[Agent prepares file proposal]
+    C --> D[Persist proposed diff + hunks]
+    D --> E[User opens Changes]
+    E --> F{Accept all hunks?}
+    F -- No --> G[Select wanted hunks]
+    F -- Yes --> H[Apply selected/all hunks]
+    G --> H
+    H --> I[Write repository file]
+    I --> J[Refresh Git diff]
+    J --> K[Run tests/build]
+    K --> L{Verification passes?}
+    L -- No --> M[Fix or prepare new proposal]
+    M --> C
+    L -- Yes --> N[Stage + commit]
+
+    D --> R[Reject proposal]
+    I --> V{Later revert requested?}
+    V -- Yes --> W{Current file still matches applied state?}
+    W -- Yes --> X[Conflict-safe revert]
+    W -- No --> Y[Refuse blind revert; inspect Git/history]
