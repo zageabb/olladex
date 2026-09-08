@@ -1,0 +1,19 @@
+flowchart TD
+    A[Verified local branch] --> B[Prepare push]
+    B --> C[Review exact Git command]
+    C --> D{Approve push?}
+    D -- No --> E[Reject operation]
+    D -- Yes --> F[Push branch]
+    F --> G[Prepare pull request]
+    G --> H[Enter base, title and description]
+    H --> I[Generate exact gh pr create command]
+    I --> J{Approve PR creation?}
+    J -- No --> K[Reject proposal]
+    J -- Yes --> L[Create pull request]
+    L --> M[Load PR detail, diff and checks]
+    M --> N{Review outcome}
+    N -- Comment --> O[Post conversation comment]
+    N -- Changes needed --> P[Request changes]
+    N -- Accept --> Q[Approve PR]
+    O --> M
+    P --> M
