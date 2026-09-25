@@ -168,8 +168,11 @@ def command(project, command):
             (project['id'], task_queue.current_task_id(), current_id(), cwd, command, '', -1, 'pending' if pending else 'running', now(), now()))
         command_id = cursor.lastrowid
     if pending:
-        emit('approval', {'command_run_id': command_id, 'command': command, 'cwd': cwd})
+        # Publish the approval event only after the durable run/task state is ready.
+        # A UI reacting immediately to the event can then approve without racing a
+        # still-'running' agent state.
         state('waiting_for_approval')
+        emit('approval', {'command_run_id': command_id, 'command': command, 'cwd': cwd})
         while True:
             check_cancelled()
             with connect() as conn:
