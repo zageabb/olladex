@@ -105,14 +105,25 @@ def _reconcile(swarm_id: int) -> None:
                 return
             swarm.set_status(swarm_id, "reviewing")
             run["status"] = "reviewing"
-        if challenger and challenger.get("status") == "queued":
+        if challenger and challenger.get("status") in {"queued", "running", "waiting_for_input", "waiting_for_approval"}:
             return
-        if challenger and challenger.get("status") in {"failed", "budget_exhausted", "cancelled"}:
-            _publish_once(swarm_id, "risk", "challenger-failed", "The challenger did not complete successfully; final review should account for that missing verification.")
-        if reviewer and reviewer.get("status") == "queued":
+        if challenger and challenger.get("status") in {"failed", "budget_exhausted", "cancelled", "interrupted"}:
+            _publish_once(swarm_id, "risk", "challenger-failed", "The challenger did not complete successfully; final verification is incomplete.")
+            if not reviewer:
+                swarm.set_status(swarm_id, "failed")
+                return
+        if reviewer and reviewer.get("status") in {"queued", "running", "waiting_for_input", "waiting_for_approval"}:
             return
-        if reviewer and reviewer.get("status") in {"failed", "budget_exhausted"}:
+        if reviewer and reviewer.get("status") in {"failed", "budget_exhausted", "cancelled", "interrupted"}:
             swarm.set_status(swarm_id, "failed")
+            return
+        if reviewer and reviewer.get("status") == "completed":
+            # Normal reviewer completion is also finalized by task_queue, but keep
+            # the coordinator idempotently correct when recovering after restart.
+            swarm.set_status(swarm_id, "completed")
+            return
+        if challenger and not reviewer and challenger.get("status") == "completed":
+            swarm.set_status(swarm_id, "completed")
             return
         if not reviewer and not challenger:
             swarm.set_status(swarm_id, "completed")
