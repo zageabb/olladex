@@ -1007,3 +1007,89 @@ def test_swarm_integration_push_state_is_durable_and_required_for_pr(tmp_path, m
     created = swarm_routes.create_swarm_integration_pull_request(swarm_id, body)
     assert created["pull_request_number"] == 99
     assert swarm.get_run(swarm_id)["integration_pr_number"] == 99
+
+
+def test_swarm_self_test_pings_each_unique_model_once(tmp_path, monkeypatch):
+    project_id, _ = _seed(tmp_path, monkeypatch)
+    with connect() as conn:
+        profile_id = int(conn.execute("SELECT id FROM swarm_profiles WHERE name='Development'").fetchone()["id"])
+
+    monkeypatch.setattr(
+        swarm,
+        "validate_models",
+        lambda profile: {
+            "installed": ["phi4:14b", "qwen2.5-coder:7b"],
+            "assignments": {
+                "coordinator": "phi4:14b",
+                "reviewer": "phi4:14b",
+                "backend": "qwen2.5-coder:7b",
+                "tester": "qwen2.5-coder:7b",
+            },
+        },
+    )
+
+    calls: list[str] = []
+
+    class Response:
+        def __init__(self, model: str):
+            self.model = model
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return {"message": {"content": "OLLADEX_SWARM_OK"}}
+
+    class Client:
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def post(self, path, json):
+            calls.append(json["model"])
+            return Response(json["model"])
+
+    monkeypatch.setattr(swarm.ollama, "client", lambda timeout=30: Client())
+
+    result = swarm.self_test(project_id, profile_id)
+
+    assert result["ready"] is True
+    assert sorted(calls) == ["phi4:14b", "qwen2.5-coder:7b"]
+    by_model = {item["model"]: item for item in result["models"]}
+    assert by_model["phi4:14b"]["roles"] == ["coordinator", "reviewer"]
+    assert by_model["qwen2.5-coder:7b"]["roles"] == ["backend", "tester"]
+
+
+def test_swarm_self_test_reports_bad_model_response(tmp_path, monkeypatch):
+    project_id, _ = _seed(tmp_path, monkeypatch)
+    with connect() as conn:
+        profile_id = int(conn.execute("SELECT id FROM swarm_profiles WHERE name='Development'").fetchone()["id"])
+
+    monkeypatch.setattr(
+        swarm,
+        "validate_models",
+        lambda profile: {
+            "installed": ["test-model"],
+            "assignments": {"coordinator": "test-model"},
+        },
+    )
+
+    class Response:
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return {"message": {"content": "unexpected response"}}
+
+    class Client:
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def post(self, path, json):
+            return Response()
+
+    monkeypatch.setattr(swarm.ollama, "client", lambda timeout=30: Client())
+
+    result = swarm.self_test(project_id, profile_id)
+
+    assert result["ready"] is False
+    assert result["models"][0]["ok"] is False
+    assert result["models"][0]["response"] == "unexpected response"
