@@ -47,6 +47,7 @@ test('swarm board can be opened and enabled for a project', async ({ page }) => 
 
 
 test('swarm board shows coordinator timeline and advances incremental polling cursor', async ({ page }) => {
+  let broadcastContent = '';
   const project = { id:1,name:'Demo',path:'/demo',model:'test',approval_mode:'assisted' };
   const coordinatorAfter: string[] = [];
   const agentAfter: string[] = [];
@@ -92,6 +93,10 @@ test('swarm board shows coordinator timeline and advances incremental polling cu
         {id:21,swarm_id:7,kind:'decision',payload:{content:'Coordinator opened final verification.'},created_at:new Date().toISOString()}
       ]:[]);
     }
+    if (p === '/api/swarms/7/broadcast') {
+      broadcastContent = String(route.request().postDataJSON().content || '');
+      return json({swarm_id:7,status:'received',coordinator_instructions:broadcastContent,queued_tasks_updated:1,active_runs_steered:1});
+    }
     if (p === '/api/swarm-agents/11') return json({
       task:run.agents[0],
       run:{id:101,status:'completed',created_at:new Date().toISOString(),updated_at:new Date().toISOString()},
@@ -119,6 +124,11 @@ test('swarm board shows coordinator timeline and advances incremental polling cu
 
   await expect.poll(() => coordinatorAfter.includes('21'), {timeout:5000}).toBe(true);
   await expect.poll(() => agentAfter.includes('9'), {timeout:5000}).toBe(true);
+
+  const guidance = page.getByPlaceholder(/Guide Coordinator/);
+  await guidance.fill('Do not change the public API.');
+  await page.getByRole('button', {name:'Apply to all agents'}).click();
+  await expect.poll(() => broadcastContent).toBe('Do not change the public API.');
 
   await page.getByRole('button', {name:'Open agent'}).first().click();
   await expect(page.getByRole('heading', {name:'Changed files'})).toBeVisible();
