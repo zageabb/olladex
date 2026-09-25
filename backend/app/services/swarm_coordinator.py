@@ -12,6 +12,15 @@ _threads: dict[int, threading.Thread] = {}
 _stop = threading.Event()
 
 
+def start_active() -> None:
+    with connect() as conn:
+        ids = [int(row["id"]) for row in conn.execute(
+            "SELECT id FROM swarm_runs WHERE status IN ('running','waiting','reviewing','integrating','paused') AND cancel_requested=0"
+        )]
+    for swarm_id in ids:
+        start(swarm_id)
+
+
 def start(swarm_id: int) -> None:
     with _lock:
         thread = _threads.get(swarm_id)
@@ -159,12 +168,25 @@ def _retarget_verification(swarm_id: int, recovery_task_id: int) -> None:
         ).fetchall()
         for row in verification:
             try:
-                deps = json.loads(row["depends_on"] or "[]")
-            except json.JSONDecodeError:
+                deps = [int(value) for value in json.loads(row["depends_on"] or "[]")]
+            except (json.JSONDecodeError, TypeError, ValueError):
                 deps = []
-            if recovery_task_id not in deps:
-                deps.append(recovery_task_id)
-                conn.execute("UPDATE background_tasks SET depends_on=? WHERE id=?", (json.dumps(sorted(set(int(x) for x in deps))), row["id"]))
+            statuses = {}
+            if deps:
+                placeholders = ",".join("?" for _ in deps)
+                statuses = {
+                    int(item["id"]): item["status"]
+                    for item in conn.execute(
+                        f"SELECT id,status FROM background_tasks WHERE id IN ({placeholders})",
+                        deps,
+                    )
+                }
+            retained = [dep for dep in deps if statuses.get(dep) == "completed"]
+            retained.append(recovery_task_id)
+            conn.execute(
+                "UPDATE background_tasks SET depends_on=?,status='queued',error='',completed_at='' WHERE id=?",
+                (json.dumps(sorted(set(retained))), row["id"]),
+            )
 
 
 def _recovery_decision(run: dict, profile: dict, failed: list[dict], completed: list[dict]) -> dict:
