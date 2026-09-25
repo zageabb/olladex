@@ -80,8 +80,9 @@ test('swarm board shows coordinator timeline and advances incremental polling cu
     if (p === '/api/projects/1/swarms') return json([{...run,agents:undefined,agent_counts:{active:1,total:2}}]);
     if (p === '/api/swarms/7') return json(run);
     if (p === '/api/swarms/7/blackboard') return json([
-      {id:1,task_id:null,category:'decision',key:'pre-review-gate',content:'Coordinator opened final verification.',confidence:null,created_at:new Date().toISOString()}
-    ]);
+      {id:1,task_id:null,category:'decision',key:'pre-review-gate',content:'Coordinator opened final verification.',confidence:null,created_at:new Date().toISOString()},
+      {id:2,task_id:11,category:'finding',key:'auth',content:'Auth dependency is centralized.',confidence:null,created_at:new Date().toISOString()}
+    ].filter(item=>item.id>Number(url.searchParams.get('after')||0)));
     if (p === '/api/swarms/7/events') {
       const after=url.searchParams.get('after')||'0'; agentAfter.push(after);
       return json(after==='0'?[{id:9,run_id:101,task_id:11,task_title:'Inspect auth',agent_role:'backend',assigned_model:'test',kind:'status',payload:{status:'completed'},created_at:new Date().toISOString()}]:[]);
@@ -124,6 +125,11 @@ test('swarm board shows coordinator timeline and advances incremental polling cu
 
   await expect.poll(() => coordinatorAfter.includes('21'), {timeout:5000}).toBe(true);
   await expect.poll(() => agentAfter.includes('9'), {timeout:5000}).toBe(true);
+
+  await page.getByRole('combobox').filter({has:page.locator('option[value="finding"]')}).selectOption('finding');
+  await expect(page.getByText('Auth dependency is centralized.').first()).toBeVisible();
+  await expect(page.getByText('Coordinator opened final verification.').last()).not.toBeVisible();
+  await page.getByRole('button', {name:'Clear filters'}).click();
 
   const guidance = page.getByPlaceholder(/Guide Coordinator/);
   await guidance.fill('Do not change the public API.');
