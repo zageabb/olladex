@@ -630,3 +630,30 @@ def test_blackboard_supports_incremental_cursor_and_limit(tmp_path, monkeypatch)
 
     remaining = swarm.blackboard(swarm_id, after=second["id"], limit=10)
     assert [item["id"] for item in remaining] == [third["id"]]
+
+
+def test_agent_board_exposes_persisted_progress_and_tool_usage(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id)
+    task = task_queue.enqueue(
+        project_id,
+        session_id,
+        "Measured agent",
+        "work",
+        swarm_id=swarm_id,
+        source_kind="swarm_specialist",
+        agent_role="backend",
+        task_kind="backend",
+    )
+
+    task_queue.set_progress(task["id"], 40, "Running focused tests")
+    run_id = conversation_runtime.create(session_id, task["id"])
+    conversation_runtime.emit("tool_started", {"tool": "read_file"}, run_id)
+    conversation_runtime.emit("tool_started", {"tool": "run_command"}, run_id)
+
+    agent = next(item for item in swarm.list_agents(swarm_id) if item["id"] == task["id"])
+
+    assert agent["progress"] == 40
+    assert agent["current_activity"] in {"Running focused tests", "Using run_command"}
+    assert agent["tool_usage"] == 2
+    assert agent["tool_budget"] > 0
