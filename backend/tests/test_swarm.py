@@ -858,12 +858,15 @@ def test_board_snapshot_returns_stable_summary_and_incremental_streams(tmp_path,
     assert snap["events"]
     assert snap["blackboard"][0]["id"] == board_item["id"]
     assert snap["coordinator_events"][-1]["id"] == coordinator_item["id"]
+    assert snap["cursors"]["event"] == snap["events"][-1]["id"]
+    assert snap["cursors"]["blackboard"] == board_item["id"]
+    assert snap["cursors"]["coordinator_event"] == coordinator_item["id"]
 
     later = swarm.board_snapshot(
         swarm_id,
-        after_event=snap["events"][-1]["id"],
-        after_blackboard=board_item["id"],
-        after_coordinator_event=coordinator_item["id"],
+        after_event=snap["cursors"]["event"],
+        after_blackboard=snap["cursors"]["blackboard"],
+        after_coordinator_event=snap["cursors"]["coordinator_event"],
     )
     assert later["events"] == []
     assert later["blackboard"] == []
