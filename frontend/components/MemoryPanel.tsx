@@ -39,7 +39,7 @@ export function MemoryPanel({ projectId, projectName, sessionId }: { projectId: 
       try {
         const [personal, workspace, project] = await Promise.all([
           request<ScopedMemory>("/memory/personal"),
-          request<ScopedMemory>(`/projects/${projectId}/workspace`).then(async workspace => workspace?.id ? request<ScopedMemory>(`/memory/workspace?workspace_id=${workspace.id}`) : ({ scope: "workspace", scope_key: "", content: "", updated_at: "" } as ScopedMemory)),
+          request<{ id: number } | null>(`/projects/${projectId}/workspace`).then(async workspace => workspace?.id ? request<ScopedMemory>(`/memory/workspace?workspace_id=${workspace.id}`) : ({ scope: "workspace", scope_key: "", content: "", updated_at: "" } as ScopedMemory)),
           request<ScopedMemory>(`/memory/project?project_id=${projectId}`),
         ]);
         if (disposed) return;
