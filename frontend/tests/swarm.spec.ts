@@ -236,7 +236,8 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
 });
 
 
-test('interaction agent board can switch between swarm runs', async ({ page }) => {
+test('interaction agent board can steer an active agent and switch between swarm runs', async ({ page }) => {
+  let activeAgentGuidance = '';
   await baseRoutes(page, async (route,url) => {
     const p=url.pathname;
     const json=(data:unknown)=>route.fulfill({json:data});
@@ -267,6 +268,18 @@ test('interaction agent board can switch between swarm runs', async ({ page }) =
       });
       return true;
     }
+    if (p === '/api/swarm-agents/71' && route.request().method() === 'GET') {
+      await json({
+        task:{id:71,title:'Current task',status:'running',agent_role:'backend',progress:50,tool_usage:3,tool_budget:30,current_activity:'Running tests'},
+        commands:[],blackboard:[],changed_files:[],worktree:null
+      });
+      return true;
+    }
+    if (p === '/api/swarm-agents/71/input') {
+      activeAgentGuidance = String(route.request().postDataJSON().content || '');
+      await json({task_id:71,status:'received'});
+      return true;
+    }
     return false;
   });
 
@@ -274,6 +287,12 @@ test('interaction agent board can switch between swarm runs', async ({ page }) =
   await page.locator('.rail').getByRole('button', {name:'Tasks'}).click();
 
   await expect(page.getByRole('heading', {name:'Current swarm'})).toBeVisible();
+  await page.getByText('Current task').click();
+  await page.getByPlaceholder('Guide this agent…').fill('Focus on the failing regression.');
+  await page.getByRole('button', {name:'Send guidance'}).click();
+  await expect.poll(()=>activeAgentGuidance).toBe('Focus on the failing regression.');
+  await page.getByRole('button', {name:'Close'}).click();
+
   await page.getByLabel('Run').selectOption('8');
   await expect(page.getByRole('heading', {name:'Previous swarm'})).toBeVisible();
   await expect(page.getByText('Historical task')).toBeVisible();
