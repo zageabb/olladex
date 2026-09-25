@@ -524,6 +524,60 @@ def broadcast_guidance(swarm_id: int, content: str) -> dict:
     }
 
 
+def board_snapshot(
+    swarm_id: int,
+    *,
+    after_event: int = 0,
+    after_coordinator_event: int = 0,
+    after_blackboard: int = 0,
+    limit: int = 200,
+) -> dict:
+    run = get_run(swarm_id)
+    agent_items = run.get("agents") or []
+    status_counts: dict[str, int] = {}
+    for agent in agent_items:
+        status = str(agent.get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+    complete = status_counts.get("completed", 0)
+    active = sum(status_counts.get(state, 0) for state in ("running", "waiting_for_input", "waiting_for_approval"))
+    failed = sum(status_counts.get(state, 0) for state in ("failed", "budget_exhausted"))
+    overall_progress = 0
+    if agent_items:
+        overall_progress = round(sum(
+            100 if agent.get("status") == "completed"
+            else max(0, min(int(agent.get("progress") or 0), 99))
+            for agent in agent_items
+        ) / len(agent_items))
+
+    integration_ready = bool(
+        run.get("status") == "completed"
+        and any(
+            agent.get("status") == "completed"
+            and agent.get("task_kind") not in {"reviewer", "challenger"}
+            and agent.get("worktree_branch")
+            for agent in agent_items
+        )
+    )
+
+    return {
+        "swarm": run,
+        "summary": {
+            "total_agents": len(agent_items),
+            "max_agents": int(run.get("max_agents") or 0),
+            "active_agents": active,
+            "max_concurrency": int(run.get("max_concurrency") or 0),
+            "completed_agents": complete,
+            "failed_agents": failed,
+            "progress": overall_progress,
+            "integration_ready": integration_ready,
+        },
+        "events": events(swarm_id, after=after_event, limit=limit),
+        "coordinator_events": coordinator_events(swarm_id, after=after_coordinator_event, limit=limit),
+        "blackboard": blackboard(swarm_id, after=after_blackboard, limit=limit),
+    }
+
+
 def pause(swarm_id: int) -> dict:
     with connect() as conn:
         row = conn.execute("SELECT status FROM swarm_runs WHERE id=?", (swarm_id,)).fetchone()
