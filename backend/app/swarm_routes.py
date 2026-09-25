@@ -253,6 +253,15 @@ def swarm_agents(swarm_id: int):
         raise HTTPException(404, str(exc)) from exc
 
 
+@router.get("/swarms/{swarm_id}/events")
+def swarm_events(swarm_id: int, after: int = 0, limit: int = 200):
+    try:
+        swarm_service.get_run(swarm_id)
+        return swarm_service.events(swarm_id, after=after, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
 @router.get("/swarms/{swarm_id}/blackboard")
 def read_blackboard(swarm_id: int, category: str = "", task_id: int | None = None):
     try:
