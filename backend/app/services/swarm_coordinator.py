@@ -1,0 +1,241 @@
+from __future__ import annotations
+
+import json
+import threading
+import time
+
+from ..database import connect, now
+from . import ollama, swarm, task_queue
+
+_lock = threading.Lock()
+_threads: dict[int, threading.Thread] = {}
+_stop = threading.Event()
+
+
+def start(swarm_id: int) -> None:
+    with _lock:
+        thread = _threads.get(swarm_id)
+        if thread and thread.is_alive():
+            return
+        thread = threading.Thread(target=_loop, args=(swarm_id,), name=f"olladex-swarm-coordinator-{swarm_id}", daemon=True)
+        _threads[swarm_id] = thread
+        thread.start()
+
+
+def stop(swarm_id: int) -> None:
+    with connect() as conn:
+        conn.execute("UPDATE swarm_runs SET cancel_requested=1 WHERE id=?", (swarm_id,))
+
+
+def shutdown() -> None:
+    _stop.set()
+    with _lock:
+        threads = list(_threads.values())
+    for thread in threads:
+        thread.join(timeout=2)
+
+
+def _loop(swarm_id: int) -> None:
+    try:
+        while not _stop.is_set():
+            with connect() as conn:
+                row = conn.execute("SELECT * FROM swarm_runs WHERE id=?", (swarm_id,)).fetchone()
+            if not row:
+                return
+            run = dict(row)
+            if run["status"] in {"completed", "failed", "cancelled"} or run["cancel_requested"]:
+                return
+            if run["status"] == "paused":
+                time.sleep(.5)
+                continue
+
+            _reconcile(swarm_id)
+            time.sleep(.75)
+    finally:
+        with _lock:
+            _threads.pop(swarm_id, None)
+
+
+def _reconcile(swarm_id: int) -> None:
+    run = swarm.get_run(swarm_id)
+    agents = run.get("agents") or []
+    if not agents:
+        return
+
+    specialists = [item for item in agents if item.get("task_kind") not in {"reviewer", "challenger"}]
+    reviewer = next((item for item in agents if item.get("task_kind") == "reviewer"), None)
+    challenger = next((item for item in agents if item.get("task_kind") == "challenger"), None)
+
+    failed = [item for item in specialists if item.get("status") in {"failed", "budget_exhausted"}]
+    active = [item for item in specialists if item.get("status") in {"queued", "running", "waiting_for_input", "waiting_for_approval"}]
+    completed = [item for item in specialists if item.get("status") == "completed"]
+
+    if failed and not active:
+        _consider_recovery(run, failed, completed)
+        return
+
+    if specialists and len(completed) == len(specialists):
+        if challenger and challenger.get("status") == "queued":
+            return
+        if challenger and challenger.get("status") in {"failed", "budget_exhausted", "cancelled"}:
+            _publish_once(swarm_id, "risk", "challenger-failed", "The challenger did not complete successfully; final review should account for that missing verification.")
+        if reviewer and reviewer.get("status") == "queued":
+            return
+        if reviewer and reviewer.get("status") in {"failed", "budget_exhausted"}:
+            swarm.set_status(swarm_id, "failed")
+            return
+        if not reviewer and not challenger:
+            swarm.set_status(swarm_id, "completed")
+
+
+def _consider_recovery(run: dict, failed: list[dict], completed: list[dict]) -> None:
+    swarm_id = int(run["id"])
+    profile = swarm.get_profile(int(run["profile_id"]))
+    if not profile.get("dynamic_size"):
+        swarm.set_status(swarm_id, "failed")
+        return
+    if int(run["total_agents_created"] or 0) >= int(run["max_agents"] or 0):
+        _publish_once(swarm_id, "risk", "agent-limit", "A specialist failed and the swarm has reached its configured maximum agent count.")
+        swarm.set_status(swarm_id, "failed")
+        return
+
+    prior_recovery = _recovery_count(swarm_id)
+    if prior_recovery >= 2:
+        _publish_once(swarm_id, "risk", "recovery-limit", "The Coordinator stopped replanning after two recovery attempts.")
+        swarm.set_status(swarm_id, "failed")
+        return
+
+    decision = _recovery_decision(run, profile, failed, completed)
+    action = str(decision.get("action") or "fail").lower()
+    if action != "spawn":
+        reason = str(decision.get("reason") or "Coordinator could not identify a safe recovery task.")
+        _publish_once(swarm_id, "risk", f"recovery-stop-{prior_recovery}", reason)
+        swarm.set_status(swarm_id, "failed")
+        return
+
+    role = str(decision.get("role") or "worker").lower()
+    if role not in {"worker", "frontend", "backend", "tester", "researcher", "coder", "documentation"}:
+        role = "worker"
+    title = str(decision.get("title") or f"Recovery specialist {prior_recovery + 1}")[:256]
+    prompt = str(decision.get("prompt") or "").strip()
+    if not prompt:
+        swarm.set_status(swarm_id, "failed")
+        return
+
+    model_profile_id, assigned_model = swarm.resolve_role(profile, role)
+    session_id = _new_session(int(run["project_id"]), title)
+    dependency_ids = [int(item["id"]) for item in completed]
+    task = task_queue.enqueue(
+        int(run["project_id"]),
+        session_id,
+        title,
+        prompt,
+        source_kind="swarm_recovery",
+        source_ref=f"swarm:{swarm_id}:recovery:{prior_recovery + 1}",
+        depends_on=dependency_ids,
+        agent_role=role,
+        swarm_id=swarm_id,
+        model_profile_id=model_profile_id,
+        assigned_model=assigned_model,
+        task_kind=role,
+        priority=150,
+        depth=1,
+    )
+    swarm.publish(
+        swarm_id,
+        "decision",
+        f"Coordinator spawned recovery agent #{task['id']} ({role}) after specialist failure.",
+        task_id=task["id"],
+        key=f"recovery-{prior_recovery + 1}",
+    )
+    _retarget_verification(swarm_id, task["id"])
+
+
+def _retarget_verification(swarm_id: int, recovery_task_id: int) -> None:
+    with connect() as conn:
+        verification = conn.execute(
+            "SELECT id,depends_on FROM background_tasks WHERE swarm_id=? AND task_kind IN ('challenger','reviewer') ORDER BY priority,id",
+            (swarm_id,),
+        ).fetchall()
+        for row in verification:
+            try:
+                deps = json.loads(row["depends_on"] or "[]")
+            except json.JSONDecodeError:
+                deps = []
+            if recovery_task_id not in deps:
+                deps.append(recovery_task_id)
+                conn.execute("UPDATE background_tasks SET depends_on=? WHERE id=?", (json.dumps(sorted(set(int(x) for x in deps))), row["id"]))
+
+
+def _recovery_decision(run: dict, profile: dict, failed: list[dict], completed: list[dict]) -> dict:
+    _, model = swarm.coordinator_model(profile)
+    project = _project(int(run["project_id"]))
+    board = swarm.blackboard(int(run["id"]))
+    evidence = {
+        "objective": run["objective"],
+        "failed": [{"id":x["id"], "title":x["title"], "role":x["agent_role"], "error":x.get("error",""), "result":x.get("result","")[-1200:]} for x in failed],
+        "completed": [{"id":x["id"], "title":x["title"], "role":x["agent_role"], "result":x.get("result","")[-800:]} for x in completed],
+        "blackboard": board[-40:],
+        "remaining_slots": int(run["max_agents"])-int(run["total_agents_created"]),
+    }
+    prompt = (
+        "You are the persistent Coordinator for a local Olladex software-engineering swarm. "
+        "A specialist failed and no normal specialist is still active. Decide whether one focused recovery specialist can safely unblock the objective. "
+        "Return JSON only: {\"action\":\"spawn|fail\",\"role\":\"backend|frontend|tester|researcher|coder|documentation|worker\","
+        "\"title\":\"...\",\"prompt\":\"...\",\"reason\":\"...\"}. "
+        "Spawn only when the evidence supports a concrete bounded next task. Do not create managers, reviewers or recursive coordinators.\n\n"
+        + json.dumps(evidence, default=str)[:24000]
+    )
+    try:
+        with ollama.client(120) as http:
+            response = http.post("/api/chat", json={
+                "model": model or project.get("profile_chat_model") or project.get("model"),
+                "stream": False,
+                "format": "json",
+                "messages": [
+                    {"role": "system", "content": "Return valid JSON only. You coordinate work but do not edit files."},
+                    {"role": "user", "content": prompt},
+                ],
+                "options": {"temperature": 0.1},
+            })
+            response.raise_for_status()
+            raw = (response.json().get("message") or {}).get("content") or "{}"
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {"action": "fail", "reason": "Coordinator returned no decision."}
+    except Exception as exc:
+        return {"action": "fail", "reason": f"Coordinator recovery planning failed: {exc}"}
+
+
+def _project(project_id: int) -> dict:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT p.*,mp.chat_model AS profile_chat_model FROM projects p "
+            "LEFT JOIN model_profiles mp ON mp.id=p.model_profile_id WHERE p.id=?",
+            (project_id,),
+        ).fetchone()
+    return dict(row) if row else {}
+
+
+def _new_session(project_id: int, title: str) -> int:
+    stamp = now()
+    with connect() as conn:
+        cursor = conn.execute(
+            "INSERT INTO sessions(project_id,title,created_at,updated_at) VALUES(?,?,?,?)",
+            (project_id, title[:200], stamp, stamp),
+        )
+        return int(cursor.lastrowid)
+
+
+def _recovery_count(swarm_id: int) -> int:
+    with connect() as conn:
+        return int(conn.execute(
+            "SELECT COUNT(*) FROM background_tasks WHERE swarm_id=? AND source_kind='swarm_recovery'",
+            (swarm_id,),
+        ).fetchone()[0])
+
+
+def _publish_once(swarm_id: int, category: str, key: str, content: str) -> None:
+    with connect() as conn:
+        if conn.execute("SELECT id FROM swarm_blackboard WHERE swarm_id=? AND key=?", (swarm_id, key)).fetchone():
+            return
+    swarm.publish(swarm_id, category, content, key=key)
