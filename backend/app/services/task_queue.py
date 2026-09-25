@@ -163,6 +163,17 @@ def set_worktree(task_id: int, path: str, branch: str) -> None:
         conn.execute("UPDATE background_tasks SET worktree_path=?,worktree_branch=? WHERE id=?", (path, branch, task_id))
 
 
+def set_progress(task_id: int, progress: int, current_activity: str = "") -> None:
+    value = max(0, min(int(progress), 100))
+    with connect() as conn:
+        if not conn.execute("SELECT id FROM background_tasks WHERE id=?", (task_id,)).fetchone():
+            raise ValueError("Background task not found")
+        conn.execute(
+            "UPDATE background_tasks SET progress=?,current_activity=? WHERE id=?",
+            (value, str(current_activity or "")[:1000], task_id),
+        )
+
+
 def current_worktree_path() -> str:
     task_id = current_task_id()
     if not task_id:
@@ -429,7 +440,7 @@ def run_once() -> bool:
             if commit_sha:
                 result = f"{result}\n\nTask branch auto-committed as {commit_sha[:12]}."
         with connect() as conn:
-            conn.execute("UPDATE background_tasks SET status=?,result=?,completed_at=? WHERE id=?", (final_status, result, now(), task["id"]))
+            conn.execute("UPDATE background_tasks SET status=?,result=?,progress=?,current_activity=?,completed_at=? WHERE id=?", (final_status, result, 100 if final_status == "completed" else int(task.get("progress") or 0), "Completed" if final_status == "completed" else str(task.get("current_activity") or ""), now(), task["id"]))
         _finalize_parent(task, final_status, result=result, error="Lead consolidation task was cancelled")
         _finalize_swarm(task, final_status, result=result, error="Swarm reviewer was cancelled")
     except Exception as exc:
