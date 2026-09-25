@@ -661,6 +661,8 @@ Expand **Model & policy settings** to configure:
 
 All Swarm model assignments are local Ollama profiles. Missing required models block startup rather than silently falling back to another model.
 
+Use **Test local models** to run a tiny non-tool responsiveness check against each unique model used by the selected Swarm profile. The result shows the roles mapped to each model, whether it returned the expected response, and approximate request latency. The self-test creates no Swarm, tasks or worktrees.
+
 ### 15.3 Agent Board
 
 When a Swarm exists, the Agent Board displays:
