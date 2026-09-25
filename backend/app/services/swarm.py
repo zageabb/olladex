@@ -248,6 +248,7 @@ def get_run(swarm_id: int) -> dict:
             (swarm_id,),
         ).fetchone()
     result["coordinator_activity"] = dict(activity) if activity else None
+    result["coordinator_budget"] = coordinator_budget(swarm_id)
     return result
 
 
@@ -364,6 +365,58 @@ def emit_coordinator_event(swarm_id: int, kind: str, payload: dict) -> dict:
     result = dict(row)
     result["payload"] = _json_object(result.get("payload"))
     return result
+
+
+def consume_coordinator_budget(swarm_id: int, purpose: str) -> dict:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT sp.coordinator_tool_budget FROM swarm_runs sr "
+            "LEFT JOIN swarm_profiles sp ON sp.id=sr.profile_id WHERE sr.id=?",
+            (swarm_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError("Swarm not found")
+        budget = max(1, int(row["coordinator_tool_budget"] or 1))
+        used = int(conn.execute(
+            "SELECT COUNT(*) FROM swarm_coordinator_events WHERE swarm_id=? AND kind='model_call'",
+            (swarm_id,),
+        ).fetchone()[0])
+        if used >= budget:
+            remaining = 0
+            allowed = False
+        else:
+            remaining = budget - used - 1
+            allowed = True
+    if allowed:
+        emit_coordinator_event(
+            swarm_id,
+            "model_call",
+            {"purpose": purpose, "used": used + 1, "budget": budget, "remaining": remaining},
+        )
+    else:
+        emit_coordinator_event(
+            swarm_id,
+            "budget_exhausted",
+            {"purpose": purpose, "used": used, "budget": budget, "remaining": 0},
+        )
+    return {"allowed": allowed, "used": used + (1 if allowed else 0), "budget": budget, "remaining": remaining}
+
+
+def coordinator_budget(swarm_id: int) -> dict:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT sp.coordinator_tool_budget FROM swarm_runs sr "
+            "LEFT JOIN swarm_profiles sp ON sp.id=sr.profile_id WHERE sr.id=?",
+            (swarm_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError("Swarm not found")
+        budget = max(1, int(row["coordinator_tool_budget"] or 1))
+        used = int(conn.execute(
+            "SELECT COUNT(*) FROM swarm_coordinator_events WHERE swarm_id=? AND kind='model_call'",
+            (swarm_id,),
+        ).fetchone()[0])
+    return {"used": used, "budget": budget, "remaining": max(0, budget - used)}
 
 
 def coordinator_events(swarm_id: int, after: int = 0, limit: int = 200) -> list[dict]:
