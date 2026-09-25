@@ -202,7 +202,7 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
   await expect(page.getByText('Final review', {exact:true})).toBeVisible();
   await expect(page.getByText(/reviewer · completed · 100%/)).toBeVisible();
   await expect(page.getByText(/budget 3\/20/)).toBeVisible();
-  await expect(page.getByText('Coordinator opened final verification.', {exact:true}).first()).toBeVisible();
+  await expect(page.getByText(/budget 3\/20 · Coordinator opened final verification\./)).toBeVisible();
   await expect.poll(()=>coordinatorAfter.includes('21'),{timeout:5000}).toBe(true);
   await expect.poll(()=>blackboardAfter.includes('2'),{timeout:5000}).toBe(true);
 
