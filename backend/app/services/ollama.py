@@ -26,6 +26,7 @@ for tool_name, description, properties in [
     ("ask_user", "Ask a necessary clarification and wait for the answer before continuing.", {"question": {"type":"string"}}),
     ("remember_preference", "Save an explicit user request to remember a preference or decision. Do not infer personal facts or save secrets.", {"preference": {"type":"string"}}),
     ("update_plan", "Show or revise a short plan for a multi-step task.", {"steps": {"type":"array", "items": {"type":"string"}}}),
+    ("update_progress", "Report objective progress through the current plan using completed and total step counts plus the current step.", {"completed_steps": {"type":"integer", "minimum":0}, "total_steps": {"type":"integer", "minimum":1}, "current_step": {"type":"string"}}),
     ("swarm_read_blackboard", "Read shared structured findings for the current swarm.", {"category": {"type":"string"}}),
     ("swarm_publish_finding", "Publish an important evidence-backed finding to the current swarm blackboard.", {"content": {"type":"string"}, "key": {"type":"string"}}),
     ("swarm_publish_decision", "Publish a meaningful engineering decision to the current swarm blackboard.", {"content": {"type":"string"}, "key": {"type":"string"}}),
