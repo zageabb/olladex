@@ -94,9 +94,9 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
           if(!current||current.swarm.id!==board.swarm.id)return board;
           return {
             ...board,
-            events:[...(current.events||[]),...(board.events||[])].slice(-200),
-            coordinator_events:[...(current.coordinator_events||[]),...(board.coordinator_events||[])].slice(-200),
-            blackboard:[...(current.blackboard||[]),...(board.blackboard||[])].slice(-300)
+            events:mergeById(current.events||[],board.events||[],200),
+            coordinator_events:mergeById(current.coordinator_events||[],board.coordinator_events||[],200),
+            blackboard:mergeById(current.blackboard||[],board.blackboard||[],300)
           };
         });
         if(board.cursors)swarmCursors.current=board.cursors;
@@ -506,4 +506,12 @@ function coordinatorPayloadText(payload:Record<string,unknown>){
     if(typeof value==="string"&&value.trim())return value;
   }
   return "Coordinator event";
+}
+
+
+function mergeById<T extends {id:number}>(current:T[], incoming:T[], limit:number):T[]{
+  const byId=new Map<number,T>();
+  for(const item of current)byId.set(item.id,item);
+  for(const item of incoming)byId.set(item.id,item);
+  return Array.from(byId.values()).sort((a,b)=>a.id-b.id).slice(-limit);
 }
