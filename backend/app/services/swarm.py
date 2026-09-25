@@ -39,6 +39,106 @@ def list_profiles() -> list[dict]:
     return rows
 
 
+def create_profile(data: dict) -> dict:
+    stamp = now()
+    name = str(data.get("name") or "").strip()
+    if not name:
+        raise ValueError("Swarm profile name is required")
+    coordinator_id = _validated_model_profile_id(data.get("coordinator_profile_id"))
+    worker_id = _validated_model_profile_id(data.get("default_worker_profile_id"))
+    role_profiles = _validated_role_profiles(data.get("role_profiles") or {})
+    with connect() as conn:
+        if conn.execute("SELECT id FROM swarm_profiles WHERE name=?", (name,)).fetchone():
+            raise ValueError("A Swarm profile with that name already exists")
+        cursor = conn.execute(
+            "INSERT INTO swarm_profiles("
+            "name,enabled,coordinator_profile_id,default_worker_profile_id,role_profiles,"
+            "max_agents,max_concurrency,max_depth,dynamic_size,agent_tool_budget,coordinator_tool_budget,"
+            "require_reviewer,require_challenger,is_builtin,created_at,updated_at"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)",
+            (
+                name, 1 if data.get("enabled", True) else 0, coordinator_id, worker_id,
+                json.dumps(role_profiles, sort_keys=True),
+                max(2, min(int(data.get("max_agents") or 6), 20)),
+                max(1, min(int(data.get("max_concurrency") or 3), 8)),
+                max(1, min(int(data.get("max_depth") or 1), 4)),
+                1 if data.get("dynamic_size", True) else 0,
+                max(1, min(int(data.get("agent_tool_budget") or 30), 200)),
+                max(1, min(int(data.get("coordinator_tool_budget") or 20), 200)),
+                1 if data.get("require_reviewer", True) else 0,
+                1 if data.get("require_challenger", False) else 0,
+                stamp, stamp,
+            ),
+        )
+        profile_id = int(cursor.lastrowid)
+    return get_profile(profile_id)
+
+
+def update_profile(profile_id: int, data: dict) -> dict:
+    current = get_profile(profile_id)
+    name = str(data.get("name") or current["name"]).strip()
+    if current.get("is_builtin") and name != current["name"]:
+        raise ValueError("Built-in Swarm profile names cannot be changed")
+    coordinator_id = _validated_model_profile_id(data.get("coordinator_profile_id"))
+    worker_id = _validated_model_profile_id(data.get("default_worker_profile_id"))
+    role_profiles = _validated_role_profiles(data.get("role_profiles") or {})
+    with connect() as conn:
+        duplicate = conn.execute("SELECT id FROM swarm_profiles WHERE name=? AND id<>?", (name, profile_id)).fetchone()
+        if duplicate:
+            raise ValueError("A Swarm profile with that name already exists")
+        conn.execute(
+            "UPDATE swarm_profiles SET name=?,enabled=?,coordinator_profile_id=?,default_worker_profile_id=?,"
+            "role_profiles=?,max_agents=?,max_concurrency=?,max_depth=?,dynamic_size=?,agent_tool_budget=?,"
+            "coordinator_tool_budget=?,require_reviewer=?,require_challenger=?,updated_at=? WHERE id=?",
+            (
+                name, 1 if data.get("enabled", True) else 0, coordinator_id, worker_id,
+                json.dumps(role_profiles, sort_keys=True),
+                max(2, min(int(data.get("max_agents") or 6), 20)),
+                max(1, min(int(data.get("max_concurrency") or 3), 8)),
+                max(1, min(int(data.get("max_depth") or 1), 4)),
+                1 if data.get("dynamic_size", True) else 0,
+                max(1, min(int(data.get("agent_tool_budget") or 30), 200)),
+                max(1, min(int(data.get("coordinator_tool_budget") or 20), 200)),
+                1 if data.get("require_reviewer", True) else 0,
+                1 if data.get("require_challenger", False) else 0,
+                now(), profile_id,
+            ),
+        )
+    return get_profile(profile_id)
+
+
+def delete_profile(profile_id: int) -> dict:
+    profile = get_profile(profile_id)
+    if profile.get("is_builtin"):
+        raise ValueError("Built-in Swarm profiles cannot be deleted")
+    with connect() as conn:
+        conn.execute("DELETE FROM swarm_profiles WHERE id=?", (profile_id,))
+    return {"id": profile_id, "status": "deleted"}
+
+
+def _validated_model_profile_id(value: object) -> int | None:
+    if value in (None, "", 0, "0"):
+        return None
+    profile_id = int(value)
+    with connect() as conn:
+        if not conn.execute("SELECT id FROM model_profiles WHERE id=?", (profile_id,)).fetchone():
+            raise ValueError(f"Model profile #{profile_id} not found")
+    return profile_id
+
+
+def _validated_role_profiles(value: object) -> dict:
+    role_map = _json_object(value)
+    allowed = {"architect", "researcher", "backend", "frontend", "coder", "tester", "reviewer", "challenger", "integrator", "documentation", "worker"}
+    result: dict[str, int] = {}
+    for role, raw_id in role_map.items():
+        if role not in allowed or raw_id in (None, "", 0, "0"):
+            continue
+        profile_id = _validated_model_profile_id(raw_id)
+        if profile_id is not None:
+            result[role] = profile_id
+    return result
+
+
 def get_profile(profile_id: int) -> dict:
     with connect() as conn:
         row = conn.execute("SELECT * FROM swarm_profiles WHERE id=?", (profile_id,)).fetchone()
