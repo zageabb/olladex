@@ -753,3 +753,55 @@ def test_help_request_is_declined_when_dynamic_swarm_is_disabled(tmp_path, monke
         item["key"] == f"help-response-{request['id']}" and "dynamic swarm sizing is disabled" in item["content"]
         for item in decisions
     )
+
+
+def test_broadcast_guidance_updates_queued_and_active_agents(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id, max_agents=4, max_concurrency=2)
+
+    queued_session = session_id
+    active_session = None
+    with connect() as conn:
+        active_session = int(conn.execute(
+            "INSERT INTO sessions(project_id,title,created_at,updated_at) VALUES(?,?,?,?)",
+            (project_id, "Active agent", now(), now()),
+        ).lastrowid)
+
+    queued = task_queue.enqueue(
+        project_id, queued_session, "Queued agent", "Queued original prompt",
+        swarm_id=swarm_id, source_kind="swarm_specialist", agent_role="backend", task_kind="backend",
+    )
+    active = task_queue.enqueue(
+        project_id, active_session, "Active agent", "Active original prompt",
+        swarm_id=swarm_id, source_kind="swarm_specialist", agent_role="tester", task_kind="tester",
+    )
+    with connect() as conn:
+        conn.execute("UPDATE background_tasks SET status='running',started_at=? WHERE id=?", (now(), active["id"]))
+
+    run_id = conversation_runtime.create(active_session, active["id"])
+
+    result = swarm.broadcast_guidance(swarm_id, "Do not change the public API.")
+
+    assert result["queued_tasks_updated"] == 1
+    assert result["active_runs_steered"] == 1
+
+    with connect() as conn:
+        queued_prompt = conn.execute("SELECT prompt FROM background_tasks WHERE id=?", (queued["id"],)).fetchone()["prompt"]
+        active_prompt = conn.execute("SELECT prompt FROM background_tasks WHERE id=?", (active["id"],)).fetchone()["prompt"]
+        inputs = [row["content"] for row in conn.execute(
+            "SELECT content FROM agent_inputs WHERE run_id=? ORDER BY id", (run_id,)
+        )]
+        instructions = conn.execute(
+            "SELECT coordinator_instructions FROM swarm_runs WHERE id=?", (swarm_id,)
+        ).fetchone()["coordinator_instructions"]
+
+    assert "Do not change the public API." in queued_prompt
+    assert "Do not change the public API." not in active_prompt
+    assert inputs == ["Swarm-wide user guidance: Do not change the public API."]
+    assert "Do not change the public API." in instructions
+
+    timeline = swarm.coordinator_events(swarm_id)
+    assert any(
+        item["kind"] == "broadcast" and item["payload"].get("active_runs_steered") == 1
+        for item in timeline
+    )
