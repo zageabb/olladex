@@ -14,9 +14,10 @@ type LeadResponse = { lead:Node; specialists:unknown[]; reviewer:unknown; plan:{
 type IntegrationState = { lead_task_id:number; path:string; branch:string; base:string; diff?:string; changes?:string[]; check_command?:string; check_status?:string; check_output?:string; pull_request_number?:number; pull_request_url?:string; pull_request_state?:string };
 type IntegrationPreflight = { lead_task_id:number; task_ids:number[]; base:string; branches:string[]; files_by_branch:Record<string,string[]>; overlaps:{path:string;branches:string[]}[] };
 type SwarmListItem = { id:number; title:string; status:string; max_agents:number; max_concurrency:number; total_agents_created:number };
-type SwarmAgent = { id:number; title:string; status:string; agent_role:string; progress?:number; assigned_model?:string; current_activity?:string };
+type SwarmAgent = { id:number; title:string; status:string; agent_role:string; progress?:number; assigned_model?:string; current_activity?:string; tool_usage?:number; tool_budget?:number; latest_insight?:{category:string;content:string}|null };
+type SwarmAgentDetail = { task:SwarmAgent; commands:{id:number;command:string;output:string;exit_code:number;status:string}[]; blackboard:{id:number;category:string;content:string}[]; changed_files:string[]; worktree?:{branch_diff?:string;working_diff?:string}|null };
 type SwarmBoard = {
-  swarm:{ id:number; title:string; status:string; agents?:SwarmAgent[] };
+  swarm:{ id:number; title:string; status:string; agents?:SwarmAgent[]; coordinator_activity?:{category:string;content:string}|null; coordinator_budget?:{used:number;budget:number;remaining:number} };
   summary:{ total_agents:number; active_agents:number; completed_agents:number; failed_agents:number; progress:number; max_agents:number; max_concurrency:number; integration_ready:boolean };
 };
 type SwarmSkill = { project_id:number; skill:"swarm"; enabled:boolean };
@@ -47,6 +48,8 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
   const [swarmMaxAgents,setSwarmMaxAgents]=useState(5);
   const [swarmConcurrency,setSwarmConcurrency]=useState(3);
   const [swarmPreflight,setSwarmPreflight]=useState<SwarmPreflight|null>(null);
+  const [selectedSwarmAgentId,setSelectedSwarmAgentId]=useState<number|null>(null);
+  const [selectedSwarmAgent,setSelectedSwarmAgent]=useState<SwarmAgentDetail|null>(null);
 
   useEffect(()=>{ load(); loadSwarmSettings(); const timer=window.setInterval(load,3000); return()=>window.clearInterval(timer); },[projectId]);
   async function load(){
@@ -130,6 +133,15 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
     finally{setBusy(false);}
   }
 
+  useEffect(()=>{
+    if(!selectedSwarmAgentId){setSelectedSwarmAgent(null);return;}
+    let disposed=false;
+    request<SwarmAgentDetail>(`/swarm-agents/${selectedSwarmAgentId}`)
+      .then(detail=>{if(!disposed)setSelectedSwarmAgent(detail);})
+      .catch(error=>{if(!disposed)setNotice(error instanceof Error?error.message:String(error));});
+    return()=>{disposed=true;};
+  },[selectedSwarmAgentId]);
+
   const roots=useMemo(()=>graph.nodes.filter(node=>!node.parent_task_id),[graph.nodes]);
   const byId=useMemo(()=>new Map(graph.nodes.map(node=>[node.id,node])),[graph.nodes]);
   const integrationChildren=useMemo(()=>selectedLead?graph.nodes.filter(node=>node.parent_task_id===selectedLead&&node.agent_role!=="reviewer"):[],[graph.nodes,selectedLead]);
@@ -159,7 +171,17 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
     <section className="agent-board-shell">
       <div><p className="eyebrow">Agent board</p><h3>{swarmBoard?swarmBoard.swarm.title:"Under the hood"}</h3><p>{swarmBoard?`Swarm #${swarmBoard.swarm.id} · ${swarmBoard.swarm.status.replaceAll("_"," ")} · ${swarmBoard.summary.progress}% complete`:"Normal tasks stay simple. Expand this view when you want to inspect specialist agents, roles and execution state."}</p></div>
       <div className="agent-board-metrics"><span><strong>{boardTotal}</strong> agents</span><span><strong>{boardActive}</strong> active</span><span><strong>{boardCompleted}</strong> complete</span></div>
-      <div className="agent-board-preview">{swarmBoard&&boardAgents.length?boardAgents.slice(0,8).map(agent=><article key={agent.id}><span className={`agent-dot ${agent.status}`}>●</span><div><strong>{agent.title}</strong><small>{agent.agent_role} · {agent.status.replaceAll("_"," ")}{typeof agent.progress==="number"?` · ${agent.progress}%`:""}</small></div></article>):graph.nodes.length?graph.nodes.slice(0,8).map(node=><article key={node.id}><span className={`agent-dot ${node.status}`}>●</span><div><strong>{node.title}</strong><small>{node.agent_role} · {node.status.replaceAll("_"," ")}</small></div></article>):<p>No specialist agents yet. Swarm-backed tasks will appear here through the same board.</p>}</div>
+      {swarmBoard&&<article className="agent-board-coordinator"><span className={`agent-dot ${swarmBoard.swarm.status}`}>●</span><div><strong>Coordinator</strong><small>budget {swarmBoard.swarm.coordinator_budget?.used||0}/{swarmBoard.swarm.coordinator_budget?.budget||0} · {swarmBoard.swarm.coordinator_activity?.content||"Monitoring specialist progress and dependencies"}</small></div></article>}
+      <div className="agent-board-preview">{swarmBoard&&boardAgents.length?boardAgents.slice(0,8).map(agent=><article key={agent.id} role="button" tabIndex={0} onClick={()=>setSelectedSwarmAgentId(agent.id)} onKeyDown={event=>{if(event.key==="Enter")setSelectedSwarmAgentId(agent.id);}}><span className={`agent-dot ${agent.status}`}>●</span><div><strong>{agent.title}</strong><small>{agent.agent_role} · {agent.status.replaceAll("_"," ")}{typeof agent.progress==="number"?` · ${agent.progress}%`:""}{agent.tool_budget?` · tools ${agent.tool_usage||0}/${agent.tool_budget}`:""}</small>{agent.current_activity&&<small>{agent.current_activity}</small>}{agent.latest_insight&&<small>{agent.latest_insight.category}: {agent.latest_insight.content}</small>}</div></article>):graph.nodes.length?graph.nodes.slice(0,8).map(node=><article key={node.id}><span className={`agent-dot ${node.status}`}>●</span><div><strong>{node.title}</strong><small>{node.agent_role} · {node.status.replaceAll("_"," ")}</small></div></article>):<p>No specialist agents yet. Swarm-backed tasks will appear here through the same board.</p>}</div>
+      {selectedSwarmAgent&&<section className="agent-board-detail">
+        <header><div><p className="eyebrow">Agent #{selectedSwarmAgent.task.id}</p><h4>{selectedSwarmAgent.task.title}</h4><small>{selectedSwarmAgent.task.agent_role} · {selectedSwarmAgent.task.status.replaceAll("_"," ")}</small></div><button type="button" onClick={()=>setSelectedSwarmAgentId(null)}>Close</button></header>
+        <div className="agent-board-detail-grid">
+          <article><strong>Activity</strong><p>{selectedSwarmAgent.task.current_activity||"No current activity"}</p><small>{selectedSwarmAgent.task.progress||0}% · tools {selectedSwarmAgent.task.tool_usage||0}/{selectedSwarmAgent.task.tool_budget||0}</small></article>
+          <article><strong>Changed files</strong>{selectedSwarmAgent.changed_files.length?<ul>{selectedSwarmAgent.changed_files.map(path=><li key={path}>{path}</li>)}</ul>:<p>No committed branch changes yet.</p>}</article>
+          <article><strong>Commands</strong>{selectedSwarmAgent.commands.length?<ul>{selectedSwarmAgent.commands.slice(0,8).map(command=><li key={command.id}><code>{command.command}</code> · {command.status} · exit {command.exit_code}</li>)}</ul>:<p>No commands recorded.</p>}</article>
+          <article><strong>Findings</strong>{selectedSwarmAgent.blackboard.length?<ul>{selectedSwarmAgent.blackboard.slice().reverse().slice(0,8).map(item=><li key={item.id}><b>{item.category}</b> {item.content}</li>)}</ul>:<p>No task-specific Blackboard entries yet.</p>}</article>
+        </div>
+      </section>}
     </section>
     <details className={styles.advanced}>
       <summary>Swarm controls · {swarmSkill?.enabled?"enabled":"disabled"}</summary>
