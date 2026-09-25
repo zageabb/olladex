@@ -40,6 +40,7 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
   const [integrationPushed,setIntegrationPushed]=useState(false);
   const lastEventId=useRef(0);
   const lastCoordinatorEventId=useRef(0);
+  const lastBlackboardId=useRef(0);
 
   useEffect(()=>{ loadBootstrap(); },[projectId]);
 
@@ -49,21 +50,27 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
     setIntegrationPushed(false);
     lastEventId.current=0;
     lastCoordinatorEventId.current=0;
+    lastBlackboardId.current=0;
     setEvents([]);
     setCoordinatorEvents([]);
+    setBlackboard([]);
     if(!selectedId){ setSelected(null); setBlackboard([]); return; }
     let disposed=false;
     async function refresh(){
       try{
         const results=await Promise.all([
           request<SwarmRun>("/swarms/"+selectedId),
-          request<BlackboardItem[]>("/swarms/"+selectedId+"/blackboard"),
+          request<BlackboardItem[]>("/swarms/"+selectedId+"/blackboard?after="+lastBlackboardId.current+"&limit=200"),
           request<SwarmEvent[]>("/swarms/"+selectedId+"/events?after="+lastEventId.current+"&limit=200"),
           request<CoordinatorEvent[]>("/swarms/"+selectedId+"/coordinator/events?after="+lastCoordinatorEventId.current+"&limit=200")
         ]);
         if(disposed)return;
         const run=results[0]; const board=results[1]; const activity=results[2]; const coordinatorActivity=results[3];
-        setSelected(run); setBlackboard(board);
+        setSelected(run);
+        if(board.length){
+          lastBlackboardId.current=Math.max(lastBlackboardId.current,...board.map(item=>item.id));
+          setBlackboard(current=>[...current,...board].slice(-300));
+        }
         if(activity.length){
           lastEventId.current=Math.max(lastEventId.current,...activity.map(item=>item.id));
           setEvents(current=>[...current,...activity].slice(-200));
