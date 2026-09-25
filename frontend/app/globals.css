@@ -526,3 +526,67 @@ button.primary:hover { background: var(--blue-2); }
   .agent-board-preview { grid-column: 1; grid-template-columns: 1fr; }
   .agent-board-metrics { justify-content: flex-start; }
 }
+
+
+/* Task detail drawer */
+.queue-task.expanded { box-shadow: inset 0 0 0 1px #dbe8f8; }
+.task-detail-drawer {
+  margin: 0 12px 10px;
+  overflow: hidden;
+  background: #fbfcfe;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.task-detail-grid {
+  padding: 10px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+.task-detail-grid article {
+  margin: 0;
+  padding: 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: #fff;
+  border: 1px solid #edf1f6;
+  border-radius: 8px;
+}
+.task-detail-grid span { color: #7b899c; font-size: 8px; font-weight: 750; text-transform: uppercase; }
+.task-detail-grid strong { overflow: hidden; color: #334966; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.task-detail-grid small { overflow: hidden; color: var(--muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.task-detail-section {
+  padding: 10px 12px;
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+}
+.task-detail-section strong { font-size: 10px; }
+.task-detail-section p { margin: 0; color: var(--muted); font-size: 9px; }
+.task-detail-section ul { margin: 0; padding-left: 18px; max-height: 130px; overflow: auto; }
+.task-detail-section li { padding: 2px 0; color: #526278; font-family: "SFMono-Regular", Consolas, monospace; font-size: 8px; }
+.task-attention {
+  margin: 0 10px 10px;
+  padding: 10px;
+  color: #84540f;
+  background: #fff8e8;
+  border: 1px solid #f1ddb5;
+  border-radius: 8px;
+}
+.task-attention strong { font-size: 10px; }
+.task-attention p { margin: 4px 0 0; font-size: 8px; }
+.task-detail-actions {
+  padding: 9px 10px;
+  display: flex;
+  gap: 6px;
+  border-top: 1px solid var(--line);
+  background: #fff;
+}
+.task-detail-actions button { padding: 6px 8px; font-size: 8px; }
+
+@media (max-width: 900px) {
+  .task-detail-grid { grid-template-columns: 1fr; }
+  .task-detail-section { grid-template-columns: 1fr; }
+}
