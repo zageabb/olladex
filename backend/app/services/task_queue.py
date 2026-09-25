@@ -294,7 +294,11 @@ def _prepare_isolation(task: dict) -> threading.Lock | None:
     from . import worktrees
     project = _project_for_task(task)
     dependency_ids = _dependency_ids(task)
-    strict_isolation = task.get("source_kind") == "lead_specialist" or (bool(dependency_ids) and task.get("source_kind") != "lead_consolidation")
+    strict_isolation = (
+        task.get("source_kind") == "lead_specialist"
+        or str(task.get("source_kind") or "").startswith("swarm_")
+        or (bool(dependency_ids) and task.get("source_kind") != "lead_consolidation")
+    )
     try:
         isolated = worktrees.create_for_task(project, task["id"])
         set_worktree(task["id"], isolated["path"], isolated["branch"])
@@ -313,7 +317,10 @@ def _prepare_isolation(task: dict) -> threading.Lock | None:
 
 
 def _auto_commit_specialist(task: dict) -> str:
-    if task.get("source_kind") != "lead_specialist" or not task.get("worktree_path"):
+    if (
+        task.get("source_kind") != "lead_specialist"
+        and not str(task.get("source_kind") or "").startswith("swarm_")
+    ) or not task.get("worktree_path"):
         return ""
     from . import worktrees
     project = _project_for_task(task)
@@ -322,6 +329,26 @@ def _auto_commit_specialist(task: dict) -> str:
         return ""
     committed = worktrees.commit_all(project, task["worktree_path"], f"Olladex task #{task['id']}: {task['title']}")
     return str(committed.get("sha") or "")
+
+
+def _finalize_swarm(task: dict, final_status: str, result: str = "", error: str = "") -> None:
+    swarm_id = task.get("swarm_id")
+    if not swarm_id or (task.get("agent_role") or "") != "reviewer":
+        return
+    with connect() as conn:
+        swarm = conn.execute("SELECT status FROM swarm_runs WHERE id=?", (swarm_id,)).fetchone()
+        if not swarm or swarm["status"] in {"completed", "failed", "cancelled"}:
+            return
+        if final_status == "completed":
+            conn.execute(
+                "UPDATE swarm_runs SET status='completed',completed_at=? WHERE id=?",
+                (now(), swarm_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE swarm_runs SET status='failed',completed_at=? WHERE id=?",
+                (now(), swarm_id),
+            )
 
 
 def _finalize_parent(task: dict, final_status: str, result: str = "", error: str = "") -> None:
@@ -368,6 +395,7 @@ def run_once() -> bool:
         with connect() as conn:
             conn.execute("UPDATE background_tasks SET status=?,result=?,completed_at=? WHERE id=?", (final_status, result, now(), task["id"]))
         _finalize_parent(task, final_status, result=result, error="Lead consolidation task was cancelled")
+        _finalize_swarm(task, final_status, result=result, error="Swarm reviewer was cancelled")
     except Exception as exc:
         from .ollama import AgentCancelled
         with connect() as conn:
@@ -382,6 +410,7 @@ def run_once() -> bool:
                 conn.execute("UPDATE background_tasks SET status=?,error=?,completed_at=? WHERE id=?", ("budget_exhausted" if isinstance(exc, BudgetExhausted) else "failed", error, now(), task["id"]))
                 final_status = "failed"
         _finalize_parent(task, final_status, error=error)
+        _finalize_swarm(task, final_status, error=error)
     finally:
         _local.task_id = None
         if fallback_lock:
