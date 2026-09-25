@@ -193,6 +193,14 @@ CREATE TABLE IF NOT EXISTS swarm_runs (
   integration_pr_state TEXT NOT NULL DEFAULT '',
   coordinator_instructions TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS swarm_coordinator_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  swarm_id INTEGER NOT NULL REFERENCES swarm_runs(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  payload TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS swarm_coordinator_events_swarm ON swarm_coordinator_events(swarm_id,id);
 CREATE TABLE IF NOT EXISTS swarm_blackboard (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   swarm_id INTEGER NOT NULL REFERENCES swarm_runs(id) ON DELETE CASCADE,
