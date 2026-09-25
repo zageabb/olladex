@@ -5,7 +5,8 @@ import { request } from "../lib/api";
 import styles from "./SwarmPanel.module.css";
 
 type Skill = { project_id:number; skill:"swarm"; enabled:boolean };
-type SwarmProfile = { id:number; name:string; max_agents:number; max_concurrency:number; max_depth:number; dynamic_size:number; require_reviewer:number; require_challenger:number };
+type SwarmProfile = { id:number; name:string; max_agents:number; max_concurrency:number; max_depth:number; dynamic_size:number; require_reviewer:number; require_challenger:number; coordinator_profile_id?:number|null; default_worker_profile_id?:number|null; role_profiles:Record<string,number>; agent_tool_budget:number; coordinator_tool_budget:number; is_builtin:number };
+type ModelProfile = { id:number; name:string; chat_model:string };
 type Agent = { id:number; title:string; status:string; agent_role:string; assigned_model:string; task_kind:string; priority:number; progress:number; current_activity:string; depends_on?:number[]|string; run_id?:number|null; worktree_branch?:string; result?:string; error?:string; created_at:string; started_at?:string };
 type SwarmRun = { id:number; project_id:number; title:string; objective:string; status:string; profile_id:number; max_agents:number; max_concurrency:number; total_agents_created:number; created_at:string; started_at:string; completed_at:string; agents?:Agent[]; agent_counts?:Record<string,number> };
 type BlackboardItem = { id:number; task_id?:number|null; category:string; key:string; content:string; confidence?:number|null; created_at:string };
@@ -14,6 +15,7 @@ type SwarmEvent = { id:number; run_id:number; task_id:number; task_title:string;
 export function SwarmPanel({ projectId }: { projectId:number }) {
   const [skill,setSkill]=useState<Skill|null>(null);
   const [profiles,setProfiles]=useState<SwarmProfile[]>([]);
+  const [modelProfiles,setModelProfiles]=useState<ModelProfile[]>([]);
   const [runs,setRuns]=useState<SwarmRun[]>([]);
   const [selectedId,setSelectedId]=useState<number|null>(null);
   const [selected,setSelected]=useState<SwarmRun|null>(null);
@@ -57,10 +59,11 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
       const results=await Promise.all([
         request<Skill>("/projects/"+projectId+"/skills/swarm"),
         request<SwarmProfile[]>("/swarm-profiles"),
-        request<SwarmRun[]>("/projects/"+projectId+"/swarms")
+        request<SwarmRun[]>("/projects/"+projectId+"/swarms"),
+        request<ModelProfile[]>("/model-profiles")
       ]);
-      const skillState=results[0]; const profileData=results[1]; const runData=results[2];
-      setSkill(skillState); setProfiles(profileData); setRuns(runData);
+      const skillState=results[0]; const profileData=results[1]; const runData=results[2]; const modelData=results[3];
+      setSkill(skillState); setProfiles(profileData); setRuns(runData); setModelProfiles(modelData);
       if(profileData.length && !profileId){
         const preferred=profileData.find(item=>item.name==="Development")||profileData[0];
         applyProfile(preferred);
@@ -86,6 +89,40 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
       setNotice(updated.enabled?"Swarm enabled for this project":"Swarm disabled for this project");
     }catch(error){setNotice(error instanceof Error?error.message:String(error));}
     finally{setBusy(false);}
+  }
+
+  async function saveSelectedProfile(profile:SwarmProfile, patch:Partial<SwarmProfile>){
+    const updated={...profile,...patch};
+    setBusy(true);
+    try{
+      const saved=await request<SwarmProfile>("/swarm-profiles/"+profile.id,{
+        method:"PUT",
+        body:JSON.stringify({
+          name:updated.name,
+          enabled:true,
+          coordinator_profile_id:updated.coordinator_profile_id||null,
+          default_worker_profile_id:updated.default_worker_profile_id||null,
+          role_profiles:updated.role_profiles||{},
+          max_agents:updated.max_agents,
+          max_concurrency:updated.max_concurrency,
+          max_depth:updated.max_depth,
+          dynamic_size:Boolean(updated.dynamic_size),
+          agent_tool_budget:updated.agent_tool_budget,
+          coordinator_tool_budget:updated.coordinator_tool_budget,
+          require_reviewer:Boolean(updated.require_reviewer),
+          require_challenger:Boolean(updated.require_challenger)
+        })
+      });
+      setProfiles(items=>items.map(item=>item.id===saved.id?saved:item));
+      setNotice("Swarm model assignments saved");
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
+  }
+
+  function modelSelect(profile:SwarmProfile, role:string, value:number|null){
+    const roleProfiles={...(profile.role_profiles||{})};
+    if(value)roleProfiles[role]=value; else delete roleProfiles[role];
+    setProfiles(items=>items.map(item=>item.id===profile.id?{...item,role_profiles:roleProfiles}:item));
   }
 
   async function createSwarm(event:FormEvent){
@@ -160,6 +197,21 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
         <label className={styles.objective}>Objective<textarea value={objective} onChange={event=>setObjective(event.target.value)} placeholder="Describe the outcome you want the team to deliver…"/></label>
         <button className="primary" disabled={busy||!objective.trim()||!profileId}>{busy?"Working…":"Start swarm"}</button>
       </form>
+      {profiles.find(item=>String(item.id)===profileId)&&<details className={styles.roleSettings}>
+        <summary>Role model settings</summary>
+        {(()=>{
+          const profile=profiles.find(item=>String(item.id)===profileId)!;
+          const roles=["backend","frontend","coder","tester","researcher","reviewer","challenger"];
+          return <div className={styles.roleGrid}>
+            <label>Coordinator<select value={profile.coordinator_profile_id||""} onChange={event=>setProfiles(items=>items.map(item=>item.id===profile.id?{...item,coordinator_profile_id:event.target.value?Number(event.target.value):null}:item))}><option value="">Project default</option>{modelProfiles.map(model=><option key={model.id} value={model.id}>{model.name} · {model.chat_model}</option>)}</select></label>
+            <label>Default worker<select value={profile.default_worker_profile_id||""} onChange={event=>setProfiles(items=>items.map(item=>item.id===profile.id?{...item,default_worker_profile_id:event.target.value?Number(event.target.value):null}:item))}><option value="">Project default</option>{modelProfiles.map(model=><option key={model.id} value={model.id}>{model.name} · {model.chat_model}</option>)}</select></label>
+            {roles.map(role=><label key={role}>{role}<select value={(profile.role_profiles||{})[role]||""} onChange={event=>modelSelect(profile,role,event.target.value?Number(event.target.value):null)}><option value="">Use default worker</option>{modelProfiles.map(model=><option key={model.id} value={model.id}>{model.name} · {model.chat_model}</option>)}</select></label>)}
+            <label><span>Final reviewer</span><input type="checkbox" checked={Boolean(profile.require_reviewer)} onChange={event=>setProfiles(items=>items.map(item=>item.id===profile.id?{...item,require_reviewer:event.target.checked?1:0}:item))}/></label>
+            <label><span>Challenger</span><input type="checkbox" checked={Boolean(profile.require_challenger)} onChange={event=>setProfiles(items=>items.map(item=>item.id===profile.id?{...item,require_challenger:event.target.checked?1:0}:item))}/></label>
+            <div className={styles.roleActions}><button type="button" onClick={()=>saveSelectedProfile(profile,{})} disabled={busy}>Save role assignments</button></div>
+          </div>;
+        })()}
+      </details>}
     </section>}
 
     <section className={styles.board}>
