@@ -167,6 +167,16 @@ def resolve_role(profile: dict, role: str) -> tuple[int | None, str]:
     return resolve_model_profile(int(selected) if selected else None)
 
 
+def initial_specialist_budget(profile: dict, max_agents: int) -> int:
+    reserved = (1 if profile.get("require_reviewer") else 0) + (1 if profile.get("require_challenger") else 0)
+    available = int(max_agents) - reserved
+    if available < 2:
+        raise ValueError("This Swarm profile needs at least two specialist slots plus its required review roles")
+    if profile.get("dynamic_size") and available > 2:
+        return available - 1
+    return available
+
+
 def coordinator_model(profile: dict) -> tuple[int | None, str]:
     selected = profile.get("coordinator_profile_id") or profile.get("default_worker_profile_id")
     return resolve_model_profile(int(selected) if selected else None)
