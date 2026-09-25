@@ -14,7 +14,7 @@ type LeadResponse = { lead:Node; specialists:unknown[]; reviewer:unknown; plan:{
 type IntegrationState = { lead_task_id:number; path:string; branch:string; base:string; diff?:string; changes?:string[]; check_command?:string; check_status?:string; check_output?:string; pull_request_number?:number; pull_request_url?:string; pull_request_state?:string };
 type IntegrationPreflight = { lead_task_id:number; task_ids:number[]; base:string; branches:string[]; files_by_branch:Record<string,string[]>; overlaps:{path:string;branches:string[]}[] };
 type SwarmListItem = { id:number; title:string; status:string; max_agents:number; max_concurrency:number; total_agents_created:number };
-type SwarmAgent = { id:number; title:string; status:string; agent_role:string; progress?:number; assigned_model?:string; current_activity?:string; tool_usage?:number; tool_budget?:number; latest_insight?:{category:string;content:string}|null };
+type SwarmAgent = { id:number; title:string; status:string; agent_role:string; progress?:number; assigned_model?:string; current_activity?:string; tool_usage?:number; tool_budget?:number; latest_insight?:{category:string;content:string}|null; task_kind?:string; worktree_branch?:string };
 type SwarmAgentDetail = { task:SwarmAgent; commands:{id:number;command:string;output:string;exit_code:number;status:string}[]; blackboard:{id:number;category:string;content:string}[]; changed_files:string[]; worktree?:{branch_diff?:string;working_diff?:string}|null };
 type SwarmBoard = {
   swarm:{ id:number; title:string; status:string; agents?:SwarmAgent[]; coordinator_activity?:{category:string;content:string}|null; coordinator_budget?:{used:number;budget:number;remaining:number} };
@@ -26,6 +26,7 @@ type SwarmSkill = { project_id:number; skill:"swarm"; enabled:boolean };
 type SwarmProfile = { id:number; name:string; max_agents:number; max_concurrency:number; max_depth:number; dynamic_size:number; agent_tool_budget:number; coordinator_tool_budget:number; require_reviewer:number; require_challenger:number; coordinator_profile_id?:number|null; default_worker_profile_id?:number|null; role_profiles?:Record<string,number> };
 type ModelProfile = { id:number; name:string; chat_model:string };
 type SwarmPreflight = { ready:boolean; checks:{name:string;ok:boolean;detail:string}[]; max_agents:number; max_concurrency:number };
+type SwarmIntegrationPlan = { task_ids?:number[]; branches:string[]; overlaps:{path:string;branches:string[]}[]; files_by_branch?:Record<string,string[]>; path?:string; branch?:string; check_status?:string; check_output?:string };
 
 export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:number; onCreated:()=>void }) {
   const [graph,setGraph]=useState<Graph>({project_id:projectId,nodes:[]});
@@ -55,6 +56,9 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
   const [selectedSwarmAgentId,setSelectedSwarmAgentId]=useState<number|null>(null);
   const [selectedSwarmAgent,setSelectedSwarmAgent]=useState<SwarmAgentDetail|null>(null);
   const [swarmGuidance,setSwarmGuidance]=useState("");
+  const [swarmIntegration,setSwarmIntegration]=useState<SwarmIntegrationPlan|null>(null);
+  const [swarmCheckCommand,setSwarmCheckCommand]=useState("python -m pytest backend/tests -q && cd frontend && npx tsc --noEmit && npm run build");
+  const [swarmIntegrationPushed,setSwarmIntegrationPushed]=useState(false);
 
   useEffect(()=>{ load(); loadSwarmSettings(); const timer=window.setInterval(load,3000); return()=>window.clearInterval(timer); },[projectId]);
   async function load(){
@@ -181,6 +185,87 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
     finally{setBusy(false);}
   }
 
+  function swarmIntegrationTaskIds(){
+    return (swarmBoard?.swarm.agents||[])
+      .filter(agent=>agent.status==="completed"&&agent.worktree_branch&&!["reviewer","challenger"].includes(agent.task_kind||agent.agent_role))
+      .map(agent=>agent.id);
+  }
+
+  async function checkSwarmIntegration(){
+    if(!swarmBoard)return;
+    const taskIds=swarmIntegrationTaskIds();
+    if(!taskIds.length){setNotice("No completed specialist branches are ready to integrate");return;}
+    setBusy(true);
+    try{
+      const plan=await request<SwarmIntegrationPlan>(`/swarms/${swarmBoard.swarm.id}/integration/preflight`,{
+        method:"POST",body:JSON.stringify({task_ids:taskIds,base:"main"})
+      });
+      setSwarmIntegration({...plan,task_ids:taskIds});
+      setNotice(plan.overlaps.length?`Integration preflight found ${plan.overlaps.length} overlapping file(s)`:"Integration preflight passed");
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
+  }
+
+  async function buildSwarmIntegration(){
+    if(!swarmBoard)return;
+    const taskIds=swarmIntegration?.task_ids||swarmIntegrationTaskIds();
+    if(!taskIds.length)return;
+    setBusy(true);
+    try{
+      const result=await request<SwarmIntegrationPlan>(`/swarms/${swarmBoard.swarm.id}/integration`,{
+        method:"POST",body:JSON.stringify({task_ids:taskIds,base:"main"})
+      });
+      setSwarmIntegration({...result,task_ids:taskIds});
+      setSwarmIntegrationPushed(false);
+      setNotice("Swarm integration worktree created");
+      await load();
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
+  }
+
+  async function runSwarmChecks(){
+    if(!swarmBoard||!swarmCheckCommand.trim())return;
+    setBusy(true);
+    try{
+      const result=await request<{passed:boolean;output:string;command:string}>(`/swarms/${swarmBoard.swarm.id}/integration/checks`,{
+        method:"POST",body:JSON.stringify({command:swarmCheckCommand.trim()})
+      });
+      setSwarmIntegration(current=>current?{...current,check_status:result.passed?"passed":"failed",check_output:result.output}:current);
+      setNotice(result.passed?"Combined Swarm checks passed":"Combined Swarm checks failed");
+      await load();
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
+  }
+
+  async function pushSwarmIntegration(){
+    if(!swarmBoard)return;
+    setBusy(true);
+    try{
+      await request(`/swarms/${swarmBoard.swarm.id}/integration/push`,{method:"POST",body:JSON.stringify({remote:"origin"})});
+      setSwarmIntegrationPushed(true);
+      setNotice("Swarm integration branch pushed");
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
+  }
+
+  async function createSwarmPullRequest(){
+    if(!swarmBoard)return;
+    setBusy(true);
+    try{
+      const result=await request<{pull_request_number:number;url:string}>(`/swarms/${swarmBoard.swarm.id}/integration/pull-request`,{
+        method:"POST",
+        body:JSON.stringify({
+          title:`Olladex Swarm #${swarmBoard.swarm.id}: ${swarmBoard.swarm.title}`,
+          body:`Integrated and verified by Olladex Swarm #${swarmBoard.swarm.id}.`,
+          base:"main"
+        })
+      });
+      setNotice(`Final Swarm PR #${result.pull_request_number} created`);
+      await load();
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
+  }
+
   async function startSwarm(event:FormEvent){
     event.preventDefault();
     if(!swarmSkill?.enabled||!swarmProfileId||!swarmObjective.trim())return;
@@ -272,6 +357,12 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
         <details><summary>Coordinator timeline · {swarmBoard.coordinator_events?.length||0}</summary><div>{swarmBoard.coordinator_events?.length?swarmBoard.coordinator_events.slice().reverse().slice(0,12).map(item=><article key={item.id}><b>{item.kind.replaceAll("_"," ")}</b><span>{coordinatorPayloadText(item.payload)}</span></article>):<p>No Coordinator events yet.</p>}</div></details>
         <details><summary>Blackboard · {swarmBoard.blackboard?.length||0}</summary><div>{swarmBoard.blackboard?.length?swarmBoard.blackboard.slice().reverse().slice(0,12).map(item=><article key={item.id}><b>{item.category}</b><span>{item.content}</span>{item.task_id?<small>Agent #{item.task_id}</small>:<small>Coordinator</small>}</article>):<p>No shared knowledge yet.</p>}</div></details>
       </div>}
+      {swarmBoard&&(swarmBoard.summary.integration_ready||swarmIntegration)&&<section className="agent-board-integration">
+        <header><div><p className="eyebrow">Swarm integration</p><h4>{swarmIntegration?.branch||"Completed specialist branches are ready"}</h4></div><div className="agent-board-control-actions"><button type="button" onClick={checkSwarmIntegration} disabled={busy}>Check overlaps</button>{swarmIntegration&&<button type="button" className="primary" onClick={buildSwarmIntegration} disabled={busy}>Build integration</button>}</div></header>
+        {swarmIntegration?.overlaps?.length?<div className="integration-warning"><strong>{swarmIntegration.overlaps.length} overlap(s)</strong><span>{swarmIntegration.overlaps.map(item=>item.path).join(", ")}</span></div>:swarmIntegration&&<div className="integration-ok">No overlapping files detected.</div>}
+        {swarmIntegration?.branch&&<div className="agent-board-integration-actions"><label>Combined checks<input value={swarmCheckCommand} onChange={event=>setSwarmCheckCommand(event.target.value)}/></label><button type="button" onClick={runSwarmChecks} disabled={busy||!swarmCheckCommand.trim()}>Run checks</button><span>{swarmIntegration.check_status||"not tested"}</span>{swarmIntegration.check_status==="passed"&&<button type="button" onClick={pushSwarmIntegration} disabled={busy}>Push branch</button>}{swarmIntegrationPushed&&swarmIntegration.check_status==="passed"&&<button type="button" className="primary" onClick={createSwarmPullRequest} disabled={busy}>Create final PR</button>}</div>}
+        {swarmIntegration?.check_output&&<details><summary>Combined check output</summary><pre>{swarmIntegration.check_output}</pre></details>}
+      </section>}
     </section>
     <details className={styles.advanced}>
       <summary>Swarm controls · {swarmSkill?.enabled?"enabled":"disabled"}</summary>
