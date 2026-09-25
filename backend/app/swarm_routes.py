@@ -441,7 +441,7 @@ def create_swarm_integration(swarm_id: int, body: SwarmIntegrationSelectionReque
         conn.execute(
             "UPDATE swarm_runs SET status='integrating',integration_path=?,integration_branch=?,"
             "integration_check_command='',integration_check_status='',integration_check_output='',"
-            "integration_pr_number=0,integration_pr_url='',integration_pr_state='' WHERE id=?",
+            "integration_pushed=0,integration_pr_number=0,integration_pr_url='',integration_pr_state='' WHERE id=?",
             (result["path"], result["branch"], swarm_id),
         )
     return {"swarm_id": swarm_id, "task_ids": body.task_ids, **result}
@@ -505,9 +505,12 @@ def push_swarm_integration(swarm_id: int, body: SwarmIntegrationPushRequest):
     if run.get("integration_check_status") != "passed":
         raise HTTPException(409, "Combined checks must pass before pushing the integration branch")
     try:
-        return {"swarm_id": swarm_id, **integration.push(project, path, body.remote)}
+        result = integration.push(project, path, body.remote)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
+    with connect() as conn:
+        conn.execute("UPDATE swarm_runs SET integration_pushed=1 WHERE id=?", (swarm_id,))
+    return {"swarm_id": swarm_id, **result}
 
 
 @router.post("/swarms/{swarm_id}/integration/pull-request")
@@ -519,6 +522,8 @@ def create_swarm_integration_pull_request(swarm_id: int, body: SwarmIntegrationP
         raise HTTPException(409, "Create a Swarm integration worktree first")
     if run.get("integration_check_status") != "passed":
         raise HTTPException(409, "Combined checks must pass before creating the integration pull request")
+    if not run.get("integration_pushed"):
+        raise HTTPException(409, "Push the integration branch before creating the integration pull request")
     target_project = integration.integration_project(project, path)
     try:
         prepared = github_service.prepare_pull_request(target_project, body.title, body.body, body.base)
