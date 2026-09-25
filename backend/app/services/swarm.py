@@ -338,8 +338,8 @@ def pause(swarm_id: int) -> dict:
         row = conn.execute("SELECT status FROM swarm_runs WHERE id=?", (swarm_id,)).fetchone()
         if not row:
             raise ValueError("Swarm not found")
-        if row["status"] in TERMINAL_STATUSES:
-            raise ValueError("Finished swarms cannot be paused")
+        if row["status"] not in {"running", "reviewing", "waiting"}:
+            raise ValueError("Only active orchestration can be paused")
         conn.execute("UPDATE swarm_runs SET status='paused' WHERE id=?", (swarm_id,))
     return get_run(swarm_id)
 
