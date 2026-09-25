@@ -12,6 +12,7 @@ import { TaskOrchestrationPanel } from "../components/TaskOrchestrationPanel";
 import { TerminalPanel } from "../components/TerminalPanel";
 import { Conversation } from "../components/Conversation";
 import { ConversationTaskSummary } from "../components/ConversationTaskSummary";
+import { MemoryPanel } from "../components/MemoryPanel";
 import { request } from "../lib/api";
 
 type Project = { id: number; name: string; path: string; model: string; approval_mode: "review" | "assisted" | "autonomous"; instructions: string; git_author_name: string; git_author_email: string; model_profile_id?: number; profile_name?: string; profile_chat_model?: string; profile_embedding_model?: string; profile_temperature?: number; profile_max_steps?: number; profile_context_files?: number; profile_context_chars?: number };
@@ -21,7 +22,7 @@ type Message = { id?: number; role: "user" | "assistant"; content: string; activ
 type Status = { version: string; shell: string; ollama: { connected: boolean; url: string; models: string[]; error?: string } };
 type Hunk = { index: number; header: string; lines: string[]; changes: number };
 type Change = { id: number; path: string; diff: string; hunks: Hunk[]; status: "proposed" | "applied" | "rejected" | "reverted"; created_at: string; updated_at: string };
-type Tab = "files" | "changes" | "terminal" | "diagrams" | "office" | "tasks" | "project";
+type Tab = "files" | "changes" | "terminal" | "diagrams" | "office" | "tasks" | "memory" | "project";
 
 const WELCOME: Message = { role: "assistant", content: "Welcome to Olladex. Open a local repository, then ask me to inspect, change and test it. Repository tools, your local shell, diagrams and Office files stay on your machine." };
 
@@ -194,6 +195,7 @@ export default function Home() {
       <button onClick={() => setTab("diagrams")}><span>◇</span><small>Diagrams</small></button>
       <button onClick={() => setTab("office")}><span>▤</span><small>Office</small></button>
       <button onClick={() => setTab("tasks")}><span>◷</span><small>Tasks</small></button>
+      <button onClick={() => setTab("memory")}><span>◉</span><small>Memory</small></button>
       <div className="rail-bottom"><button onClick={() => setTab("project")}><span>⚙</span><small>Project</small></button></div>
     </aside>
 
@@ -212,7 +214,7 @@ export default function Home() {
       </section>
 
       <section className="inspector-panel">
-        <div className="inspector-tabs"><span className="context-label">Context</span>{(["files", "changes", "terminal", "diagrams", "office", "tasks", "project"] as Tab[]).map((item) => <button key={item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item}{item === "changes" && changes.filter((change) => change.status === "proposed").length ? <span>{changes.filter((change) => change.status === "proposed").length}</span> : null}</button>)}</div>
+        <div className="inspector-tabs"><span className="context-label">Context</span>{(["files", "changes", "terminal", "diagrams", "office", "tasks", "memory", "project"] as Tab[]).map((item) => <button key={item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item}{item === "changes" && changes.filter((change) => change.status === "proposed").length ? <span>{changes.filter((change) => change.status === "proposed").length}</span> : null}</button>)}</div>
         {project ? <>
           {tab === "files" && <div className="file-workspace"><aside className="file-sidebar"><div className="file-search"><span>⌕</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter files" /></div><FileTree items={filteredTree} selected={selected?.path} onSelect={selectFile} /></aside><div className="editor-pane">{selected?.type === "file" ? <><div className="editor-head"><div><span className="file-icon">□</span><strong>{selected.path}</strong>{fileDraft !== fileContent && <i>Modified</i>}</div><button className="primary" onClick={() => saveFile().catch(error => setNotice(error.message))} disabled={fileDraft === fileContent}>Save</button></div><textarea className="code-editor" value={fileDraft} onChange={(e) => setFileDraft(e.target.value)} spellCheck={false} /></> : <EmptyWorkspace onOpen={() => setShowOpen(true)} />}</div></div>}
           {tab === "changes" && <div className="changes-panel">
@@ -224,6 +226,7 @@ export default function Home() {
           {tab === "diagrams" && <DiagramStudio initialSource={diagramSource} initialEngine={diagramEngine} />}
           {tab === "office" && <OfficePanel projectId={project.id} selectedPath={selected?.path} onCreated={refreshTree} />}
           {tab === "tasks" && <div className="tasks-workspace">{session ? <ConversationTaskSummary sessionId={session.id} title={session.title} onOpenConversation={() => setTab("files")} /> : null}<TaskOrchestrationPanel projectId={project.id} onCreated={() => setNotice("Orchestrated task queued")} /><BackgroundTasksPanel projectId={project.id} onOpenSession={openTaskSession} /></div>}
+          {tab === "memory" && <MemoryPanel projectName={project.name} sessionId={session?.id} />}
           {tab === "project" && <ProjectPanel project={project} onUpdated={(updated) => { setProject(updated); setProjects((items) => items.map((item) => item.id === updated.id ? updated : item)); }} />}
         </> : <EmptyWorkspace onOpen={() => setShowOpen(true)} />}
       </section>
