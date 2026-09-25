@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 from backend.app.config import settings
 from backend.app.database import connect, init_db, now
 from backend.app.services import conversation_runtime, swarm, swarm_coordinator, task_queue
@@ -866,3 +868,35 @@ def test_board_snapshot_returns_stable_summary_and_incremental_streams(tmp_path,
     assert later["events"] == []
     assert later["blackboard"] == []
     assert later["coordinator_events"] == []
+
+
+def test_sqlite_wal_handles_parallel_swarm_writers(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id, max_agents=8, max_concurrency=4)
+
+    errors: list[str] = []
+
+    def writer(worker: int) -> None:
+        try:
+            for index in range(20):
+                swarm.publish(
+                    swarm_id,
+                    "finding",
+                    f"worker {worker} finding {index}",
+                    key=f"w{worker}-{index}",
+                )
+                swarm.emit_coordinator_event(
+                    swarm_id,
+                    "test_event",
+                    {"worker": worker, "index": index},
+                )
+        except Exception as exc:  # pragma: no cover - assertion reports details
+            errors.append(f"{worker}: {exc}")
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        list(pool.map(writer, range(6)))
+
+    assert errors == []
+    assert len(swarm.blackboard(swarm_id, limit=1000)) == 120
+    coordinator = swarm.coordinator_events(swarm_id, limit=1000)
+    assert len([item for item in coordinator if item["kind"] == "test_event"]) == 120
