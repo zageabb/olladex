@@ -130,3 +130,51 @@ def test_blackboard_is_scoped_to_swarm_and_task(tmp_path, monkeypatch):
     assert task_items[0]["key"] == "auth-flow"
     assert len(findings) == 1
     assert findings[0]["category"] == "finding"
+
+
+def test_swarm_profile_role_model_assignments(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    with connect() as conn:
+        fast_id = int(conn.execute("SELECT id FROM model_profiles WHERE name='Fast review'").fetchone()["id"])
+        deep_id = int(conn.execute("SELECT id FROM model_profiles WHERE name='Deep implementation'").fetchone()["id"])
+
+    created = swarm.create_profile({
+        "name": "Custom Swarm",
+        "coordinator_profile_id": fast_id,
+        "default_worker_profile_id": deep_id,
+        "role_profiles": {"tester": fast_id, "reviewer": fast_id},
+        "max_agents": 6,
+        "max_concurrency": 2,
+        "max_depth": 1,
+        "dynamic_size": True,
+        "agent_tool_budget": 25,
+        "coordinator_tool_budget": 15,
+        "require_reviewer": True,
+        "require_challenger": False,
+    })
+
+    assert created["coordinator_profile_id"] == fast_id
+    assert created["default_worker_profile_id"] == deep_id
+    assert created["role_profiles"]["tester"] == fast_id
+    assert swarm.resolve_role(created, "tester")[0] == fast_id
+    assert swarm.resolve_role(created, "backend")[0] == deep_id
+
+    updated = swarm.update_profile(created["id"], {
+        **created,
+        "role_profiles": {"tester": deep_id},
+        "require_challenger": True,
+    })
+    assert updated["role_profiles"] == {"tester": deep_id}
+    assert updated["require_challenger"] == 1
+
+
+def test_builtin_swarm_profile_name_is_protected(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    built_in = next(item for item in swarm.list_profiles() if item["name"] == "Development")
+
+    try:
+        swarm.update_profile(built_in["id"], {**built_in, "name": "Renamed Development"})
+    except ValueError as exc:
+        assert "cannot be changed" in str(exc)
+    else:
+        raise AssertionError("Built-in Swarm profile names should be protected")
