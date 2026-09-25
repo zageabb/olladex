@@ -31,6 +31,7 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
   const [busy,setBusy]=useState(false);
   const [selectedAgentId,setSelectedAgentId]=useState<number|null>(null);
   const [guidance,setGuidance]=useState("");
+  const [coordinatorGuidance,setCoordinatorGuidance]=useState("");
   const [integrationIds,setIntegrationIds]=useState<number[]>([]);
   const [integrationPlan,setIntegrationPlan]=useState<IntegrationPlan|null>(null);
   const [checkCommand,setCheckCommand]=useState("python -m pytest backend/tests -q");
@@ -158,6 +159,18 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
         : await request<SwarmRun>("/swarms/"+selected.id+"/"+kind,{method:"POST"});
       setSelected(updated); setRuns(items=>items.map(item=>item.id===updated.id?{...item,...updated}:item));
       setNotice("Swarm "+(kind==="stop"?"stopped":kind+"d"));
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
+  }
+
+  async function steerCoordinator(){
+    if(!selected||!coordinatorGuidance.trim())return;
+    setBusy(true);
+    try{
+      await request("/swarms/"+selected.id+"/coordinator/input",{
+        method:"POST",body:JSON.stringify({content:coordinatorGuidance.trim()})
+      });
+      setCoordinatorGuidance(""); setNotice("Guidance sent to Coordinator");
     }catch(error){setNotice(error instanceof Error?error.message:String(error));}
     finally{setBusy(false);}
   }
@@ -322,6 +335,10 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
           <div><i className={styles.dot+" "+(selected.status==="failed"?"failed":selected.status==="completed"?"completed":"running")}/><span><strong>Coordinator</strong><small>{coordinatorProfile?.chat_model||"Project default"} · {selected.status==="reviewing"?"Evaluating verification and review flow":selected.status==="running"?"Monitoring specialists, Blackboard and recovery conditions":selected.status==="paused"?"Paused with swarm":"Coordinator "+selected.status}</small></span></div>
           <b>{selected.status}</b>
         </article>
+        {!["completed","failed","cancelled"].includes(selected.status)&&<form className={styles.coordinatorGuidance} onSubmit={event=>{event.preventDefault();steerCoordinator();}}>
+          <input value={coordinatorGuidance} onChange={event=>setCoordinatorGuidance(event.target.value)} placeholder="Guide Coordinator — e.g. prioritise tests; do not change public API"/>
+          <button disabled={busy||!coordinatorGuidance.trim()}>Send to Coordinator</button>
+        </form>}
 
         <div className={styles.metrics}>
           <span><strong>{agents.length}/{selected.max_agents}</strong>agents</span>
