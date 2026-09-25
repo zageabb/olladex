@@ -6,13 +6,13 @@ from ..config import settings
 from . import ollama, workspace
 
 
-ALLOWED_ROLES = {"worker", "frontend", "backend", "tester", "reviewer", "researcher"}
+ALLOWED_ROLES = {"worker", "frontend", "backend", "tester", "reviewer", "researcher", "architect", "coder", "documentation"}
 
 
 def decompose(project: dict, objective: str, max_tasks: int = 6) -> list[dict]:
     if not objective.strip():
         raise ValueError("Lead objective is required")
-    max_tasks = max(2, min(int(max_tasks or 6), 10))
+    max_tasks = max(2, min(int(max_tasks or 6), 16))
     intelligence = workspace.repository_intelligence(project)
     prompt = f"""You are the lead software-engineering coordinator for Olladex.
 Break the objective into 2-{max_tasks} focused specialist tasks that can execute in parallel where safe.
