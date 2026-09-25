@@ -23,7 +23,8 @@ type SwarmBoard = {
   blackboard?:{id:number;task_id?:number|null;category:string;content:string;key?:string;created_at:string}[];
 };
 type SwarmSkill = { project_id:number; skill:"swarm"; enabled:boolean };
-type SwarmProfile = { id:number; name:string; max_agents:number; max_concurrency:number; require_reviewer:number; require_challenger:number };
+type SwarmProfile = { id:number; name:string; max_agents:number; max_concurrency:number; max_depth:number; dynamic_size:number; agent_tool_budget:number; coordinator_tool_budget:number; require_reviewer:number; require_challenger:number; coordinator_profile_id?:number|null; default_worker_profile_id?:number|null; role_profiles?:Record<string,number> };
+type ModelProfile = { id:number; name:string; chat_model:string };
 type SwarmPreflight = { ready:boolean; checks:{name:string;ok:boolean;detail:string}[]; max_agents:number; max_concurrency:number };
 
 export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:number; onCreated:()=>void }) {
@@ -44,6 +45,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
   const [swarmBoard,setSwarmBoard]=useState<SwarmBoard|null>(null);
   const [swarmSkill,setSwarmSkill]=useState<SwarmSkill|null>(null);
   const [swarmProfiles,setSwarmProfiles]=useState<SwarmProfile[]>([]);
+  const [modelProfiles,setModelProfiles]=useState<ModelProfile[]>([]);
   const [swarmProfileId,setSwarmProfileId]=useState("");
   const [swarmObjective,setSwarmObjective]=useState("");
   const [swarmTitle,setSwarmTitle]=useState("");
@@ -73,12 +75,14 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
 
   async function loadSwarmSettings(){
     try{
-      const [skill,profiles]=await Promise.all([
+      const [skill,profiles,models]=await Promise.all([
         request<SwarmSkill>(`/projects/${projectId}/skills/swarm`),
-        request<SwarmProfile[]>("/swarm-profiles")
+        request<SwarmProfile[]>("/swarm-profiles"),
+        request<ModelProfile[]>("/model-profiles")
       ]);
       setSwarmSkill(skill);
       setSwarmProfiles(profiles);
+      setModelProfiles(models);
       if(profiles.length&&!swarmProfileId){
         const preferred=profiles.find(item=>item.name==="Development")||profiles[0];
         setSwarmProfileId(String(preferred.id));
@@ -136,6 +140,43 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
       setNotice(`Stop requested for agent #${selectedSwarmAgent.task.id}`);
       setSelectedSwarmAgentId(null);
       await load();
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
+  }
+
+  function updateSwarmProfile(profileId:number, patch:Partial<SwarmProfile>){
+    setSwarmProfiles(items=>items.map(item=>item.id===profileId?{...item,...patch}:item));
+  }
+
+  function updateRoleProfile(profile:SwarmProfile, role:string, modelId:number|null){
+    const roles={...(profile.role_profiles||{})};
+    if(modelId)roles[role]=modelId;else delete roles[role];
+    updateSwarmProfile(profile.id,{role_profiles:roles});
+  }
+
+  async function saveSwarmProfile(profile:SwarmProfile){
+    setBusy(true);
+    try{
+      const saved=await request<SwarmProfile>(`/swarm-profiles/${profile.id}`,{
+        method:"PUT",
+        body:JSON.stringify({
+          name:profile.name,
+          enabled:true,
+          coordinator_profile_id:profile.coordinator_profile_id||null,
+          default_worker_profile_id:profile.default_worker_profile_id||null,
+          role_profiles:profile.role_profiles||{},
+          max_agents:profile.max_agents,
+          max_concurrency:profile.max_concurrency,
+          max_depth:profile.max_depth,
+          dynamic_size:Boolean(profile.dynamic_size),
+          agent_tool_budget:profile.agent_tool_budget,
+          coordinator_tool_budget:profile.coordinator_tool_budget,
+          require_reviewer:Boolean(profile.require_reviewer),
+          require_challenger:Boolean(profile.require_challenger)
+        })
+      });
+      setSwarmProfiles(items=>items.map(item=>item.id===saved.id?saved:item));
+      setNotice("Swarm model and policy settings saved");
     }catch(error){setNotice(error instanceof Error?error.message:String(error));}
     finally{setBusy(false);}
   }
@@ -236,15 +277,28 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
       <summary>Swarm controls · {swarmSkill?.enabled?"enabled":"disabled"}</summary>
       <div className={styles.advancedForm}>
         <div className={styles.actions}><button type="button" onClick={toggleSwarmSkill} disabled={busy||!swarmSkill}>{swarmSkill?.enabled?"Disable Swarm":"Enable Swarm"}</button></div>
-        {swarmSkill?.enabled&&<form onSubmit={startSwarm} className={styles.advancedForm}>
-          <label>Preset<select value={swarmProfileId} onChange={event=>{const id=event.target.value;setSwarmProfileId(id);const profile=swarmProfiles.find(item=>String(item.id)===id);if(profile){setSwarmMaxAgents(profile.max_agents);setSwarmConcurrency(profile.max_concurrency);}}}>{swarmProfiles.map(profile=><option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>
-          <label>Maximum agents<input type="number" min="2" max="20" value={swarmMaxAgents} onChange={event=>setSwarmMaxAgents(Number(event.target.value))}/></label>
-          <label>Concurrency<input type="number" min="1" max="8" value={swarmConcurrency} onChange={event=>setSwarmConcurrency(Number(event.target.value))}/></label>
-          <label>Title<input value={swarmTitle} onChange={event=>setSwarmTitle(event.target.value)} placeholder="Optional swarm title"/></label>
-          <label className={styles.advancedPrompt}>Objective<textarea value={swarmObjective} onChange={event=>setSwarmObjective(event.target.value)} placeholder="Describe the larger outcome for the Swarm…"/></label>
-          <button className="primary" disabled={busy||!swarmProfileId||!swarmObjective.trim()}>{busy?"Checking…":"Preflight & start Swarm"}</button>
-          {swarmPreflight&&<small>{swarmPreflight.ready?"Readiness checks passed":swarmPreflight.checks.filter(item=>!item.ok).map(item=>item.detail).join(" · ")}</small>}
-        </form>}
+        {swarmSkill?.enabled&&<>
+          <form onSubmit={startSwarm} className={styles.advancedForm}>
+            <label>Preset<select value={swarmProfileId} onChange={event=>{const id=event.target.value;setSwarmProfileId(id);const profile=swarmProfiles.find(item=>String(item.id)===id);if(profile){setSwarmMaxAgents(profile.max_agents);setSwarmConcurrency(profile.max_concurrency);}}}>{swarmProfiles.map(profile=><option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>
+            <label>Maximum agents<input type="number" min="2" max="20" value={swarmMaxAgents} onChange={event=>setSwarmMaxAgents(Number(event.target.value))}/></label>
+            <label>Concurrency<input type="number" min="1" max="8" value={swarmConcurrency} onChange={event=>setSwarmConcurrency(Number(event.target.value))}/></label>
+            <label>Title<input value={swarmTitle} onChange={event=>setSwarmTitle(event.target.value)} placeholder="Optional swarm title"/></label>
+            <label className={styles.advancedPrompt}>Objective<textarea value={swarmObjective} onChange={event=>setSwarmObjective(event.target.value)} placeholder="Describe the larger outcome for the Swarm…"/></label>
+            <button className="primary" disabled={busy||!swarmProfileId||!swarmObjective.trim()}>{busy?"Checking…":"Preflight & start Swarm"}</button>
+            {swarmPreflight&&<small>{swarmPreflight.ready?"Readiness checks passed":swarmPreflight.checks.filter(item=>!item.ok).map(item=>item.detail).join(" · ")}</small>}
+          </form>
+          {swarmProfiles.find(item=>String(item.id)===swarmProfileId)&&(()=>{const profile=swarmProfiles.find(item=>String(item.id)===swarmProfileId)!;const roles=["backend","frontend","coder","tester","researcher","reviewer","challenger"];return <details className="swarm-profile-settings"><summary>Model & policy settings</summary><div className="swarm-profile-grid">
+            <label>Coordinator<select value={profile.coordinator_profile_id||""} onChange={event=>updateSwarmProfile(profile.id,{coordinator_profile_id:event.target.value?Number(event.target.value):null})}><option value="">Project default</option>{modelProfiles.map(model=><option key={model.id} value={model.id}>{model.name} · {model.chat_model}</option>)}</select></label>
+            <label>Default worker<select value={profile.default_worker_profile_id||""} onChange={event=>updateSwarmProfile(profile.id,{default_worker_profile_id:event.target.value?Number(event.target.value):null})}><option value="">Project default</option>{modelProfiles.map(model=><option key={model.id} value={model.id}>{model.name} · {model.chat_model}</option>)}</select></label>
+            {roles.map(role=><label key={role}>{role}<select value={(profile.role_profiles||{})[role]||""} onChange={event=>updateRoleProfile(profile,role,event.target.value?Number(event.target.value):null)}><option value="">Default worker</option>{modelProfiles.map(model=><option key={model.id} value={model.id}>{model.name} · {model.chat_model}</option>)}</select></label>)}
+            <label>Worker tool budget<input type="number" min="1" max="200" value={profile.agent_tool_budget} onChange={event=>updateSwarmProfile(profile.id,{agent_tool_budget:Number(event.target.value)})}/></label>
+            <label>Coordinator budget<input type="number" min="1" max="200" value={profile.coordinator_tool_budget} onChange={event=>updateSwarmProfile(profile.id,{coordinator_tool_budget:Number(event.target.value)})}/></label>
+            <label className="swarm-check"><input type="checkbox" checked={Boolean(profile.dynamic_size)} onChange={event=>updateSwarmProfile(profile.id,{dynamic_size:event.target.checked?1:0})}/> Dynamic size</label>
+            <label className="swarm-check"><input type="checkbox" checked={Boolean(profile.require_reviewer)} onChange={event=>updateSwarmProfile(profile.id,{require_reviewer:event.target.checked?1:0})}/> Final reviewer</label>
+            <label className="swarm-check"><input type="checkbox" checked={Boolean(profile.require_challenger)} onChange={event=>updateSwarmProfile(profile.id,{require_challenger:event.target.checked?1:0})}/> Challenger</label>
+            <div className={styles.actions}><button type="button" onClick={()=>saveSwarmProfile(profile)} disabled={busy}>Save Swarm settings</button></div>
+          </div></details>})()}
+        </>}
       </div>
     </details>
     <div className={styles.hero}><div><p className="eyebrow">Advanced orchestration</p><h3>Coordinate larger work</h3><p>Start with one objective. Olladex breaks it into specialist tasks, waits for dependencies, then gives you a review and integration path.</p></div><span className={styles.count}>{graph.nodes.length} tasks</span></div>
