@@ -582,8 +582,12 @@ The Swarm Coordinator can:
 - recover from failed/interrupted specialists when capacity remains;
 - inspect Blackboard risks before final review;
 - add one bounded follow-up specialist when justified;
+- hold challenger/reviewer tasks until it explicitly opens the `reviewing` gate;
 - keep challenger before reviewer;
-- preserve user guidance across later decisions.
+- preserve user guidance across later decisions;
+- write a durable Coordinator event timeline for status changes, risks, decisions and guidance.
+
+The Agent Board reads agent and Coordinator event streams incrementally using event IDs rather than repeatedly reloading the whole event history. This keeps the live view responsive while reducing SQLite read pressure during parallel execution.
 
 Each specialist works in an isolated task worktree. Important plans, tool activity, findings, decisions, risks and final hand-offs are visible on the board; Olladex does not expose or depend on raw hidden model chain-of-thought.
 
