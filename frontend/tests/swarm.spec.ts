@@ -92,6 +92,14 @@ test('swarm board shows coordinator timeline and advances incremental polling cu
         {id:21,swarm_id:7,kind:'decision',payload:{content:'Coordinator opened final verification.'},created_at:new Date().toISOString()}
       ]:[]);
     }
+    if (p === '/api/swarm-agents/11') return json({
+      task:run.agents[0],
+      run:{id:101,status:'completed',created_at:new Date().toISOString(),updated_at:new Date().toISOString()},
+      commands:[{id:1,command:'pytest backend/tests/test_auth.py',output:'12 passed',exit_code:0,status:'completed',cwd:'/demo',created_at:new Date().toISOString(),updated_at:new Date().toISOString()}],
+      blackboard:[{id:2,task_id:11,category:'finding',key:'auth',content:'Auth dependency is centralized.',confidence:null,created_at:new Date().toISOString()}],
+      changed_files:['backend/app/auth.py'],
+      worktree:{path:'/tmp/task-11',branch:'olladex/task-11',branch_diff:'diff --git a/backend/app/auth.py b/backend/app/auth.py',working_diff:'',changes:[]}
+    });
     if (p.endsWith('/tree')) return json([]);
     if (p.endsWith('/changes')) return json([]);
     if (p.endsWith('/memory')) return json({content:''});
@@ -111,4 +119,12 @@ test('swarm board shows coordinator timeline and advances incremental polling cu
 
   await expect.poll(() => coordinatorAfter.includes('21'), {timeout:5000}).toBe(true);
   await expect.poll(() => agentAfter.includes('9'), {timeout:5000}).toBe(true);
+
+  await page.getByRole('button', {name:'Open agent'}).first().click();
+  await expect(page.getByRole('heading', {name:'Changed files'})).toBeVisible();
+  await expect(page.getByText('backend/app/auth.py')).toBeVisible();
+  await expect(page.getByRole('heading', {name:'Commands'})).toBeVisible();
+  await expect(page.getByText('pytest backend/tests/test_auth.py')).toBeVisible();
+  await expect(page.getByRole('heading', {name:'Findings & hand-offs'})).toBeVisible();
+  await expect(page.getByText('Auth dependency is centralized.')).toBeVisible();
 });
