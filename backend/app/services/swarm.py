@@ -192,6 +192,24 @@ def _event_summary(kind: str, payload: dict) -> str:
     return kind.replace("_", " ").title()
 
 
+
+def events(swarm_id: int, after: int = 0, limit: int = 200) -> list[dict]:
+    limit = max(1, min(int(limit or 200), 1000))
+    with connect() as conn:
+        rows = [dict(row) for row in conn.execute(
+            "SELECT ae.id,ae.run_id,ae.kind,ae.payload,ae.created_at,"
+            "bt.id AS task_id,bt.title AS task_title,bt.agent_role,bt.assigned_model "
+            "FROM agent_events ae "
+            "JOIN agent_runs ar ON ar.id=ae.run_id "
+            "JOIN background_tasks bt ON bt.id=ar.task_id "
+            "WHERE bt.swarm_id=? AND ae.id>? "
+            "ORDER BY ae.id ASC LIMIT ?",
+            (swarm_id, max(0, int(after)), limit),
+        )]
+    for item in rows:
+        item["payload"] = _json_object(item.get("payload"))
+    return rows
+
 def pause(swarm_id: int) -> dict:
     with connect() as conn:
         row = conn.execute("SELECT status FROM swarm_runs WHERE id=?", (swarm_id,)).fetchone()
