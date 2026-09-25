@@ -8,7 +8,7 @@ type Skill = { project_id:number; skill:"swarm"; enabled:boolean };
 type SwarmProfile = { id:number; name:string; max_agents:number; max_concurrency:number; max_depth:number; dynamic_size:number; require_reviewer:number; require_challenger:number; coordinator_profile_id?:number|null; default_worker_profile_id?:number|null; role_profiles:Record<string,number>; agent_tool_budget:number; coordinator_tool_budget:number; is_builtin:number };
 type ModelProfile = { id:number; name:string; chat_model:string };
 type Agent = { id:number; title:string; status:string; agent_role:string; assigned_model:string; task_kind:string; priority:number; progress:number; current_activity:string; depends_on?:number[]|string; run_id?:number|null; worktree_branch?:string; result?:string; error?:string; created_at:string; started_at?:string };
-type SwarmRun = { id:number; project_id:number; title:string; objective:string; status:string; profile_id:number; max_agents:number; max_concurrency:number; total_agents_created:number; created_at:string; started_at:string; completed_at:string; agents?:Agent[]; agent_counts?:Record<string,number>; integration_path?:string; integration_branch?:string; integration_check_command?:string; integration_check_status?:string; integration_check_output?:string };
+type SwarmRun = { id:number; project_id:number; title:string; objective:string; status:string; profile_id:number; max_agents:number; max_concurrency:number; total_agents_created:number; created_at:string; started_at:string; completed_at:string; agents?:Agent[]; agent_counts?:Record<string,number>; integration_path?:string; integration_branch?:string; integration_check_command?:string; integration_check_status?:string; integration_check_output?:string; integration_pr_number?:number; integration_pr_url?:string; integration_pr_state?:string };
 type BlackboardItem = { id:number; task_id?:number|null; category:string; key:string; content:string; confidence?:number|null; created_at:string };
 type SwarmEvent = { id:number; run_id:number; task_id:number; task_title:string; agent_role:string; assigned_model:string; kind:string; payload:Record<string,unknown>; created_at:string };
 type IntegrationPlan = { branches:string[]; overlaps:{path:string;branches:string[]}[]; files_by_branch:Record<string,string[]>; path?:string; branch?:string; check_status?:string; check_output?:string };
@@ -34,6 +34,7 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
   const [integrationIds,setIntegrationIds]=useState<number[]>([]);
   const [integrationPlan,setIntegrationPlan]=useState<IntegrationPlan|null>(null);
   const [checkCommand,setCheckCommand]=useState("python -m pytest backend/tests -q");
+  const [integrationPushed,setIntegrationPushed]=useState(false);
 
   useEffect(()=>{ loadBootstrap(); },[projectId]);
 
@@ -199,6 +200,34 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
     finally{setBusy(false);}
   }
 
+  async function pushIntegration(){
+    if(!selected)return;
+    setBusy(true);
+    try{
+      await request("/swarms/"+selected.id+"/integration/push",{method:"POST",body:JSON.stringify({remote:"origin"})});
+      setIntegrationPushed(true); setNotice("Integration branch pushed");
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
+  }
+
+  async function createIntegrationPullRequest(){
+    if(!selected)return;
+    setBusy(true);
+    try{
+      const result=await request<{pull_request_number:number;url:string}>("/swarms/"+selected.id+"/integration/pull-request",{
+        method:"POST",
+        body:JSON.stringify({
+          title:"Olladex Swarm #"+selected.id+": "+selected.title,
+          body:"Integrated and verified by Olladex Swarm #"+selected.id+".\n\nObjective:\n"+selected.objective,
+          base:"main"
+        })
+      });
+      const refreshed=await request<SwarmRun>("/swarms/"+selected.id);
+      setSelected(refreshed); setNotice("Pull request #"+result.pull_request_number+" created");
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
+  }
+
   async function runIntegrationChecks(){
     if(!selected||!checkCommand.trim())return;
     setBusy(true);
@@ -342,6 +371,11 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
           {integrationPlan&&<div className={styles.integrationSummary}><span><strong>{integrationPlan.branches?.length||0}</strong> branches</span><span><strong>{integrationPlan.overlaps?.length||0}</strong> overlaps</span>{integrationPlan.branch&&<span><strong>{integrationPlan.branch}</strong> integration branch</span>}</div>}
           {selected.integration_path&&<div className={styles.integrationChecks}><input value={checkCommand} onChange={event=>setCheckCommand(event.target.value)} placeholder="Combined verification command"/><button onClick={runIntegrationChecks} disabled={busy||!checkCommand.trim()}>Run combined checks</button></div>}
           {(selected.integration_check_output||integrationPlan?.check_output)&&<pre className={styles.checkOutput}>{selected.integration_check_output||integrationPlan?.check_output}</pre>}
+          {selected.integration_check_status==="passed"&&<div className={styles.integrationPublish}>
+            <button onClick={pushIntegration} disabled={busy}>{integrationPushed?"Pushed":"Push integration branch"}</button>
+            <button className="primary" onClick={createIntegrationPullRequest} disabled={busy||(!integrationPushed&&!selected.integration_pr_url)}>{selected.integration_pr_number?"PR #"+selected.integration_pr_number:"Create pull request"}</button>
+            {selected.integration_pr_url&&<small>{selected.integration_pr_url}</small>}
+          </div>}
         </section>}
 
         <section>
