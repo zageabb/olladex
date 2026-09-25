@@ -491,7 +491,7 @@ def run_swarm_integration_checks(swarm_id: int, body: SwarmIntegrationChecksRequ
 
 
 def _pull_request_number(url: str) -> int:
-    match = re.search(r"/pull/(\\d+)(?:\\b|/|$)", url or "")
+    match = re.search(r"/pull/(\d+)(?:\b|/|$)", url or "")
     return int(match.group(1)) if match else 0
 
 
