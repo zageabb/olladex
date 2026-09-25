@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 
 from ..database import connect, now
 from . import ollama, task_queue
@@ -276,6 +277,65 @@ def preflight(
         "max_concurrency": requested_concurrency,
         "checks": checks,
         "models": model_status,
+    }
+
+
+def self_test(project_id: int, profile_id: int) -> dict:
+    with connect() as conn:
+        if not conn.execute("SELECT id FROM projects WHERE id=?", (project_id,)).fetchone():
+            raise ValueError("Project not found")
+    profile = get_profile(profile_id)
+    model_status = validate_models(profile)
+    assignments = model_status.get("assignments", {})
+    roles_by_model: dict[str, list[str]] = {}
+    for role, model in assignments.items():
+        roles_by_model.setdefault(str(model), []).append(str(role))
+
+    results: list[dict] = []
+    for model, roles in sorted(roles_by_model.items()):
+        started = time.perf_counter()
+        try:
+            with ollama.client(30) as http:
+                response = http.post(
+                    "/api/chat",
+                    json={
+                        "model": model,
+                        "stream": False,
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": "Reply with exactly OLLADEX_SWARM_OK and nothing else.",
+                            }
+                        ],
+                        "options": {"temperature": 0, "num_predict": 16},
+                    },
+                )
+                response.raise_for_status()
+                content = str((response.json().get("message") or {}).get("content") or "").strip()
+            latency_ms = round((time.perf_counter() - started) * 1000)
+            results.append({
+                "model": model,
+                "roles": sorted(roles),
+                "ok": "OLLADEX_SWARM_OK" in content,
+                "latency_ms": latency_ms,
+                "response": content[:200],
+            })
+        except Exception as exc:
+            latency_ms = round((time.perf_counter() - started) * 1000)
+            results.append({
+                "model": model,
+                "roles": sorted(roles),
+                "ok": False,
+                "latency_ms": latency_ms,
+                "response": "",
+                "error": str(exc),
+            })
+
+    return {
+        "ready": bool(results) and all(item["ok"] for item in results),
+        "project_id": project_id,
+        "profile_id": profile_id,
+        "models": results,
     }
 
 
