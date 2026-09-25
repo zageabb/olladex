@@ -591,6 +591,20 @@ The Agent Board reads agent and Coordinator event streams incrementally using ev
 
 Each specialist works in an isolated task worktree. Important plans, tool activity, findings, decisions, risks and final hand-offs are visible on the board; Olladex does not expose or depend on raw hidden model chain-of-thought.
 
+Agents can report explicit plan-step progress with the Swarm progress tool. The board stores and displays that value instead of inventing a percentage from prose. Agent cards also show durable tool usage against the configured worker tool budget.
+
+Open an agent from the board to inspect:
+
+- its durable activity timeline;
+- current status, model, branch, run ID, progress and tool usage;
+- committed changed files and branch diff;
+- any uncommitted worktree diff;
+- commands associated with that task and their outputs;
+- task-specific Blackboard findings, risks and hand-offs;
+- a steering box while the run is still active.
+
+A specialist may use **request help** when one additional bounded specialist would materially improve the result. The specialist does not create another agent directly. Its request is written to the Blackboard and the Coordinator decides whether to decline it or use spare dynamic-swarm capacity to create one helper. Final challenger/reviewer verification remains downstream of any helper that is created.
+
 Swarm integration branches use a separate namespace:
 
 ```text
