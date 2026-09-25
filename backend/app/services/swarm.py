@@ -285,7 +285,7 @@ def _event_summary(kind: str, payload: dict) -> str:
     if kind == "plan":
         steps = payload.get("steps") or []
         return "Plan: " + " · ".join(str(step) for step in steps[:3])
-    if kind == "tool_start":
+    if kind in {"tool_start", "tool_started"}:
         return "Using " + str(payload.get("tool") or "tool")
     if kind == "tool_result":
         return str(payload.get("summary") or "Tool completed")
@@ -362,7 +362,7 @@ def set_status(swarm_id: int, status: str) -> None:
 
 def publish(swarm_id: int, category: str, content: str, *, task_id: int | None = None, key: str = "", confidence: float | None = None) -> dict:
     category = category.strip().lower()
-    if category not in {"fact", "finding", "decision", "question", "answer", "risk", "file", "interface", "test_result", "dependency", "assumption", "recommendation"}:
+    if category not in {"fact", "finding", "decision", "question", "answer", "risk", "file", "interface", "test_result", "dependency", "assumption", "recommendation", "handoff"}:
         raise ValueError("Unsupported blackboard category")
     stamp = now()
     with connect() as conn:
