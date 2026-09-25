@@ -187,12 +187,12 @@ export default function Home() {
     </header>
 
     <aside className="rail">
-      <button className="active"><span>✦</span><small>Agent</small></button>
+      <button className="active"><span>✦</span><small>Chat</small></button>
       <button onClick={() => setTab("files")}><span>▦</span><small>Files</small></button>
       <button onClick={() => setTab("terminal")}><span>⌘</span><small>Terminal</small></button>
       <button onClick={() => setTab("diagrams")}><span>◇</span><small>Diagrams</small></button>
       <button onClick={() => setTab("office")}><span>▤</span><small>Office</small></button>
-      <button onClick={() => setTab("tasks")}><span>◷</span><small>Queue</small></button>
+      <button onClick={() => setTab("tasks")}><span>◷</span><small>Tasks</small></button>
       <div className="rail-bottom"><button onClick={() => setTab("project")}><span>⚙</span><small>Project</small></button></div>
     </aside>
 
@@ -206,12 +206,12 @@ export default function Home() {
       </aside>
 
       <section className="conversation-panel">
-        <div className="panel-head"><div><p className="eyebrow">Local development agent</p><h1>{session?.title || "Start a chat"}</h1></div><div className="chat-head-actions"><button onClick={clearChat} disabled={!project}>Clear chat</button><button className="approval-mode" onClick={() => setTab("project")}><span>Mode</span><strong>{project?.approval_mode || "assisted"}</strong></button></div></div>
+        <div className="panel-head"><div><p className="eyebrow">Conversation</p><h1>{session?.title || "Start a chat"}</h1></div><div className="chat-head-actions"><button onClick={clearChat} disabled={!project}>Clear chat</button><button className="approval-mode" onClick={() => setTab("project")}><span>Mode</span><strong>{project?.approval_mode || "assisted"}</strong></button></div></div>
         {session ? <Conversation key={session.id} sessionId={session.id} onChanged={() => { refreshChanges(project?.id); refreshGit(project?.id); refreshTree(); }} /> : <p>Open a repository and start a conversation.</p>}
       </section>
 
       <section className="inspector-panel">
-        <div className="inspector-tabs">{(["files", "changes", "terminal", "diagrams", "office", "tasks", "project"] as Tab[]).map((item) => <button key={item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item}{item === "changes" && changes.filter((change) => change.status === "proposed").length ? <span>{changes.filter((change) => change.status === "proposed").length}</span> : null}</button>)}</div>
+        <div className="inspector-tabs"><span className="context-label">Context</span>{(["files", "changes", "terminal", "diagrams", "office", "tasks", "project"] as Tab[]).map((item) => <button key={item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item}{item === "changes" && changes.filter((change) => change.status === "proposed").length ? <span>{changes.filter((change) => change.status === "proposed").length}</span> : null}</button>)}</div>
         {project ? <>
           {tab === "files" && <div className="file-workspace"><aside className="file-sidebar"><div className="file-search"><span>⌕</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter files" /></div><FileTree items={filteredTree} selected={selected?.path} onSelect={selectFile} /></aside><div className="editor-pane">{selected?.type === "file" ? <><div className="editor-head"><div><span className="file-icon">□</span><strong>{selected.path}</strong>{fileDraft !== fileContent && <i>Modified</i>}</div><button className="primary" onClick={() => saveFile().catch(error => setNotice(error.message))} disabled={fileDraft === fileContent}>Save</button></div><textarea className="code-editor" value={fileDraft} onChange={(e) => setFileDraft(e.target.value)} spellCheck={false} /></> : <EmptyWorkspace onOpen={() => setShowOpen(true)} />}</div></div>}
           {tab === "changes" && <div className="changes-panel">
