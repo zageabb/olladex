@@ -657,3 +657,99 @@ def test_agent_board_exposes_persisted_progress_and_tool_usage(tmp_path, monkeyp
     assert agent["current_activity"] in {"Running focused tests", "Using run_command"}
     assert agent["tool_usage"] == 2
     assert agent["tool_budget"] > 0
+
+
+def test_coordinator_can_spawn_one_requested_helper_and_retarget_verification(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id, max_agents=5, max_concurrency=3)
+    with connect() as conn:
+        profile_id = int(conn.execute("SELECT id FROM swarm_profiles WHERE name='Development'").fetchone()["id"])
+        conn.execute("UPDATE swarm_runs SET profile_id=? WHERE id=?", (profile_id, swarm_id))
+
+    requester = task_queue.enqueue(
+        project_id, session_id, "Backend work", "implement",
+        swarm_id=swarm_id, source_kind="swarm_specialist", agent_role="backend", task_kind="backend",
+    )
+    reviewer = task_queue.enqueue(
+        project_id, session_id, "Review", "review",
+        swarm_id=swarm_id, source_kind="swarm_reviewer", agent_role="reviewer", task_kind="reviewer",
+        depends_on=[requester["id"]], priority=300,
+    )
+    with connect() as conn:
+        conn.execute("UPDATE background_tasks SET status='running',started_at=? WHERE id=?", (now(), requester["id"]))
+
+    request = swarm.publish(
+        swarm_id,
+        "question",
+        "Need an independent tester to reproduce the edge case in parallel.",
+        task_id=requester["id"],
+        key="parallel-test-help",
+    )
+
+    monkeypatch.setattr(
+        swarm_coordinator,
+        "_help_decision",
+        lambda run, profile, help_request, requesting_agent, completed: {
+            "action": "spawn",
+            "role": "tester",
+            "title": "Parallel regression tester",
+            "prompt": "Reproduce the reported edge case and add a focused regression test if appropriate.",
+            "reason": "Independent verification is useful.",
+        },
+    )
+
+    swarm_coordinator._reconcile(swarm_id)
+
+    agents = swarm.list_agents(swarm_id)
+    helpers = [item for item in agents if item["source_kind"] == "swarm_help"]
+    assert len(helpers) == 1
+    helper = helpers[0]
+    assert helper["agent_role"] == "tester"
+    assert f":help:{request['id']}:" in helper["source_ref"]
+
+    reviewer_row = next(item for item in agents if item["id"] == reviewer["id"])
+    deps = reviewer_row["depends_on"]
+    if isinstance(deps, str):
+        import json
+        deps = json.loads(deps)
+    assert requester["id"] in deps
+    assert helper["id"] in deps
+
+    decisions = swarm.blackboard(swarm_id, category="decision")
+    assert any(item["key"] == f"help-response-{request['id']}" for item in decisions)
+
+    swarm_coordinator._reconcile(swarm_id)
+    assert len([item for item in swarm.list_agents(swarm_id) if item["source_kind"] == "swarm_help"]) == 1
+
+
+def test_help_request_is_declined_when_dynamic_swarm_is_disabled(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id, max_agents=4, max_concurrency=2)
+    with connect() as conn:
+        profile_id = int(conn.execute("SELECT id FROM swarm_profiles WHERE name='Development'").fetchone()["id"])
+        conn.execute("UPDATE swarm_profiles SET dynamic_size=0 WHERE id=?", (profile_id,))
+        conn.execute("UPDATE swarm_runs SET profile_id=? WHERE id=?", (profile_id, swarm_id))
+
+    requester = task_queue.enqueue(
+        project_id, session_id, "Backend work", "implement",
+        swarm_id=swarm_id, source_kind="swarm_specialist", agent_role="backend", task_kind="backend",
+    )
+    with connect() as conn:
+        conn.execute("UPDATE background_tasks SET status='running',started_at=? WHERE id=?", (now(), requester["id"]))
+
+    request = swarm.publish(
+        swarm_id,
+        "question",
+        "Need another specialist.",
+        task_id=requester["id"],
+        key="help",
+    )
+
+    swarm_coordinator._reconcile(swarm_id)
+
+    assert not [item for item in swarm.list_agents(swarm_id) if item["source_kind"] == "swarm_help"]
+    decisions = swarm.blackboard(swarm_id, category="decision")
+    assert any(
+        item["key"] == f"help-response-{request['id']}" and "dynamic swarm sizing is disabled" in item["content"]
+        for item in decisions
+    )
