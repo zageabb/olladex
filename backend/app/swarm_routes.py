@@ -246,11 +246,7 @@ def create_swarm(project_id: int, body: SwarmCreateRequest):
                 depth=1,
             )
 
-        with connect() as conn:
-            conn.execute(
-                "UPDATE swarm_runs SET status='running' WHERE id=?",
-                (swarm["id"],),
-            )
+        swarm_service.set_status(int(swarm["id"]), "running")
         from .services import swarm_coordinator
         swarm_coordinator.start(int(swarm["id"]))
         return {
@@ -265,9 +261,12 @@ def create_swarm(project_id: int, body: SwarmCreateRequest):
         with connect() as conn:
             run = conn.execute("SELECT id FROM swarm_runs WHERE session_id=? ORDER BY id DESC LIMIT 1", (session_id,)).fetchone()
             if run:
-                conn.execute("UPDATE swarm_runs SET status='failed',completed_at=? WHERE id=?", (now(), run["id"]))
+                failed_swarm_id = int(run["id"])
             else:
+                failed_swarm_id = None
                 conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+        if failed_swarm_id is not None:
+            swarm_service.set_status(failed_swarm_id, "failed")
         if isinstance(exc, HTTPException):
             raise
         raise HTTPException(409, str(exc)) from exc
