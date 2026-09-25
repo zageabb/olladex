@@ -143,13 +143,53 @@ def list_runs(project_id: int) -> list[dict]:
 def list_agents(swarm_id: int) -> list[dict]:
     with connect() as conn:
         rows = [dict(row) for row in conn.execute(
-            "SELECT bt.*, ar.id AS run_id, ar.status AS run_status "
+            "SELECT bt.*, "
+            "(SELECT ar.id FROM agent_runs ar WHERE ar.task_id=bt.id ORDER BY ar.id DESC LIMIT 1) AS run_id, "
+            "(SELECT ar.status FROM agent_runs ar WHERE ar.task_id=bt.id ORDER BY ar.id DESC LIMIT 1) AS run_status "
             "FROM background_tasks bt "
-            "LEFT JOIN agent_runs ar ON ar.task_id=bt.id "
             "WHERE bt.swarm_id=? ORDER BY bt.priority ASC,bt.id ASC",
             (swarm_id,),
         )]
+        for item in rows:
+            run_id = item.get("run_id")
+            if not run_id:
+                item["latest_event"] = None
+                continue
+            event = conn.execute(
+                "SELECT kind,payload,created_at FROM agent_events WHERE run_id=? "
+                "AND kind NOT IN ('text_delta','assistant_start') ORDER BY id DESC LIMIT 1",
+                (run_id,),
+            ).fetchone()
+            if not event:
+                item["latest_event"] = None
+                continue
+            payload = _json_object(event["payload"])
+            item["latest_event"] = {
+                "kind": event["kind"],
+                "payload": payload,
+                "created_at": event["created_at"],
+            }
+            item["current_activity"] = _event_summary(event["kind"], payload)
     return rows
+
+
+def _event_summary(kind: str, payload: dict) -> str:
+    if kind in {"finding", "decision", "risk"}:
+        return str(payload.get("content") or "")
+    if kind == "progress":
+        return str(payload.get("message") or "Working")
+    if kind == "plan":
+        steps = payload.get("steps") or []
+        return "Plan: " + " · ".join(str(step) for step in steps[:3])
+    if kind == "tool_start":
+        return "Using " + str(payload.get("tool") or "tool")
+    if kind == "tool_result":
+        return str(payload.get("summary") or "Tool completed")
+    if kind == "assistant_end":
+        return str(payload.get("content") or "")[:400]
+    if kind == "status":
+        return "Status: " + str(payload.get("status") or "")
+    return kind.replace("_", " ").title()
 
 
 def pause(swarm_id: int) -> dict:
