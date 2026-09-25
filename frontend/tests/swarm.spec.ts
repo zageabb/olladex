@@ -126,10 +126,11 @@ test('swarm board shows coordinator timeline and advances incremental polling cu
   await expect.poll(() => coordinatorAfter.includes('21'), {timeout:5000}).toBe(true);
   await expect.poll(() => agentAfter.includes('9'), {timeout:5000}).toBe(true);
 
-  await page.getByRole('combobox').filter({has:page.locator('option[value="finding"]')}).selectOption('finding');
-  await expect(page.getByText('Auth dependency is centralized.').first()).toBeVisible();
-  await expect(page.getByText('Coordinator opened final verification.').last()).not.toBeVisible();
-  await page.getByRole('button', {name:'Clear filters'}).click();
+  const blackboardSection = page.getByRole('heading', {name:'Blackboard'}).locator('..').locator('..');
+  await blackboardSection.getByRole('combobox').filter({has:page.locator('option[value="finding"]')}).selectOption('finding');
+  await expect(blackboardSection.getByText('Auth dependency is centralized.').first()).toBeVisible();
+  await expect(blackboardSection.getByText('Coordinator opened final verification.')).toHaveCount(0);
+  await blackboardSection.getByRole('button', {name:'Clear filters'}).click();
 
   const guidance = page.getByPlaceholder(/Guide Coordinator/);
   await guidance.fill('Do not change the public API.');
