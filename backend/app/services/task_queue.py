@@ -276,6 +276,8 @@ def _claim_next() -> dict | None:
                     continue
             ready, blocked_reason = _dependency_state(conn, task)
             if blocked_reason:
+                if swarm_id and task.get("task_kind") in {"reviewer", "challenger"}:
+                    continue
                 conn.execute("UPDATE background_tasks SET status='failed',error=?,completed_at=? WHERE id=? AND status='queued'", (blocked_reason, now(), task["id"]))
                 continue
             if not ready:
