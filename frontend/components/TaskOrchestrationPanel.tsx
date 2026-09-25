@@ -19,6 +19,7 @@ type SwarmAgentDetail = { task:SwarmAgent; commands:{id:number;command:string;ou
 type SwarmBoard = {
   swarm:{ id:number; title:string; status:string; agents?:SwarmAgent[]; coordinator_activity?:{category:string;content:string}|null; coordinator_budget?:{used:number;budget:number;remaining:number}; integration_path?:string; integration_branch?:string; integration_check_status?:string; integration_check_output?:string; integration_pushed?:number; integration_pr_number?:number; integration_pr_url?:string; integration_pr_state?:string };
   summary:{ total_agents:number; active_agents:number; completed_agents:number; failed_agents:number; progress:number; max_agents:number; max_concurrency:number; integration_ready:boolean };
+  events?:{id:number;task_id:number;kind:string;payload:Record<string,unknown>;created_at:string}[];
   coordinator_events?:{id:number;kind:string;payload:Record<string,unknown>;created_at:string}[];
   blackboard?:{id:number;task_id?:number|null;category:string;content:string;key?:string;created_at:string}[];
   cursors?:{event:number;coordinator_event:number;blackboard:number};
