@@ -93,6 +93,9 @@ test('interaction layer can enable, preflight and start a swarm', async ({ page 
 test('interaction agent board renders and controls a live swarm', async ({ page }) => {
   let pauseCalled = false;
   let coordinatorGuidance = '';
+  let integrationBuilt = false;
+  let integrationPushed = false;
+  let finalPrCreated = false;
   const run = {
     id:7,title:'Auth hardening',status:'reviewing',max_agents:5,max_concurrency:3,total_agents_created:2
   };
@@ -115,13 +118,13 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
           coordinator_activity:{category:'decision',content:'Coordinator opened final verification.'},
           coordinator_budget:{used:3,budget:20,remaining:17},
           agents:[
-            {id:11,title:'Inspect auth',status:'completed',agent_role:'backend',progress:100,assigned_model:'test',tool_usage:6,tool_budget:30,current_activity:'Done',latest_insight:{category:'finding',content:'Auth dependency is centralized.'}},
-            {id:12,title:'Final review',status:'queued',agent_role:'reviewer',progress:0,assigned_model:'test',tool_usage:0,tool_budget:30,current_activity:''}
+            {id:11,title:'Inspect auth',status:'completed',agent_role:'backend',task_kind:'backend',worktree_branch:'olladex/task-11',progress:100,assigned_model:'test',tool_usage:6,tool_budget:30,current_activity:'Done',latest_insight:{category:'finding',content:'Auth dependency is centralized.'}},
+            {id:12,title:'Final review',status:'completed',agent_role:'reviewer',task_kind:'reviewer',progress:100,assigned_model:'test',tool_usage:2,tool_budget:30,current_activity:'Done'}
           ]
         },
         summary:{
           total_agents:2,active_agents:0,completed_agents:1,failed_agents:0,
-          progress:50,max_agents:5,max_concurrency:3,integration_ready:false
+          progress:100,max_agents:5,max_concurrency:3,integration_ready:true
         },
         events:[],
         coordinator_events:[
@@ -146,6 +149,29 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
       await json({swarm_id:7,status:'received',coordinator_instructions:coordinatorGuidance});
       return true;
     }
+    if (p === '/api/swarms/7/integration/preflight') {
+      await json({task_ids:[11],branches:['olladex/task-11'],overlaps:[],files_by_branch:{'olladex/task-11':['backend/app/auth.py']}});
+      return true;
+    }
+    if (p === '/api/swarms/7/integration' && route.request().method() === 'POST') {
+      integrationBuilt = true;
+      await json({task_ids:[11],branches:['olladex/task-11'],overlaps:[],path:'/tmp/integration',branch:'olladex/swarm-7-integration'});
+      return true;
+    }
+    if (p === '/api/swarms/7/integration/checks') {
+      await json({passed:true,output:'100 passed',command:'pytest'});
+      return true;
+    }
+    if (p === '/api/swarms/7/integration/push') {
+      integrationPushed = true;
+      await json({branch:'olladex/swarm-7-integration'});
+      return true;
+    }
+    if (p === '/api/swarms/7/integration/pull-request') {
+      finalPrCreated = true;
+      await json({pull_request_number:42,url:'https://github.com/zageabb/olladex/pull/42'});
+      return true;
+    }
     if (p === '/api/swarm-agents/11') {
       await json({
         task:{id:11,title:'Inspect auth',status:'completed',agent_role:'backend',progress:100,tool_usage:6,tool_budget:30,current_activity:'Done'},
@@ -163,11 +189,11 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
   await page.locator('.rail').getByRole('button', {name:'Tasks'}).click();
 
   await expect(page.getByRole('heading', {name:'Auth hardening'})).toBeVisible();
-  await expect(page.getByText(/Swarm #7 · reviewing · 50% complete/)).toBeVisible();
+  await expect(page.getByText(/Swarm #7 · reviewing · 100% complete/)).toBeVisible();
   await expect(page.getByText('Inspect auth')).toBeVisible();
   await expect(page.getByText(/backend · completed · 100%/)).toBeVisible();
   await expect(page.getByText('Final review')).toBeVisible();
-  await expect(page.getByText(/reviewer · queued · 0%/)).toBeVisible();
+  await expect(page.getByText(/reviewer · completed · 100%/)).toBeVisible();
   await expect(page.getByText(/budget 3\/20/)).toBeVisible();
   await expect(page.getByText('Coordinator opened final verification.')).toBeVisible();
 
@@ -187,4 +213,15 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
   await expect(page.getByText('Coordinator opened final verification.').last()).toBeVisible();
   await page.getByText(/Blackboard · 2/).click();
   await expect(page.getByText('Review gate opened.')).toBeVisible();
+
+  await page.getByRole('button', {name:'Check overlaps'}).click();
+  await expect(page.getByText('No overlapping files detected.')).toBeVisible();
+  await page.getByRole('button', {name:'Build integration'}).click();
+  await expect.poll(() => integrationBuilt).toBe(true);
+  await page.getByRole('button', {name:'Run checks'}).click();
+  await expect(page.getByText('passed', {exact:true})).toBeVisible();
+  await page.getByRole('button', {name:'Push branch'}).click();
+  await expect.poll(() => integrationPushed).toBe(true);
+  await page.getByRole('button', {name:'Create final PR'}).click();
+  await expect.poll(() => finalPrCreated).toBe(true);
 });
