@@ -184,17 +184,31 @@ def coordinator_model(profile: dict) -> tuple[int | None, str]:
     return resolve_model_profile(int(selected) if selected else None)
 
 
-def validate_models(profile: dict) -> dict:
+def project_default_model(project_id: int) -> str:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(NULLIF(mp.chat_model,''),p.model) AS chat_model "
+            "FROM projects p LEFT JOIN model_profiles mp ON mp.id=p.model_profile_id WHERE p.id=?",
+            (project_id,),
+        ).fetchone()
+    if not row:
+        raise ValueError("Project not found")
+    return str(row["chat_model"] or "")
+
+
+def validate_models(profile: dict, fallback_model: str = "") -> dict:
     status = ollama.status()
     if not status.get("connected"):
         raise ValueError(status.get("error") or "Ollama server is unavailable")
     installed = set(status.get("models") or [])
     assignments: dict[str, str] = {}
     _, coordinator = coordinator_model(profile)
+    coordinator = coordinator or fallback_model
     if coordinator:
         assignments["coordinator"] = coordinator
     for role in ["architect", "researcher", "backend", "frontend", "coder", "tester", "reviewer", "challenger", "integrator", "documentation", "worker"]:
         _, model = resolve_role(profile, role)
+        model = model or fallback_model
         if model:
             assignments[role] = model
     missing = sorted({model for model in assignments.values() if model not in installed})
@@ -211,6 +225,7 @@ def preflight(
     max_concurrency: int | None = None,
 ) -> dict:
     profile = get_profile(profile_id)
+    fallback_model = project_default_model(project_id)
     requested_agents = max(2, min(int(max_agents or profile["max_agents"]), 20))
     requested_concurrency = max(1, min(int(max_concurrency or profile["max_concurrency"]), requested_agents, 8))
 
@@ -253,7 +268,7 @@ def preflight(
     checks.append({"name": "git_repository", "ok": git_ok, "detail": git_detail})
 
     try:
-        model_status = validate_models(profile)
+        model_status = validate_models(profile, fallback_model)
         checks.append({
             "name": "ollama_models",
             "ok": True,
@@ -285,7 +300,8 @@ def self_test(project_id: int, profile_id: int) -> dict:
         if not conn.execute("SELECT id FROM projects WHERE id=?", (project_id,)).fetchone():
             raise ValueError("Project not found")
     profile = get_profile(profile_id)
-    model_status = validate_models(profile)
+    fallback_model = project_default_model(project_id)
+    model_status = validate_models(profile, fallback_model)
     assignments = model_status.get("assignments", {})
     roles_by_model: dict[str, list[str]] = {}
     for role, model in assignments.items():
@@ -352,7 +368,7 @@ def create_run(
     if not skill_enabled(project_id):
         raise ValueError("Swarm skill is disabled for this project")
     profile = get_profile(profile_id)
-    validate_models(profile)
+    validate_models(profile, project_default_model(project_id))
     max_agents_value = max(2, min(int(max_agents or profile["max_agents"]), 20))
     concurrency_value = max(1, min(int(max_concurrency or profile["max_concurrency"]), max_agents_value, 8))
     stamp = now()
