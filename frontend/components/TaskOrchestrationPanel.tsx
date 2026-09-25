@@ -19,6 +19,9 @@ type SwarmBoard = {
   swarm:{ id:number; title:string; status:string; agents?:SwarmAgent[] };
   summary:{ total_agents:number; active_agents:number; completed_agents:number; failed_agents:number; progress:number; max_agents:number; max_concurrency:number; integration_ready:boolean };
 };
+type SwarmSkill = { project_id:number; skill:"swarm"; enabled:boolean };
+type SwarmProfile = { id:number; name:string; max_agents:number; max_concurrency:number; require_reviewer:number; require_challenger:number };
+type SwarmPreflight = { ready:boolean; checks:{name:string;ok:boolean;detail:string}[]; max_agents:number; max_concurrency:number };
 
 export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:number; onCreated:()=>void }) {
   const [graph,setGraph]=useState<Graph>({project_id:projectId,nodes:[]});
@@ -36,8 +39,16 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
   const [notice,setNotice]=useState("");
   const [busy,setBusy]=useState(false);
   const [swarmBoard,setSwarmBoard]=useState<SwarmBoard|null>(null);
+  const [swarmSkill,setSwarmSkill]=useState<SwarmSkill|null>(null);
+  const [swarmProfiles,setSwarmProfiles]=useState<SwarmProfile[]>([]);
+  const [swarmProfileId,setSwarmProfileId]=useState("");
+  const [swarmObjective,setSwarmObjective]=useState("");
+  const [swarmTitle,setSwarmTitle]=useState("");
+  const [swarmMaxAgents,setSwarmMaxAgents]=useState(5);
+  const [swarmConcurrency,setSwarmConcurrency]=useState(3);
+  const [swarmPreflight,setSwarmPreflight]=useState<SwarmPreflight|null>(null);
 
-  useEffect(()=>{ load(); const timer=window.setInterval(load,3000); return()=>window.clearInterval(timer); },[projectId]);
+  useEffect(()=>{ load(); loadSwarmSettings(); const timer=window.setInterval(load,3000); return()=>window.clearInterval(timer); },[projectId]);
   async function load(){
     try{
       const [nextGraph,swarmRuns]=await Promise.all([
@@ -52,6 +63,71 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
         setSwarmBoard(null);
       }
     }catch(error){ setNotice(error instanceof Error?error.message:String(error)); }
+  }
+
+  async function loadSwarmSettings(){
+    try{
+      const [skill,profiles]=await Promise.all([
+        request<SwarmSkill>(`/projects/${projectId}/skills/swarm`),
+        request<SwarmProfile[]>("/swarm-profiles")
+      ]);
+      setSwarmSkill(skill);
+      setSwarmProfiles(profiles);
+      if(profiles.length&&!swarmProfileId){
+        const preferred=profiles.find(item=>item.name==="Development")||profiles[0];
+        setSwarmProfileId(String(preferred.id));
+        setSwarmMaxAgents(preferred.max_agents);
+        setSwarmConcurrency(preferred.max_concurrency);
+      }
+    }catch(error){ setNotice(error instanceof Error?error.message:String(error)); }
+  }
+
+  async function toggleSwarmSkill(){
+    if(!swarmSkill)return;
+    setBusy(true);
+    try{
+      const updated=await request<SwarmSkill>(`/projects/${projectId}/skills/swarm`,{
+        method:"PUT",body:JSON.stringify({enabled:!swarmSkill.enabled})
+      });
+      setSwarmSkill(updated);
+      setNotice(updated.enabled?"Swarm enabled for this project":"Swarm disabled for this project");
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
+  }
+
+  async function startSwarm(event:FormEvent){
+    event.preventDefault();
+    if(!swarmSkill?.enabled||!swarmProfileId||!swarmObjective.trim())return;
+    setBusy(true); setNotice(""); setSwarmPreflight(null);
+    try{
+      const query=new URLSearchParams({
+        profile_id:swarmProfileId,
+        max_agents:String(swarmMaxAgents),
+        max_concurrency:String(swarmConcurrency)
+      });
+      const readiness=await request<SwarmPreflight>(`/projects/${projectId}/swarms/preflight?${query.toString()}`);
+      setSwarmPreflight(readiness);
+      if(!readiness.ready){
+        const failed=readiness.checks.filter(item=>!item.ok).map(item=>item.detail).join(" · ");
+        setNotice("Swarm is not ready: "+failed);
+        return;
+      }
+      const created=await request<{swarm:{id:number}}>(`/projects/${projectId}/swarms`,{
+        method:"POST",
+        body:JSON.stringify({
+          objective:swarmObjective.trim(),
+          title:swarmTitle.trim(),
+          profile_id:Number(swarmProfileId),
+          max_agents:swarmMaxAgents,
+          max_concurrency:swarmConcurrency
+        })
+      });
+      setSwarmObjective(""); setSwarmTitle("");
+      setNotice("Swarm #"+created.swarm.id+" started");
+      await load();
+      onCreated();
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
   }
 
   const roots=useMemo(()=>graph.nodes.filter(node=>!node.parent_task_id),[graph.nodes]);
@@ -85,6 +161,21 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
       <div className="agent-board-metrics"><span><strong>{boardTotal}</strong> agents</span><span><strong>{boardActive}</strong> active</span><span><strong>{boardCompleted}</strong> complete</span></div>
       <div className="agent-board-preview">{swarmBoard&&boardAgents.length?boardAgents.slice(0,8).map(agent=><article key={agent.id}><span className={`agent-dot ${agent.status}`}>●</span><div><strong>{agent.title}</strong><small>{agent.agent_role} · {agent.status.replaceAll("_"," ")}{typeof agent.progress==="number"?` · ${agent.progress}%`:""}</small></div></article>):graph.nodes.length?graph.nodes.slice(0,8).map(node=><article key={node.id}><span className={`agent-dot ${node.status}`}>●</span><div><strong>{node.title}</strong><small>{node.agent_role} · {node.status.replaceAll("_"," ")}</small></div></article>):<p>No specialist agents yet. Swarm-backed tasks will appear here through the same board.</p>}</div>
     </section>
+    <details className={styles.advanced}>
+      <summary>Swarm controls · {swarmSkill?.enabled?"enabled":"disabled"}</summary>
+      <div className={styles.advancedForm}>
+        <div className={styles.actions}><button type="button" onClick={toggleSwarmSkill} disabled={busy||!swarmSkill}>{swarmSkill?.enabled?"Disable Swarm":"Enable Swarm"}</button></div>
+        {swarmSkill?.enabled&&<form onSubmit={startSwarm} className={styles.advancedForm}>
+          <label>Preset<select value={swarmProfileId} onChange={event=>{const id=event.target.value;setSwarmProfileId(id);const profile=swarmProfiles.find(item=>String(item.id)===id);if(profile){setSwarmMaxAgents(profile.max_agents);setSwarmConcurrency(profile.max_concurrency);}}}>{swarmProfiles.map(profile=><option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>
+          <label>Maximum agents<input type="number" min="2" max="20" value={swarmMaxAgents} onChange={event=>setSwarmMaxAgents(Number(event.target.value))}/></label>
+          <label>Concurrency<input type="number" min="1" max="8" value={swarmConcurrency} onChange={event=>setSwarmConcurrency(Number(event.target.value))}/></label>
+          <label>Title<input value={swarmTitle} onChange={event=>setSwarmTitle(event.target.value)} placeholder="Optional swarm title"/></label>
+          <label className={styles.advancedPrompt}>Objective<textarea value={swarmObjective} onChange={event=>setSwarmObjective(event.target.value)} placeholder="Describe the larger outcome for the Swarm…"/></label>
+          <button className="primary" disabled={busy||!swarmProfileId||!swarmObjective.trim()}>{busy?"Checking…":"Preflight & start Swarm"}</button>
+          {swarmPreflight&&<small>{swarmPreflight.ready?"Readiness checks passed":swarmPreflight.checks.filter(item=>!item.ok).map(item=>item.detail).join(" · ")}</small>}
+        </form>}
+      </div>
+    </details>
     <div className={styles.hero}><div><p className="eyebrow">Advanced orchestration</p><h3>Coordinate larger work</h3><p>Start with one objective. Olladex breaks it into specialist tasks, waits for dependencies, then gives you a review and integration path.</p></div><span className={styles.count}>{graph.nodes.length} tasks</span></div>
 
     <section className={styles.stage}>
