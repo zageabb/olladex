@@ -3,6 +3,9 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import subprocess
 
+from fastapi import HTTPException
+
+from backend.app import swarm_routes
 from backend.app.config import settings
 from backend.app.database import connect, init_db, now
 from backend.app.services import conversation_runtime, swarm, swarm_coordinator, task_queue
@@ -953,3 +956,54 @@ def test_swarm_preflight_reports_missing_local_models_without_creating_run(tmp_p
     assert "phi4:14b" in model_check["detail"]
     with connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM swarm_runs").fetchone()[0] == 0
+
+
+def test_swarm_integration_push_state_is_durable_and_required_for_pr(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id)
+    with connect() as conn:
+        conn.execute(
+            "UPDATE swarm_runs SET status='integrating',integration_path=?,integration_branch=?,integration_check_status='passed' WHERE id=?",
+            (str(tmp_path / "integration"), "olladex/swarm-test-integration", swarm_id),
+        )
+
+    body = swarm_routes.SwarmIntegrationPullRequestRequest(
+        title="Swarm result",
+        body="Verified",
+        base="main",
+    )
+    try:
+        swarm_routes.create_swarm_integration_pull_request(swarm_id, body)
+    except HTTPException as exc:
+        assert exc.status_code == 409
+        assert "Push the integration branch" in exc.detail
+    else:
+        raise AssertionError("PR creation should require a pushed integration branch")
+
+    monkeypatch.setattr(
+        swarm_routes.integration,
+        "push",
+        lambda project, path, remote: {"branch": "olladex/swarm-test-integration", "remote": remote},
+    )
+    pushed = swarm_routes.push_swarm_integration(
+        swarm_id,
+        swarm_routes.SwarmIntegrationPushRequest(remote="origin"),
+    )
+    assert pushed["branch"] == "olladex/swarm-test-integration"
+    assert swarm.get_run(swarm_id)["integration_pushed"] == 1
+    assert swarm.board_snapshot(swarm_id)["swarm"]["integration_pushed"] == 1
+
+    monkeypatch.setattr(swarm_routes.integration, "integration_project", lambda project, path: project)
+    monkeypatch.setattr(
+        swarm_routes.github_service,
+        "prepare_pull_request",
+        lambda project, title, body, base: {"command": "gh pr create"},
+    )
+    monkeypatch.setattr(
+        swarm_routes.github_service,
+        "execute_pull_request",
+        lambda project, prepared: {"url": "https://github.com/zageabb/olladex/pull/99"},
+    )
+    created = swarm_routes.create_swarm_integration_pull_request(swarm_id, body)
+    assert created["pull_request_number"] == 99
+    assert swarm.get_run(swarm_id)["integration_pr_number"] == 99
