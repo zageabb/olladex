@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { request } from "../lib/api";
 import styles from "./SwarmPanel.module.css";
 
@@ -38,6 +38,8 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
   const [integrationPlan,setIntegrationPlan]=useState<IntegrationPlan|null>(null);
   const [checkCommand,setCheckCommand]=useState("python -m pytest backend/tests -q");
   const [integrationPushed,setIntegrationPushed]=useState(false);
+  const lastEventId=useRef(0);
+  const lastCoordinatorEventId=useRef(0);
 
   useEffect(()=>{ loadBootstrap(); },[projectId]);
 
@@ -45,19 +47,31 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
     setIntegrationIds([]);
     setIntegrationPlan(null);
     setIntegrationPushed(false);
-    if(!selectedId){ setSelected(null); setBlackboard([]); setEvents([]); setCoordinatorEvents([]); return; }
+    lastEventId.current=0;
+    lastCoordinatorEventId.current=0;
+    setEvents([]);
+    setCoordinatorEvents([]);
+    if(!selectedId){ setSelected(null); setBlackboard([]); return; }
     let disposed=false;
     async function refresh(){
       try{
         const results=await Promise.all([
           request<SwarmRun>("/swarms/"+selectedId),
           request<BlackboardItem[]>("/swarms/"+selectedId+"/blackboard"),
-          request<SwarmEvent[]>("/swarms/"+selectedId+"/events?after=0&limit=200"),
-          request<CoordinatorEvent[]>("/swarms/"+selectedId+"/coordinator/events?after=0&limit=200")
+          request<SwarmEvent[]>("/swarms/"+selectedId+"/events?after="+lastEventId.current+"&limit=200"),
+          request<CoordinatorEvent[]>("/swarms/"+selectedId+"/coordinator/events?after="+lastCoordinatorEventId.current+"&limit=200")
         ]);
         if(disposed)return;
         const run=results[0]; const board=results[1]; const activity=results[2]; const coordinatorActivity=results[3];
-        setSelected(run); setBlackboard(board); setEvents(activity); setCoordinatorEvents(coordinatorActivity);
+        setSelected(run); setBlackboard(board);
+        if(activity.length){
+          lastEventId.current=Math.max(lastEventId.current,...activity.map(item=>item.id));
+          setEvents(current=>[...current,...activity].slice(-200));
+        }
+        if(coordinatorActivity.length){
+          lastCoordinatorEventId.current=Math.max(lastCoordinatorEventId.current,...coordinatorActivity.map(item=>item.id));
+          setCoordinatorEvents(current=>[...current,...coordinatorActivity].slice(-200));
+        }
         setRuns(items=>items.map(item=>item.id===run.id?{...item,...run}:item));
       }catch(error){ if(!disposed)setNotice(error instanceof Error?error.message:String(error)); }
     }
