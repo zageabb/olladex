@@ -179,6 +179,14 @@ def current_assigned_model() -> str:
     return str(task.get("assigned_model") or "") if task else ""
 
 
+def current_swarm_id() -> int | None:
+    task_id = current_task_id()
+    if not task_id:
+        return None
+    task = get(task_id)
+    return int(task["swarm_id"]) if task and task.get("swarm_id") else None
+
+
 def _dependency_ids(task: dict) -> list[int]:
     value = task.get("depends_on") or []
     if isinstance(value, list):
