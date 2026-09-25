@@ -170,6 +170,9 @@ def create_swarm(project_id: int, body: SwarmCreateRequest):
         coordinator_profile_id, coordinator_model = swarm_service.coordinator_model(profile)
         planning_project = dict(project)
         planning_project["profile_chat_model"] = coordinator_model or project.get("profile_chat_model")
+        budget = swarm_service.consume_coordinator_budget(int(swarm["id"]), "initial_decomposition")
+        if not budget["allowed"]:
+            raise ValueError("Coordinator budget is exhausted before initial decomposition")
         plan = orchestration_service.decompose(planning_project, body.objective, specialist_budget, swarm_mode=True)
 
         child_ids: list[int] = []
