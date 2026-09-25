@@ -84,6 +84,11 @@ def _reconcile(swarm_id: int) -> None:
         return
 
     if specialists and len(completed) == len(specialists):
+        if run["status"] == "running":
+            if _consider_pre_review(run, profile=swarm.get_profile(int(run["profile_id"])), completed=completed):
+                return
+            swarm.set_status(swarm_id, "reviewing")
+            run["status"] = "reviewing"
         if challenger and challenger.get("status") == "queued":
             return
         if challenger and challenger.get("status") in {"failed", "budget_exhausted", "cancelled"}:
@@ -95,6 +100,115 @@ def _reconcile(swarm_id: int) -> None:
             return
         if not reviewer and not challenger:
             swarm.set_status(swarm_id, "completed")
+
+
+def _consider_pre_review(run: dict, profile: dict, completed: list[dict]) -> bool:
+    swarm_id = int(run["id"])
+    risks = swarm.blackboard(swarm_id, category="risk")
+    if not risks:
+        _publish_once(swarm_id, "decision", "pre-review-gate", "Coordinator found no unresolved Blackboard risks requiring another specialist and opened final verification.")
+        return False
+    with connect() as conn:
+        already = conn.execute(
+            "SELECT id FROM swarm_blackboard WHERE swarm_id=? AND key='pre-review-risk-evaluated'",
+            (swarm_id,),
+        ).fetchone()
+    if already:
+        return False
+    if int(run["total_agents_created"] or 0) >= int(run["max_agents"] or 0):
+        swarm.publish(
+            swarm_id,
+            "decision",
+            "Coordinator found Blackboard risks but no spare agent capacity remains; final verification will assess them.",
+            key="pre-review-risk-evaluated",
+        )
+        return False
+
+    decision = _followup_decision(run, profile, completed, risks)
+    if str(decision.get("action") or "proceed").lower() != "spawn":
+        swarm.publish(
+            swarm_id,
+            "decision",
+            str(decision.get("reason") or "Coordinator chose to proceed to final verification."),
+            key="pre-review-risk-evaluated",
+        )
+        return False
+
+    role = str(decision.get("role") or "tester").lower()
+    if role not in {"worker", "frontend", "backend", "tester", "researcher", "coder", "documentation"}:
+        role = "tester"
+    title = str(decision.get("title") or "Coordinator follow-up")[:256]
+    prompt = str(decision.get("prompt") or "").strip()
+    if not prompt:
+        swarm.publish(swarm_id, "decision", "Coordinator did not produce a usable follow-up task; proceeding to final verification.", key="pre-review-risk-evaluated")
+        return False
+
+    model_profile_id, assigned_model = swarm.resolve_role(profile, role)
+    session_id = _new_session(int(run["project_id"]), title)
+    task = task_queue.enqueue(
+        int(run["project_id"]),
+        session_id,
+        title,
+        prompt,
+        source_kind="swarm_followup",
+        source_ref=f"swarm:{swarm_id}:pre-review",
+        depends_on=[int(item["id"]) for item in completed],
+        agent_role=role,
+        swarm_id=swarm_id,
+        model_profile_id=model_profile_id,
+        assigned_model=assigned_model,
+        task_kind=role,
+        priority=175,
+        depth=1,
+    )
+    swarm.publish(
+        swarm_id,
+        "decision",
+        f"Coordinator added follow-up agent #{task['id']} ({role}) before final verification.",
+        task_id=task["id"],
+        key="pre-review-risk-evaluated",
+    )
+    _retarget_verification(swarm_id, task["id"])
+    return True
+
+
+def _followup_decision(run: dict, profile: dict, completed: list[dict], risks: list[dict]) -> dict:
+    _, model = swarm.coordinator_model(profile)
+    project = _project(int(run["project_id"]))
+    evidence = {
+        "objective": run["objective"],
+        "completed": [{"id":x["id"], "title":x["title"], "role":x["agent_role"], "result":x.get("result","")[-800:]} for x in completed],
+        "risks": risks[-30:],
+        "remaining_slots": int(run["max_agents"])-int(run["total_agents_created"]),
+    }
+    prompt = (
+        "You are the persistent Coordinator for a local Olladex software-engineering swarm. "
+        "All current specialists completed, but the shared Blackboard contains risk entries. "
+        "Decide whether one additional focused specialist is justified before challenger/reviewer verification. "
+        "Return JSON only: {\"action\":\"spawn|proceed\",\"role\":\"backend|frontend|tester|researcher|coder|documentation|worker\","
+        "\"title\":\"...\",\"prompt\":\"...\",\"reason\":\"...\"}. "
+        "Spawn only for a concrete unresolved risk that can be checked or fixed by one bounded task. "
+        "Do not create reviewers, managers, or recursive coordinators.\n\n"
+        + json.dumps(evidence, default=str)[:24000]
+    )
+    try:
+        with ollama.client(120) as http:
+            response = http.post("/api/chat", json={
+                "model": model or project.get("profile_chat_model") or project.get("model"),
+                "stream": False,
+                "format": "json",
+                "messages": [
+                    {"role": "system", "content": "Return valid JSON only. You coordinate work but do not edit files."},
+                    {"role": "user", "content": prompt},
+                ],
+                "options": {"temperature": 0.1},
+            })
+            response.raise_for_status()
+            raw = (response.json().get("message") or {}).get("content") or "{}"
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {"action": "proceed", "reason": "No valid follow-up decision."}
+    except Exception as exc:
+        return {"action": "proceed", "reason": f"Coordinator risk review could not run: {exc}. Final verification will assess the recorded risks."}
 
 
 def _consider_recovery(run: dict, failed: list[dict], completed: list[dict]) -> None:
