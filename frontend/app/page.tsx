@@ -226,7 +226,7 @@ export default function Home() {
           {tab === "diagrams" && <DiagramStudio initialSource={diagramSource} initialEngine={diagramEngine} />}
           {tab === "office" && <OfficePanel projectId={project.id} selectedPath={selected?.path} onCreated={refreshTree} />}
           {tab === "tasks" && <div className="tasks-workspace">{session ? <ConversationTaskSummary sessionId={session.id} title={session.title} onOpenConversation={() => setTab("files")} /> : null}<TaskOrchestrationPanel projectId={project.id} onCreated={() => setNotice("Orchestrated task queued")} /><BackgroundTasksPanel projectId={project.id} onOpenSession={openTaskSession} /></div>}
-          {tab === "memory" && <MemoryPanel projectName={project.name} sessionId={session?.id} />}
+          {tab === "memory" && <MemoryPanel projectId={project.id} projectName={project.name} sessionId={session?.id} />}
           {tab === "project" && <ProjectPanel project={project} onUpdated={(updated) => { setProject(updated); setProjects((items) => items.map((item) => item.id === updated.id ? updated : item)); }} />}
         </> : <EmptyWorkspace onOpen={() => setShowOpen(true)} />}
       </section>
