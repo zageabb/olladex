@@ -74,7 +74,9 @@ test('interaction layer can enable, preflight and start a swarm', async ({ page 
   await expect(page.getByText(/Swarm #7 started/)).toBeVisible();
 });
 
-test('interaction agent board renders live swarm snapshot instead of legacy graph', async ({ page }) => {
+test('interaction agent board renders and controls a live swarm', async ({ page }) => {
+  let pauseCalled = false;
+  let coordinatorGuidance = '';
   const run = {
     id:7,title:'Auth hardening',status:'reviewing',max_agents:5,max_concurrency:3,total_agents_created:2
   };
@@ -110,6 +112,16 @@ test('interaction agent board renders live swarm snapshot instead of legacy grap
       });
       return true;
     }
+    if (p === '/api/swarms/7/pause') {
+      pauseCalled = true;
+      await json({...run,status:'paused'});
+      return true;
+    }
+    if (p === '/api/swarms/7/coordinator/input') {
+      coordinatorGuidance = String(route.request().postDataJSON().content || '');
+      await json({swarm_id:7,status:'received',coordinator_instructions:coordinatorGuidance});
+      return true;
+    }
     if (p === '/api/swarm-agents/11') {
       await json({
         task:{id:11,title:'Inspect auth',status:'completed',agent_role:'backend',progress:100,tool_usage:6,tool_budget:30,current_activity:'Done'},
@@ -134,6 +146,13 @@ test('interaction agent board renders live swarm snapshot instead of legacy grap
   await expect(page.getByText(/reviewer · queued · 0%/)).toBeVisible();
   await expect(page.getByText(/budget 3\/20/)).toBeVisible();
   await expect(page.getByText('Coordinator opened final verification.')).toBeVisible();
+
+  await page.getByPlaceholder('Guide the Swarm…').fill('Prioritise regression tests.');
+  await page.getByRole('button', {name:'Coordinator'}).click();
+  await expect.poll(() => coordinatorGuidance).toBe('Prioritise regression tests.');
+
+  await page.getByRole('button', {name:'Pause'}).click();
+  await expect.poll(() => pauseCalled).toBe(true);
 
   await page.getByText('Inspect auth').click();
   await expect(page.getByText('backend/app/auth.py')).toBeVisible();
