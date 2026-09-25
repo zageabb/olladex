@@ -492,10 +492,10 @@ def create_swarm_integration_pull_request(swarm_id: int, body: SwarmIntegrationP
 
 
 @router.get("/swarms/{swarm_id}/blackboard")
-def read_blackboard(swarm_id: int, category: str = "", task_id: int | None = None):
+def read_blackboard(swarm_id: int, category: str = "", task_id: int | None = None, after: int = 0, limit: int = 200):
     try:
         swarm_service.get_run(swarm_id)
-        return swarm_service.blackboard(swarm_id, category=category, task_id=task_id)
+        return swarm_service.blackboard(swarm_id, category=category, task_id=task_id, after=after, limit=limit)
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
 
