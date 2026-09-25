@@ -384,16 +384,21 @@ def consume_coordinator_budget(swarm_id: int, purpose: str) -> dict:
         if used >= budget:
             remaining = 0
             allowed = False
+            exhaustion_recorded = bool(conn.execute(
+                "SELECT id FROM swarm_coordinator_events WHERE swarm_id=? AND kind='budget_exhausted' LIMIT 1",
+                (swarm_id,),
+            ).fetchone())
         else:
             remaining = budget - used - 1
             allowed = True
+            exhaustion_recorded = False
     if allowed:
         emit_coordinator_event(
             swarm_id,
             "model_call",
             {"purpose": purpose, "used": used + 1, "budget": budget, "remaining": remaining},
         )
-    else:
+    elif not exhaustion_recorded:
         emit_coordinator_event(
             swarm_id,
             "budget_exhausted",
