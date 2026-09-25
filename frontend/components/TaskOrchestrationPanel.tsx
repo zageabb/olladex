@@ -44,6 +44,8 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
   const [notice,setNotice]=useState("");
   const [busy,setBusy]=useState(false);
   const [swarmBoard,setSwarmBoard]=useState<SwarmBoard|null>(null);
+  const [swarmRuns,setSwarmRuns]=useState<SwarmListItem[]>([]);
+  const [selectedSwarmId,setSelectedSwarmId]=useState<number|null>(null);
   const [swarmSkill,setSwarmSkill]=useState<SwarmSkill|null>(null);
   const [swarmProfiles,setSwarmProfiles]=useState<SwarmProfile[]>([]);
   const [modelProfiles,setModelProfiles]=useState<ModelProfile[]>([]);
@@ -60,7 +62,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
   const [swarmCheckCommand,setSwarmCheckCommand]=useState("python -m pytest backend/tests -q && cd frontend && npx tsc --noEmit && npm run build");
   const [swarmIntegrationPushed,setSwarmIntegrationPushed]=useState(false);
 
-  useEffect(()=>{ load(); loadSwarmSettings(); const timer=window.setInterval(load,3000); return()=>window.clearInterval(timer); },[projectId]);
+  useEffect(()=>{ load(); loadSwarmSettings(); const timer=window.setInterval(load,3000); return()=>window.clearInterval(timer); },[projectId,selectedSwarmId]);
   async function load(){
     try{
       const [nextGraph,swarmRuns]=await Promise.all([
@@ -68,8 +70,12 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
         request<SwarmListItem[]>(`/projects/${projectId}/swarms`)
       ]);
       setGraph(nextGraph);
-      const selectedSwarm=swarmRuns.find(item=>!["completed","failed","cancelled"].includes(item.status))||swarmRuns[0];
+      setSwarmRuns(swarmRuns);
+      const selectedSwarm=(selectedSwarmId?swarmRuns.find(item=>item.id===selectedSwarmId):null)
+        ||swarmRuns.find(item=>!["completed","failed","cancelled"].includes(item.status))
+        ||swarmRuns[0];
       if(selectedSwarm){
+        if(selectedSwarmId!==selectedSwarm.id)setSelectedSwarmId(selectedSwarm.id);
         const board=await request<SwarmBoard>(`/swarms/${selectedSwarm.id}/board?limit=40`);
         setSwarmBoard(board);
         if(board.swarm.integration_branch){
@@ -87,6 +93,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
           setSwarmIntegrationPushed(false);
         }
       }else{
+        setSelectedSwarmId(null);
         setSwarmBoard(null);
         setSwarmIntegration(null);
         setSwarmIntegrationPushed(false);
@@ -355,7 +362,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
 
   return <section className={styles.panel}>
     <section className="agent-board-shell">
-      <div><p className="eyebrow">Agent board</p><h3>{swarmBoard?swarmBoard.swarm.title:"Under the hood"}</h3><p>{swarmBoard?`Swarm #${swarmBoard.swarm.id} · ${swarmBoard.swarm.status.replaceAll("_"," ")} · ${swarmBoard.summary.progress}% complete`:"Normal tasks stay simple. Expand this view when you want to inspect specialist agents, roles and execution state."}</p></div>
+      <div><p className="eyebrow">Agent board</p><h3>{swarmBoard?swarmBoard.swarm.title:"Under the hood"}</h3><p>{swarmBoard?`Swarm #${swarmBoard.swarm.id} · ${swarmBoard.swarm.status.replaceAll("_"," ")} · ${swarmBoard.summary.progress}% complete`:"Normal tasks stay simple. Expand this view when you want to inspect specialist agents, roles and execution state."}</p>{swarmRuns.length>1&&<label className="agent-board-run-select">Run<select value={selectedSwarmId||""} onChange={event=>{setSelectedSwarmAgentId(null);setSwarmIntegration(null);setSelectedSwarmId(Number(event.target.value));}}>{swarmRuns.map(run=><option key={run.id} value={run.id}>#{run.id} {run.title} · {run.status}</option>)}</select></label>}</div>
       <div className="agent-board-metrics"><span><strong>{boardTotal}</strong> agents</span><span><strong>{boardActive}</strong> active</span><span><strong>{boardCompleted}</strong> complete</span>{swarmBoard?.summary.integration_ready&&<span><strong>✓</strong> integrate</span>}</div>
       {swarmBoard&&<>
         <article className="agent-board-coordinator"><span className={`agent-dot ${swarmBoard.swarm.status}`}>●</span><div><strong>Coordinator</strong><small>budget {swarmBoard.swarm.coordinator_budget?.used||0}/{swarmBoard.swarm.coordinator_budget?.budget||0} · {swarmBoard.swarm.coordinator_activity?.content||"Monitoring specialist progress and dependencies"}</small></div><div className="agent-board-control-actions">{swarmBoard.swarm.status==="paused"?<button type="button" onClick={()=>swarmAction("resume")} disabled={busy}>Resume</button>:["running","reviewing","waiting"].includes(swarmBoard.swarm.status)&&<button type="button" onClick={()=>swarmAction("pause")} disabled={busy}>Pause</button>}{!["completed","failed","cancelled"].includes(swarmBoard.swarm.status)&&<button type="button" onClick={()=>swarmAction("stop")} disabled={busy}>Stop</button>}</div></article>
