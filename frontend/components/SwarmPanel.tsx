@@ -296,7 +296,7 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
   const byId=useMemo(()=>new Map(agents.map(agent=>[agent.id,agent])),[agents]);
   const complete=agents.filter(agent=>agent.status==="completed").length;
   const active=agents.filter(agent=>["running","waiting_for_input","waiting_for_approval"].includes(agent.status)).length;
-  const progress=agents.length?Math.round(agents.reduce((sum,agent)=>sum+(agent.status==="completed"?100:agent.status==="running"?50:agent.status==="failed"||agent.status==="cancelled"?100:0),0)/agents.length):0;
+  const progress=agents.length?Math.round(agents.reduce((sum,agent)=>sum+(agent.status==="completed"?100:Math.max(0,Math.min(Number(agent.progress||0),99))),0)/agents.length):0;
   const selectedAgent=selectedAgentId?agents.find(agent=>agent.id===selectedAgentId)||null:null;
   const selectedAgentEvents=selectedAgent?events.filter(item=>item.task_id===selectedAgent.id):[];
   const integrationCandidates=agents.filter(agent=>agent.status==="completed"&&agent.task_kind!=="reviewer"&&agent.task_kind!=="challenger"&&Boolean(agent.worktree_branch));
@@ -400,7 +400,7 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
             {agents.map(agent=><article key={agent.id} className={styles.agent}>
               <header><div><i className={styles.dot+" "+(styles[agent.status]||"")}/><strong>Agent #{agent.id} · {agent.agent_role}</strong></div><span>{agent.status}</span></header>
               <h4>{agent.title}</h4>
-              <dl><div><dt>Model</dt><dd>{agent.assigned_model||"Project default"}</dd></div><div><dt>Branch</dt><dd>{agent.worktree_branch||"waiting"}</dd></div><div><dt>Run</dt><dd>{agent.run_id?"#"+agent.run_id:"not started"}</dd></div></dl>
+              <dl><div><dt>Model</dt><dd>{agent.assigned_model||"Project default"}</dd></div><div><dt>Branch</dt><dd>{agent.worktree_branch||"waiting"}</dd></div><div><dt>Run</dt><dd>{agent.run_id?"#"+agent.run_id:"not started"}</dd></div><div><dt>Progress</dt><dd>{agent.status==="completed"?100:Number(agent.progress||0)}%</dd></div></dl>
               <p>{agent.current_activity||agent.result||agent.error||"Waiting for activity…"}</p>
               <footer><button onClick={()=>setSelectedAgentId(agent.id)}>Open agent</button>{["queued","running","waiting_for_input","waiting_for_approval"].includes(agent.status)&&<button onClick={()=>stopAgent(agent)} disabled={busy}>Stop agent</button>}</footer>
             </article>)}
