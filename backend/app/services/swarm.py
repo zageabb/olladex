@@ -251,6 +251,10 @@ def list_agents(swarm_id: int) -> list[dict]:
             (swarm_id,),
         )]
         for item in rows:
+            try:
+                item["depends_on"] = json.loads(item.get("depends_on") or "[]")
+            except (TypeError, json.JSONDecodeError):
+                item["depends_on"] = []
             run_id = item.get("run_id")
             if not run_id:
                 item["latest_event"] = None
