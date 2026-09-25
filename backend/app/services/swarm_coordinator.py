@@ -236,6 +236,9 @@ def _consider_help_request(run: dict, completed: list[dict]) -> bool:
 
 
 def _help_decision(run: dict, profile: dict, request: dict, requester: dict | None, completed: list[dict]) -> dict:
+    budget = swarm.consume_coordinator_budget(int(run["id"]), "specialist_help")
+    if not budget["allowed"]:
+        return {"action": "decline", "reason": "Coordinator budget is exhausted; no helper was spawned."}
     _, model = swarm.coordinator_model(profile)
     project = _project(int(run["project_id"]))
     evidence = {
@@ -389,6 +392,9 @@ def _consider_pre_review(run: dict, profile: dict, completed: list[dict]) -> boo
 
 
 def _followup_decision(run: dict, profile: dict, completed: list[dict], risks: list[dict]) -> dict:
+    budget = swarm.consume_coordinator_budget(int(run["id"]), "pre_review_risk")
+    if not budget["allowed"]:
+        return {"action": "proceed", "reason": "Coordinator budget is exhausted; recorded risks will be left to final verification."}
     _, model = swarm.coordinator_model(profile)
     project = _project(int(run["project_id"]))
     evidence = {
@@ -538,6 +544,9 @@ def _retarget_verification(swarm_id: int, recovery_task_id: int) -> None:
 
 
 def _recovery_decision(run: dict, profile: dict, failed: list[dict], completed: list[dict]) -> dict:
+    budget = swarm.consume_coordinator_budget(int(run["id"]), "failure_recovery")
+    if not budget["allowed"]:
+        return {"action": "fail", "reason": "Coordinator budget is exhausted; automatic recovery cannot continue."}
     _, model = swarm.coordinator_model(profile)
     project = _project(int(run["project_id"]))
     board = swarm.blackboard(int(run["id"]))
