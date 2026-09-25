@@ -79,11 +79,16 @@ def save_memory(session_id: int, body: Memory):
 
 VALID_MEMORY_SCOPES = {'personal', 'workspace', 'project'}
 
-def _memory_key(scope: str, project_id: int | None) -> str:
+def _memory_key(scope: str, project_id: int | None, workspace_id: int | None = None) -> str:
     if scope == 'personal':
         return 'default'
     if scope == 'workspace':
-        return 'default'
+        if not workspace_id:
+            raise HTTPException(400, 'workspace_id is required for workspace memory')
+        with connect() as conn:
+            if not conn.execute('SELECT id FROM workspaces WHERE id=?', (workspace_id,)).fetchone():
+                raise HTTPException(404, 'Workspace not found')
+        return str(workspace_id)
     if scope == 'project':
         if not project_id:
             raise HTTPException(400, 'project_id is required for project memory')
@@ -94,19 +99,19 @@ def _memory_key(scope: str, project_id: int | None) -> str:
     raise HTTPException(400, 'Unsupported memory scope')
 
 @router.get('/api/memory/{scope}')
-def scoped_memory(scope: str, project_id: int | None = None):
+def scoped_memory(scope: str, project_id: int | None = None, workspace_id: int | None = None):
     if scope not in VALID_MEMORY_SCOPES:
         raise HTTPException(400, 'Unsupported memory scope')
-    key = _memory_key(scope, project_id)
+    key = _memory_key(scope, project_id, workspace_id)
     with connect() as conn:
         row = conn.execute('SELECT content,updated_at FROM memory_scopes WHERE scope=? AND scope_key=?', (scope, key)).fetchone()
     return {'scope': scope, 'scope_key': key, 'content': row['content'] if row else '', 'updated_at': row['updated_at'] if row else ''}
 
 @router.put('/api/memory/{scope}')
-def save_scoped_memory(scope: str, body: Memory, project_id: int | None = None):
+def save_scoped_memory(scope: str, body: Memory, project_id: int | None = None, workspace_id: int | None = None):
     if scope not in VALID_MEMORY_SCOPES:
         raise HTTPException(400, 'Unsupported memory scope')
-    key = _memory_key(scope, project_id)
+    key = _memory_key(scope, project_id, workspace_id)
     from .database import now
     stamp = now()
     with connect() as conn:
