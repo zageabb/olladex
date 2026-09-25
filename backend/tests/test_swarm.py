@@ -369,3 +369,65 @@ def test_coordinator_guidance_is_persisted_and_audited(tmp_path, monkeypatch):
     decisions = swarm.blackboard(swarm_id, category="decision")
     assert any("Do not change the public API." in item["content"] for item in decisions)
     assert any("Prioritise regression tests." in item["content"] for item in decisions)
+
+
+def test_recovery_keeps_reviewer_downstream_of_challenger(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id, max_agents=5, max_concurrency=2)
+    with connect() as conn:
+        profile_id = int(conn.execute("SELECT id FROM swarm_profiles WHERE name='Deep Development'").fetchone()["id"])
+        conn.execute("UPDATE swarm_runs SET profile_id=? WHERE id=?", (profile_id, swarm_id))
+
+    failed = task_queue.enqueue(
+        project_id, session_id, "Failed backend", "fail",
+        swarm_id=swarm_id, source_kind="swarm_specialist", agent_role="backend", task_kind="backend",
+    )
+    completed = task_queue.enqueue(
+        project_id, session_id, "Research", "research",
+        swarm_id=swarm_id, source_kind="swarm_specialist", agent_role="researcher", task_kind="researcher",
+    )
+    challenger = task_queue.enqueue(
+        project_id, session_id, "Challenge", "challenge",
+        swarm_id=swarm_id, source_kind="swarm_challenger", agent_role="challenger", task_kind="challenger",
+        depends_on=[failed["id"], completed["id"]], priority=200,
+    )
+    reviewer = task_queue.enqueue(
+        project_id, session_id, "Review", "review",
+        swarm_id=swarm_id, source_kind="swarm_reviewer", agent_role="reviewer", task_kind="reviewer",
+        depends_on=[challenger["id"]], priority=300,
+    )
+    with connect() as conn:
+        conn.execute("UPDATE background_tasks SET status='failed',error='boom',completed_at=? WHERE id=?", (now(), failed["id"]))
+        conn.execute("UPDATE background_tasks SET status='completed',result='ok',completed_at=? WHERE id=?", (now(), completed["id"]))
+
+    monkeypatch.setattr(
+        swarm_coordinator,
+        "_recovery_decision",
+        lambda run, profile, failed_items, completed_items: {
+            "action": "spawn",
+            "role": "backend",
+            "title": "Recovery backend",
+            "prompt": "Recover the backend work.",
+            "reason": "Recoverable.",
+        },
+    )
+
+    swarm_coordinator._reconcile(swarm_id)
+
+    agents = swarm.list_agents(swarm_id)
+    recovery = next(item for item in agents if item["source_kind"] == "swarm_recovery")
+    challenger_row = next(item for item in agents if item["id"] == challenger["id"])
+    reviewer_row = next(item for item in agents if item["id"] == reviewer["id"])
+
+    challenger_deps = challenger_row["depends_on"]
+    reviewer_deps = reviewer_row["depends_on"]
+    if isinstance(challenger_deps, str):
+        import json
+        challenger_deps = json.loads(challenger_deps)
+    if isinstance(reviewer_deps, str):
+        import json
+        reviewer_deps = json.loads(reviewer_deps)
+
+    assert recovery["id"] in challenger_deps
+    assert failed["id"] not in challenger_deps
+    assert reviewer_deps == [challenger["id"]]
