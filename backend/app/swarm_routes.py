@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from .database import connect, now
 from .services import orchestration as orchestration_service
 from .services import swarm as swarm_service
-from .services import task_queue
+from .services import task_queue, integration, worktrees
 
 
 router = APIRouter(prefix="/api", tags=["swarm"])
@@ -50,6 +50,15 @@ class BlackboardWriteRequest(BaseModel):
 
 class AgentInputRequest(BaseModel):
     content: str = Field(min_length=1, max_length=100_000)
+
+
+class SwarmIntegrationSelectionRequest(BaseModel):
+    task_ids: list[int] = Field(min_length=1, max_length=20)
+    base: str = Field(default="main", min_length=1, max_length=200)
+
+
+class SwarmIntegrationChecksRequest(BaseModel):
+    command: str = Field(min_length=1, max_length=5000)
 
 
 def _project(project_id: int) -> dict:
@@ -304,6 +313,107 @@ def swarm_events(swarm_id: int, after: int = 0, limit: int = 200):
         return swarm_service.events(swarm_id, after=after, limit=limit)
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
+
+
+def _swarm_integration_branches(swarm_id: int, task_ids: list[int]) -> tuple[dict, dict, list[str]]:
+    run = swarm_service.get_run(swarm_id)
+    project = _project(int(run["project_id"]))
+    tasks = {item["id"]: item for item in swarm_service.list_agents(swarm_id)}
+    branches: list[str] = []
+    for task_id in task_ids:
+        task = tasks.get(task_id)
+        if not task:
+            raise HTTPException(409, f"Task #{task_id} is not part of swarm #{swarm_id}")
+        if task.get("task_kind") in {"reviewer", "challenger"}:
+            continue
+        if task.get("status") != "completed":
+            raise HTTPException(409, f"Task #{task_id} is not completed")
+        branch = str(task.get("worktree_branch") or "")
+        path = str(task.get("worktree_path") or "")
+        if not branch or not path:
+            raise HTTPException(409, f"Task #{task_id} has no available worktree branch")
+        try:
+            summary = worktrees.summary(project, path)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        if summary.get("changes"):
+            raise HTTPException(409, f"Task #{task_id} still has uncommitted changes")
+        if branch not in branches:
+            branches.append(branch)
+    if not branches:
+        raise HTTPException(409, "Select at least one completed specialist task")
+    return run, project, branches
+
+
+@router.post("/swarms/{swarm_id}/integration/preflight")
+def swarm_integration_preflight(swarm_id: int, body: SwarmIntegrationSelectionRequest):
+    _, project, branches = _swarm_integration_branches(swarm_id, body.task_ids)
+    try:
+        return {"swarm_id": swarm_id, "task_ids": body.task_ids, **integration.preflight(project, branches, body.base)}
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/swarms/{swarm_id}/integration")
+def create_swarm_integration(swarm_id: int, body: SwarmIntegrationSelectionRequest):
+    run, project, branches = _swarm_integration_branches(swarm_id, body.task_ids)
+    if run["status"] not in {"completed", "reviewing", "integrating"}:
+        raise HTTPException(409, "Swarm must reach verification before integration")
+    try:
+        result = integration.create(project, swarm_id, branches, body.base, namespace="swarm")
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    with connect() as conn:
+        conn.execute(
+            "UPDATE swarm_runs SET status='integrating',integration_path=?,integration_branch=?,"
+            "integration_check_command='',integration_check_status='',integration_check_output='',"
+            "integration_pr_number=0,integration_pr_url='',integration_pr_state='' WHERE id=?",
+            (result["path"], result["branch"], swarm_id),
+        )
+    return {"swarm_id": swarm_id, "task_ids": body.task_ids, **result}
+
+
+@router.get("/swarms/{swarm_id}/integration")
+def get_swarm_integration(swarm_id: int, base: str = "main"):
+    run = swarm_service.get_run(swarm_id)
+    project = _project(int(run["project_id"]))
+    path = run.get("integration_path") or ""
+    if not path:
+        return {
+            "swarm_id": swarm_id, "path": "", "branch": "", "base": base,
+            "check_command": run.get("integration_check_command") or "",
+            "check_status": run.get("integration_check_status") or "",
+            "check_output": run.get("integration_check_output") or "",
+        }
+    try:
+        summary = integration.summary(project, path, base)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {
+        "swarm_id": swarm_id, **summary,
+        "check_command": run.get("integration_check_command") or "",
+        "check_status": run.get("integration_check_status") or "",
+        "check_output": run.get("integration_check_output") or "",
+    }
+
+
+@router.post("/swarms/{swarm_id}/integration/checks")
+def run_swarm_integration_checks(swarm_id: int, body: SwarmIntegrationChecksRequest):
+    run = swarm_service.get_run(swarm_id)
+    project = _project(int(run["project_id"]))
+    path = run.get("integration_path") or ""
+    if not path:
+        raise HTTPException(409, "Create a Swarm integration worktree first")
+    try:
+        result = integration.run_checks(project, path, body.command)
+    except (ValueError, TimeoutError) as exc:
+        raise HTTPException(409, str(exc)) from exc
+    with connect() as conn:
+        conn.execute(
+            "UPDATE swarm_runs SET integration_check_command=?,integration_check_status=?,integration_check_output=? WHERE id=?",
+            (body.command, "passed" if result["passed"] else "failed", result["output"], swarm_id),
+        )
+    return {"swarm_id": swarm_id, **result}
 
 
 @router.get("/swarms/{swarm_id}/blackboard")
