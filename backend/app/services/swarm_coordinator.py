@@ -301,27 +301,34 @@ def _consider_recovery(run: dict, failed: list[dict], completed: list[dict]) -> 
 
 def _retarget_verification(swarm_id: int, recovery_task_id: int) -> None:
     with connect() as conn:
-        verification = conn.execute(
-            "SELECT id,depends_on FROM background_tasks WHERE swarm_id=? AND task_kind IN ('challenger','reviewer') ORDER BY priority,id",
+        verification = [dict(row) for row in conn.execute(
+            "SELECT id,task_kind,depends_on FROM background_tasks WHERE swarm_id=? AND task_kind IN ('challenger','reviewer') ORDER BY priority,id",
             (swarm_id,),
-        ).fetchall()
+        )]
+        challenger_ids = [int(row["id"]) for row in verification if row.get("task_kind") == "challenger"]
         for row in verification:
-            try:
-                deps = [int(value) for value in json.loads(row["depends_on"] or "[]")]
-            except (json.JSONDecodeError, TypeError, ValueError):
-                deps = []
-            statuses = {}
-            if deps:
-                placeholders = ",".join("?" for _ in deps)
-                statuses = {
-                    int(item["id"]): item["status"]
-                    for item in conn.execute(
-                        f"SELECT id,status FROM background_tasks WHERE id IN ({placeholders})",
-                        deps,
-                    )
-                }
-            retained = [dep for dep in deps if statuses.get(dep) == "completed"]
-            retained.append(recovery_task_id)
+            if row.get("task_kind") == "reviewer" and challenger_ids:
+                # Reviewer must remain downstream of the challenger. The challenger itself
+                # inherits the recovery/follow-up task, so adding the recovery directly here
+                # would allow reviewer and challenger to run in parallel.
+                retained = challenger_ids
+            else:
+                try:
+                    deps = [int(value) for value in json.loads(row.get("depends_on") or "[]")]
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    deps = []
+                statuses = {}
+                if deps:
+                    placeholders = ",".join("?" for _ in deps)
+                    statuses = {
+                        int(item["id"]): item["status"]
+                        for item in conn.execute(
+                            f"SELECT id,status FROM background_tasks WHERE id IN ({placeholders})",
+                            deps,
+                        )
+                    }
+                retained = [dep for dep in deps if statuses.get(dep) == "completed"]
+                retained.append(recovery_task_id)
             conn.execute(
                 "UPDATE background_tasks SET depends_on=?,status='queued',error='',completed_at='' WHERE id=?",
                 (json.dumps(sorted(set(retained))), row["id"]),
