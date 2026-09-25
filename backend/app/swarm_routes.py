@@ -232,6 +232,8 @@ def create_swarm(project_id: int, body: SwarmCreateRequest):
                 "UPDATE swarm_runs SET status='running' WHERE id=?",
                 (swarm["id"],),
             )
+        from .services import swarm_coordinator
+        swarm_coordinator.start(int(swarm["id"]))
         return {
             "swarm": swarm_service.get_run(swarm["id"]),
             "coordinator": {"model_profile_id": coordinator_profile_id, "model": coordinator_model},
@@ -279,6 +281,8 @@ def resume_swarm(swarm_id: int):
 @router.delete("/swarms/{swarm_id}")
 def cancel_swarm(swarm_id: int):
     try:
+        from .services import swarm_coordinator
+        swarm_coordinator.stop(swarm_id)
         return swarm_service.cancel(swarm_id)
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
