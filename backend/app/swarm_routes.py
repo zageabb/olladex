@@ -166,9 +166,16 @@ def create_swarm(project_id: int, body: SwarmCreateRequest):
         )
         profile = swarm_service.get_profile(body.profile_id)
         reserved = (1 if profile.get("require_reviewer") else 0) + (1 if profile.get("require_challenger") else 0)
-        specialist_budget = int(swarm["max_agents"]) - reserved
-        if specialist_budget < 2:
+        available_specialist_slots = int(swarm["max_agents"]) - reserved
+        if available_specialist_slots < 2:
             raise ValueError("This Swarm profile needs at least two specialist slots plus its required review roles")
+        # Dynamic swarms keep one slot in reserve for Coordinator recovery/follow-up
+        # whenever doing so still leaves at least two initial specialists.
+        specialist_budget = (
+            available_specialist_slots - 1
+            if profile.get("dynamic_size") and available_specialist_slots > 2
+            else available_specialist_slots
+        )
 
         coordinator_profile_id, coordinator_model = swarm_service.coordinator_model(profile)
         planning_project = dict(project)
