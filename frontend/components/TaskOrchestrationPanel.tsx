@@ -59,6 +59,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
   const [swarmPreflight,setSwarmPreflight]=useState<SwarmPreflight|null>(null);
   const [selectedSwarmAgentId,setSelectedSwarmAgentId]=useState<number|null>(null);
   const [selectedSwarmAgent,setSelectedSwarmAgent]=useState<SwarmAgentDetail|null>(null);
+  const [agentGuidance,setAgentGuidance]=useState("");
   const [swarmGuidance,setSwarmGuidance]=useState("");
   const [swarmIntegration,setSwarmIntegration]=useState<SwarmIntegrationPlan|null>(null);
   const [swarmCheckCommand,setSwarmCheckCommand]=useState("python -m pytest backend/tests -q && cd frontend && npx tsc --noEmit && npm run build");
@@ -176,6 +177,19 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
       setNotice(all?"Guidance applied across the Swarm":"Guidance sent to Coordinator");
       setSwarmGuidance("");
       await load();
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
+  }
+
+  async function sendAgentGuidance(){
+    if(!selectedSwarmAgent||!agentGuidance.trim())return;
+    setBusy(true);
+    try{
+      await request(`/swarm-agents/${selectedSwarmAgent.task.id}/input`,{
+        method:"POST",body:JSON.stringify({content:agentGuidance.trim()})
+      });
+      setNotice(`Guidance sent to agent #${selectedSwarmAgent.task.id}`);
+      setAgentGuidance("");
     }catch(error){setNotice(error instanceof Error?error.message:String(error));}
     finally{setBusy(false);}
   }
@@ -347,12 +361,17 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
   }
 
   useEffect(()=>{
-    if(!selectedSwarmAgentId){setSelectedSwarmAgent(null);return;}
+    if(!selectedSwarmAgentId){setSelectedSwarmAgent(null);setAgentGuidance("");return;}
     let disposed=false;
-    request<SwarmAgentDetail>(`/swarm-agents/${selectedSwarmAgentId}`)
-      .then(detail=>{if(!disposed)setSelectedSwarmAgent(detail);})
-      .catch(error=>{if(!disposed)setNotice(error instanceof Error?error.message:String(error));});
-    return()=>{disposed=true;};
+    async function refresh(){
+      try{
+        const detail=await request<SwarmAgentDetail>(`/swarm-agents/${selectedSwarmAgentId}`);
+        if(!disposed)setSelectedSwarmAgent(detail);
+      }catch(error){if(!disposed)setNotice(error instanceof Error?error.message:String(error));}
+    }
+    refresh();
+    const timer=window.setInterval(refresh,3000);
+    return()=>{disposed=true;window.clearInterval(timer);};
   },[selectedSwarmAgentId]);
 
   const roots=useMemo(()=>graph.nodes.filter(node=>!node.parent_task_id),[graph.nodes]);
@@ -397,6 +416,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
           <article><strong>Commands</strong>{selectedSwarmAgent.commands.length?<ul>{selectedSwarmAgent.commands.slice(0,8).map(command=><li key={command.id}><code>{command.command}</code> · {command.status} · exit {command.exit_code}</li>)}</ul>:<p>No commands recorded.</p>}</article>
           <article><strong>Findings</strong>{selectedSwarmAgent.blackboard.length?<ul>{selectedSwarmAgent.blackboard.slice().reverse().slice(0,8).map(item=><li key={item.id}><b>{item.category}</b> {item.content}</li>)}</ul>:<p>No task-specific Blackboard entries yet.</p>}</article>
         </div>
+        {["running","waiting_for_input","waiting_for_approval"].includes(selectedSwarmAgent.task.status)&&<form className="agent-board-agent-guidance" onSubmit={event=>{event.preventDefault();sendAgentGuidance();}}><input value={agentGuidance} onChange={event=>setAgentGuidance(event.target.value)} placeholder="Guide this agent…"/><button disabled={busy||!agentGuidance.trim()}>Send guidance</button></form>}
       </section>}
       {swarmBoard&&<div className="agent-board-observability">
         <details><summary>Coordinator timeline · {swarmBoard.coordinator_events?.length||0}</summary><div>{swarmBoard.coordinator_events?.length?swarmBoard.coordinator_events.slice().reverse().slice(0,12).map(item=><article key={item.id}><b>{item.kind.replaceAll("_"," ")}</b><span>{coordinatorPayloadText(item.payload)}</span></article>):<p>No Coordinator events yet.</p>}</div></details>
