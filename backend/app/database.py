@@ -145,6 +145,20 @@ CREATE TABLE IF NOT EXISTS background_tasks (
   started_at TEXT NOT NULL DEFAULT '',
   completed_at TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS workspaces (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  description TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS workspace_projects (
+  workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(workspace_id, project_id),
+  UNIQUE(project_id)
+);
 CREATE TABLE IF NOT EXISTS memory_scopes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   scope TEXT NOT NULL,
