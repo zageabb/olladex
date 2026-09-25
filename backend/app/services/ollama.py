@@ -306,8 +306,16 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
     runtime.emit("progress", {"message": "Preparing repository context"})
     intelligence = workspace.repository_intelligence(project)
     intelligence["symbols"] = intelligence.get("symbols", [])[:40]
-    embedding_model = project.get("profile_embedding_model") or settings.ollama_embedding_model
-    selected_context = ranked_context(project, request, embedder=lambda texts: embed_texts(texts, embedding_model), embedding_model=embedding_model, max_files=project.get("profile_context_files") or 8, max_chars=project.get("profile_context_chars") or 32000)
+    task_profile = task_queue.current_model_settings()
+    embedding_model = task_profile.get("embedding_model") or project.get("profile_embedding_model") or settings.ollama_embedding_model
+    selected_context = ranked_context(
+        project,
+        request,
+        embedder=lambda texts: embed_texts(texts, embedding_model),
+        embedding_model=embedding_model,
+        max_files=task_profile.get("context_files") or project.get("profile_context_files") or 8,
+        max_chars=task_profile.get("context_chars") or project.get("profile_context_chars") or 32000,
+    )
     task_context = ""
     if task_queue.current_task_id():
         task_context = (
@@ -336,25 +344,28 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
         + "\n\nAutomatically ranked repository context:\n" + format_context(selected_context)
         + task_context
     )
-    context_tokens = project.get("profile_context_tokens") or settings.context_tokens
+    context_tokens = task_profile.get("context_tokens") or project.get("profile_context_tokens") or settings.context_tokens
     resumed = runtime.resume_messages()
     messages: list[dict] = resumed or [{"role": "system", "content": system}, *history]
     if resumed:
         messages.append({"role": "user", "content": request})
     activities: list[dict] = []
     tool_attempts: dict[str, int] = {}
+    tool_budget = int(task_profile.get("agent_tool_budget") or 0)
+    profile_steps = int(task_profile.get("max_steps") or project.get("profile_max_steps") or 8)
+    effective_steps = min(profile_steps, tool_budget) if tool_budget else profile_steps
     with client() as http:
-        for _ in range(max_steps or project.get("profile_max_steps") or 8):
+        for _ in range(max_steps or effective_steps):
             _check_cancelled()
             messages.extend(runtime.consume_inputs())
             messages = fit_context(messages, context_tokens)
             runtime.checkpoint(messages)
             runtime.emit("assistant_start", {})
             message = _stream_chat(http, {
-                "model": model or task_queue.current_assigned_model() or project.get("profile_chat_model") or project.get("model") or settings.ollama_model,
+                "model": model or task_queue.current_assigned_model() or task_profile.get("chat_model") or project.get("profile_chat_model") or project.get("model") or settings.ollama_model,
                 "messages": messages,
                 "tools": TOOLS,
-                "options": {"num_ctx": context_tokens, "temperature": project.get("profile_temperature") if project.get("profile_temperature") is not None else 0.2},
+                "options": {"num_ctx": context_tokens, "temperature": task_profile.get("temperature") if task_profile.get("temperature") is not None else project.get("profile_temperature") if project.get("profile_temperature") is not None else 0.2},
             })
             messages.append(message)
             runtime.checkpoint(messages)
@@ -368,6 +379,8 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
                 return message.get("content", ""), activities
             for call in tool_calls:
                 _check_cancelled()
+                if tool_budget and len(activities) >= tool_budget:
+                    raise BudgetExhausted("Swarm agent tool budget exhausted")
                 function = call.get("function", {})
                 name = function.get("name", "")
                 args = function.get("arguments") or {}
@@ -427,9 +440,18 @@ def validate_arguments(name, args):
         preference: str = Field(min_length=1, max_length=1000)
     class Plan(Strict):
         steps: list[str] = Field(min_length=1, max_length=20)
+    class SwarmRead(Strict):
+        category: str = Field(default="", max_length=40)
+    class SwarmPublish(Strict):
+        content: str = Field(min_length=1, max_length=50000)
+        key: str = Field(default="", max_length=200)
     schema = {"get_project_tree": Strict, "read_file": Read, "write_file": Write,
               "apply_patch": Patch, "run_command": Command, "search_code": Search,
-              "ask_user": Question, "update_plan": Plan, "remember_preference": Preference}.get(name)
+              "ask_user": Question, "update_plan": Plan, "remember_preference": Preference,
+              "swarm_read_blackboard": SwarmRead,
+              "swarm_publish_finding": SwarmPublish,
+              "swarm_publish_decision": SwarmPublish,
+              "swarm_publish_risk": SwarmPublish}.get(name)
     if schema is None:
         raise ValueError(f"Unknown tool: {name}")
     return schema.model_validate(args).model_dump()
