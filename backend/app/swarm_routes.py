@@ -143,6 +143,19 @@ def delete_swarm_profile(profile_id: int):
         raise HTTPException(409, str(exc)) from exc
 
 
+@router.get("/projects/{project_id}/swarms/preflight")
+def swarm_preflight(project_id: int, profile_id: int, max_agents: int | None = None, max_concurrency: int | None = None):
+    try:
+        return swarm_service.preflight(
+            project_id,
+            profile_id,
+            max_agents=max_agents,
+            max_concurrency=max_concurrency,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 @router.get("/projects/{project_id}/swarms")
 def swarms(project_id: int):
     _project(project_id)
