@@ -1200,3 +1200,20 @@ The Interaction Layer should own presentation of this data. The Swarm backend re
 - integration readiness and integration execution.
 
 This separation is intentional so the Interaction Layer can evolve independently without creating a second orchestration implementation.
+
+
+## 44. Coordinator Runtime Decision
+
+The original concept described the Coordinator as another `AgentRun`. v0.7 intentionally uses a dedicated persistent Coordinator control loop and `swarm_coordinator_events` timeline instead.
+
+Reasons:
+
+- the Coordinator does not own a coding worktree;
+- it does not execute the normal specialist tool loop;
+- `agent_runs` enforces one active run per session, which is useful for conversation/specialist execution but is an unnecessary coupling for the long-lived Swarm controller;
+- Coordinator model calls are bounded decision calls for decomposition, recovery, help delegation and pre-review risk handling;
+- Coordinator state, guidance, status changes, model-call budget and decisions are already durably replayable through the dedicated event stream.
+
+Specialists continue to use the normal `agent_runs` / `agent_events` runtime.
+
+This preserves the important user requirement—full visible/replayable Coordinator activity—without pretending the Coordinator is a worktree-owning coding agent.
