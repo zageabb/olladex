@@ -360,9 +360,20 @@ def run_session_agent(session_id: int, content: str) -> dict:
             conn.execute("UPDATE sessions SET title=? WHERE id=?", (title, session_id))
         conn.execute("INSERT INTO messages(session_id,role,content,created_at,run_id) VALUES(?,?,?,?,?)", (session_id, "user", content, now(), conversation_runtime.current_id()))
     project = get_project(session["project_id"])
+    with connect() as conn:
+        personal_row = conn.execute("SELECT content FROM memory_scopes WHERE scope='personal' AND scope_key='default'").fetchone()
+        project_row = conn.execute("SELECT content FROM memory_scopes WHERE scope='project' AND scope_key=?", (str(session["project_id"]),)).fetchone()
+    scoped_memory = []
+    if personal_row and personal_row["content"].strip():
+        scoped_memory.append("Personal memory:\n" + personal_row["content"].strip())
+    if project_row and project_row["content"].strip():
+        scoped_memory.append("Project memory:\n" + project_row["content"].strip())
+    if session["memory"]:
+        scoped_memory.append("Conversation memory:\n" + session["memory"])
+    memory_context = "\n\n".join(scoped_memory)
     from .services import conversation_runtime
     conversation_runtime._local.session_id = session_id
-    answer, activities = ollama.chat(project, [*history, {"role": "user", "content": content}], session_summary=(session["summary"] or "") + "\n\nUser-managed preferences and decisions:\n" + (session["memory"] or ""))
+    answer, activities = ollama.chat(project, [*history, {"role": "user", "content": content}], session_summary=(session["summary"] or "") + ("\n\n" + memory_context if memory_context else ""))
     for activity in activities:
         if not activity.pop("_persisted", False):
             persist_activity(project, session_id, activity)
