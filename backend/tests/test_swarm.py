@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from backend.app.config import settings
 from backend.app.database import connect, init_db, now
-from backend.app.services import swarm, task_queue
+from backend.app.services import conversation_runtime, swarm, task_queue
 
 
 def _seed(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "data_root", tmp_path / "data")
     init_db()
+    conversation_runtime.init()
     repo = tmp_path / "repo"
     repo.mkdir()
     stamp = now()
