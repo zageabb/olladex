@@ -904,3 +904,18 @@ button.primary:hover { background: var(--blue-2); }
 .swarm-profile-grid .swarm-check input{margin:0}
 @media(max-width:1050px){.swarm-profile-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:760px){.swarm-profile-grid{grid-template-columns:1fr}}
+
+.agent-board-integration{grid-column:1/-1;overflow:hidden;background:#fbfcfe;border:1px solid #dfe7f1;border-radius:9px}
+.agent-board-integration>header{padding:9px 10px;display:flex;align-items:center;justify-content:space-between;gap:10px;background:#fff;border-bottom:1px solid #e8edf4}
+.agent-board-integration h4{margin:2px 0;font-size:10px}
+.integration-warning,.integration-ok{margin:9px;padding:8px;border-radius:7px;font-size:8px}
+.integration-warning{display:grid;gap:3px;color:#865516;background:#fff7e8;border:1px solid #f1ddb5}
+.integration-ok{color:#2d6b48;background:#eff8f2;border:1px solid #cde7d5}
+.agent-board-integration-actions{padding:9px;display:grid;grid-template-columns:minmax(220px,1fr) auto auto auto auto;gap:6px;align-items:end}
+.agent-board-integration-actions label{display:grid;gap:4px;color:#6a788c;font-size:8px;font-weight:700}
+.agent-board-integration-actions input{width:100%;padding:7px;border:1px solid #dfe6ef;border-radius:7px;background:#fff;color:var(--ink);font-size:8px}
+.agent-board-integration-actions button{padding:6px 8px;font-size:8px}
+.agent-board-integration-actions>span{padding:6px 8px;color:#5d6d82;background:#fff;border:1px solid #e5eaf1;border-radius:7px;font-size:8px}
+.agent-board-integration details{margin:0 9px 9px}
+.agent-board-integration pre{max-height:220px;overflow:auto;margin:6px 0 0;padding:8px;background:#101b2e;color:#dbe7f5;border-radius:7px;font-size:8px;white-space:pre-wrap}
+@media(max-width:1050px){.agent-board-integration-actions{grid-template-columns:1fr 1fr}.agent-board-integration-actions label{grid-column:1/-1}}
