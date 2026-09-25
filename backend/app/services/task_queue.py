@@ -292,6 +292,8 @@ def _claim_next() -> dict | None:
                     continue
                 if swarm["status"] in {"paused", "planning"}:
                     continue
+                if task.get("task_kind") in {"reviewer", "challenger"} and swarm["status"] != "reviewing":
+                    continue
                 active = conn.execute(
                     "SELECT COUNT(*) FROM background_tasks WHERE swarm_id=? AND status IN ('running','waiting_for_approval','waiting_for_input')",
                     (swarm_id,),
