@@ -1217,3 +1217,53 @@ Reasons:
 Specialists continue to use the normal `agent_runs` / `agent_events` runtime.
 
 This preserves the important user requirement—full visible/replayable Coordinator activity—without pretending the Coordinator is a worktree-owning coding agent.
+
+
+## 45. Swarm Readiness Preflight
+
+Before presenting a swarm as launchable, clients may call:
+
+```text
+GET /api/projects/{project_id}/swarms/preflight
+```
+
+Query parameters:
+
+```text
+profile_id
+max_agents
+max_concurrency
+```
+
+The preflight is non-destructive. It does not create a swarm, worktree, task or run.
+
+It validates:
+
+- project exists;
+- selected Swarm profile exists;
+- requested agent/concurrency limits are valid;
+- project path is a Git repository;
+- SQLite is using WAL mode;
+- SQLite busy timeout is suitable for parallel local writes;
+- all local Ollama models required by the profile/role mapping are installed.
+
+The response contains:
+
+```json
+{
+  "ready": true,
+  "project_id": 1,
+  "profile_id": 2,
+  "max_agents": 6,
+  "max_concurrency": 3,
+  "checks": [
+    {"name":"sqlite_wal","ok":true,"detail":"journal_mode=wal"},
+    {"name":"sqlite_busy_timeout","ok":true,"detail":"busy_timeout=10000ms"},
+    {"name":"git_repository","ok":true,"detail":"true"},
+    {"name":"ollama_models","ok":true,"detail":"phi4:14b, qwen2.5-coder:7b"},
+    {"name":"swarm_limits","ok":true,"detail":"max_agents=6, max_concurrency=3"}
+  ]
+}
+```
+
+The Interaction Layer may use this endpoint to provide a readiness indicator or explain why a Swarm cannot start without duplicating validation logic in the UI.
