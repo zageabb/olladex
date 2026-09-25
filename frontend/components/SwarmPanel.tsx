@@ -326,8 +326,8 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
           <div><p className="eyebrow">Swarm #{selected.id}</p><h2>{selected.title}</h2><p>{selected.objective}</p></div>
           <div className={styles.controls}>
             <span className={styles.status}>{selected.status}</span>
-            {selected.status==="paused"?<button onClick={()=>action("resume")} disabled={busy}>Resume</button>:!["completed","failed","cancelled"].includes(selected.status)&&<button onClick={()=>action("pause")} disabled={busy}>Pause</button>}
-            {!["completed","failed","cancelled"].includes(selected.status)&&<button onClick={()=>action("stop")} disabled={busy}>Stop</button>}
+            {selected.status==="paused"?<button onClick={()=>action("resume")} disabled={busy}>Resume</button>:["running","reviewing","waiting"].includes(selected.status)&&<button onClick={()=>action("pause")} disabled={busy}>Pause</button>}
+            {!["completed","failed","cancelled","integrating"].includes(selected.status)&&<button onClick={()=>action("stop")} disabled={busy}>Stop</button>}
           </div>
         </header>
 
@@ -335,7 +335,7 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
           <div><i className={styles.dot+" "+(selected.status==="failed"?"failed":selected.status==="completed"?"completed":"running")}/><span><strong>Coordinator</strong><small>{coordinatorProfile?.chat_model||"Project default"} · {selected.status==="reviewing"?"Evaluating verification and review flow":selected.status==="running"?"Monitoring specialists, Blackboard and recovery conditions":selected.status==="paused"?"Paused with swarm":"Coordinator "+selected.status}</small></span></div>
           <b>{selected.status}</b>
         </article>
-        {!["completed","failed","cancelled"].includes(selected.status)&&<form className={styles.coordinatorGuidance} onSubmit={event=>{event.preventDefault();steerCoordinator();}}>
+        {!["completed","failed","cancelled","integrating"].includes(selected.status)&&<form className={styles.coordinatorGuidance} onSubmit={event=>{event.preventDefault();steerCoordinator();}}>
           <input value={coordinatorGuidance} onChange={event=>setCoordinatorGuidance(event.target.value)} placeholder="Guide Coordinator — e.g. prioritise tests; do not change public API"/>
           <button disabled={busy||!coordinatorGuidance.trim()}>Send to Coordinator</button>
         </form>}
