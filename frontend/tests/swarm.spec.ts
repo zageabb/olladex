@@ -52,6 +52,16 @@ test('interaction layer can enable, preflight and start a swarm', async ({ page 
       await json({...body,id:1,dynamic_size:body.dynamic_size?1:0,require_reviewer:body.require_reviewer?1:0,require_challenger:body.require_challenger?1:0});
       return true;
     }
+    if (p === '/api/projects/1/swarms/self-test') {
+      await json({
+        ready:true,
+        models:[
+          {model:'phi4:14b',roles:['coordinator','reviewer'],ok:true,latency_ms:420,response:'OLLADEX_SWARM_OK'},
+          {model:'qwen2.5-coder:7b',roles:['backend','tester'],ok:true,latency_ms:280,response:'OLLADEX_SWARM_OK'}
+        ]
+      });
+      return true;
+    }
     if (p === '/api/projects/1/swarms/preflight') {
       await json({ready:true,project_id:1,profile_id:1,max_agents:5,max_concurrency:3,checks:[
         {name:'sqlite_wal',ok:true,detail:'journal_mode=wal'},
@@ -82,6 +92,12 @@ test('interaction layer can enable, preflight and start a swarm', async ({ page 
   await page.getByRole('combobox', {name:'Coordinator', exact:true}).selectOption('2');
   await page.getByRole('button', {name:'Save Swarm settings'}).click();
   await expect.poll(() => savedCoordinatorProfile).toBe(2);
+
+  await page.getByRole('button', {name:'Test local models'}).click();
+  await expect(page.getByText('phi4:14b')).toBeVisible();
+  await expect(page.getByText(/420 ms/)).toBeVisible();
+  await expect(page.getByText('qwen2.5-coder:7b')).toBeVisible();
+  await expect(page.getByText(/280 ms/)).toBeVisible();
 
   await page.getByPlaceholder('Describe the larger outcome for the Swarm…').fill('Harden authentication');
   await page.getByRole('button', {name:'Preflight & start Swarm'}).click();
