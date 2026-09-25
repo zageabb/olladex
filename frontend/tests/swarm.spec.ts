@@ -225,3 +225,48 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
   await page.getByRole('button', {name:'Create final PR'}).click();
   await expect.poll(() => finalPrCreated).toBe(true);
 });
+
+
+test('interaction agent board can switch between swarm runs', async ({ page }) => {
+  await baseRoutes(page, async (route,url) => {
+    const p=url.pathname;
+    const json=(data:unknown)=>route.fulfill({json:data});
+    if (p === '/api/projects/1/skills/swarm') {
+      await json({project_id:1,skill:'swarm',enabled:true});
+      return true;
+    }
+    if (p === '/api/projects/1/swarms') {
+      await json([
+        {id:7,title:'Current swarm',status:'running',max_agents:5,max_concurrency:3,total_agents_created:1},
+        {id:8,title:'Previous swarm',status:'completed',max_agents:4,max_concurrency:2,total_agents_created:1}
+      ]);
+      return true;
+    }
+    if (p === '/api/swarms/7/board') {
+      await json({
+        swarm:{id:7,title:'Current swarm',status:'running',agents:[{id:71,title:'Current task',status:'running',agent_role:'backend',progress:50}]},
+        summary:{total_agents:1,active_agents:1,completed_agents:0,failed_agents:0,progress:50,max_agents:5,max_concurrency:3,integration_ready:false},
+        events:[],coordinator_events:[],blackboard:[],cursors:{event:0,coordinator_event:0,blackboard:0}
+      });
+      return true;
+    }
+    if (p === '/api/swarms/8/board') {
+      await json({
+        swarm:{id:8,title:'Previous swarm',status:'completed',agents:[{id:81,title:'Historical task',status:'completed',agent_role:'tester',progress:100}]},
+        summary:{total_agents:1,active_agents:0,completed_agents:1,failed_agents:0,progress:100,max_agents:4,max_concurrency:2,integration_ready:false},
+        events:[],coordinator_events:[],blackboard:[],cursors:{event:0,coordinator_event:0,blackboard:0}
+      });
+      return true;
+    }
+    return false;
+  });
+
+  await page.goto('/');
+  await page.locator('.rail').getByRole('button', {name:'Tasks'}).click();
+
+  await expect(page.getByRole('heading', {name:'Current swarm'})).toBeVisible();
+  await page.getByLabel('Run').selectOption('8');
+  await expect(page.getByRole('heading', {name:'Previous swarm'})).toBeVisible();
+  await expect(page.getByText('Historical task')).toBeVisible();
+  await expect(page.getByText(/Swarm #8 · completed · 100% complete/)).toBeVisible();
+});
