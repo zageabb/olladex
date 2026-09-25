@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 import secrets
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from . import __version__
 from .config import settings
