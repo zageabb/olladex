@@ -32,6 +32,7 @@ export function BackgroundTasksPanel({ projectId, onOpenSession }: { projectId: 
   const [prompt, setPrompt] = useState("");
   const [notice, setNotice] = useState("");
   const [busyTask, setBusyTask] = useState<number | null>(null);
+  const [expandedTask, setExpandedTask] = useState<number | null>(null);
 
   useEffect(() => {
     let disposed = false;
@@ -176,15 +177,29 @@ export function BackgroundTasksPanel({ projectId, onOpenSession }: { projectId: 
     finally { setBusyTask(null); }
   }
 
+  function taskPhase(status: BackgroundTask["status"]) {
+    if (status === "queued") return "Planned";
+    if (status === "running") return "Working";
+    if (status === "waiting_for_input") return "Needs input";
+    if (status === "waiting_for_approval") return "Needs approval";
+    if (status === "completed") return "Complete";
+    if (status === "failed") return "Failed";
+    if (status === "cancelled") return "Stopped";
+    if (status === "interrupted") return "Paused";
+    if (status === "budget_exhausted") return "Partial";
+    return status;
+  }
+
   return <div className="task-queue-panel">
-    <section className="queue-compose"><div><p className="eyebrow">Parallel background agents</p><h3>Queue development work</h3><p>Git repositories run queued jobs in isolated task branches and worktrees, so multiple agents can work safely in parallel.</p></div><form onSubmit={enqueue}><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Describe a task Olladex can work through in the background…" /><button className="primary" disabled={!prompt.trim()}>Queue task</button></form></section>
-    <section className="queue-list"><div className="queue-head"><div><p className="eyebrow">Persistent queue</p><h3>{tasks.length} recent tasks</h3></div><span>{tasks.filter((task) => task.status === "queued" || task.status === "running").length} active</span></div>
+    <section className="queue-compose"><div><p className="eyebrow">Tasks</p><h3>Give Olladex something to work on</h3><p>Tasks can run independently in isolated workspaces. Swarm-backed tasks will appear here through the same interface when that execution backend is ready.</p></div><form onSubmit={enqueue}><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Describe a task Olladex can work through in the background…" /><button className="primary" disabled={!prompt.trim()}>Queue task</button></form></section>
+    <section className="queue-list"><div className="queue-head"><div><p className="eyebrow">Unified task view</p><h3>{tasks.length} recent tasks</h3></div><span>{tasks.filter((task) => task.status === "queued" || task.status === "running").length} active</span></div>
       {tasks.length ? tasks.map((task) => {
         const worktree = worktrees[task.id]; const draft = drafts[task.id]; const lifecycle = lifecycles[task.id];
         const prState = lifecycle?.pull_request_state || task.pull_request_state || "";
         const checkState = lifecycle?.checks.overall || "none";
-        return <article key={task.id} className={`queue-task ${task.status}`}>
-          <header><div><strong>{task.title}</strong><small>{task.source_kind === "github_issue" ? "GitHub issue" : "Manual task"} · {new Date(task.created_at).toLocaleString()}</small>{task.worktree_branch && <small>Branch · {task.worktree_branch}</small>}{task.pull_request_number ? <small>PR #{task.pull_request_number} · {prState || "OPEN"}{checkState !== "none" ? ` · checks ${checkState}` : ""}</small> : null}</div><span>{task.cancel_requested && task.status === "running" ? "stopping" : task.status}</span></header>
+        const expanded = expandedTask === task.id;
+        return <article key={task.id} className={`queue-task ${task.status} ${expanded ? "expanded" : ""}`}>
+          <header><div><strong>{task.title}</strong><small>{task.source_kind === "github_issue" ? "GitHub issue" : "Background task"} · {new Date(task.created_at).toLocaleString()}</small>{task.worktree_branch && <small>Branch · {task.worktree_branch}</small>}{task.pull_request_number ? <small>PR #{task.pull_request_number} · {prState || "OPEN"}{checkState !== "none" ? ` · checks ${checkState}` : ""}</small> : null}</div><span>{task.cancel_requested && task.status === "running" ? "Stopping" : taskPhase(task.status)}</span></header>
           <p>{task.prompt}</p>{task.result && <pre>{task.result}</pre>}{task.error && <pre className="queue-error">{task.error}</pre>}
           {task.pull_request_number ? <div className="task-pr-status"><div><strong>PR #{task.pull_request_number}</strong><span className={`pr-state ${prState.toLowerCase()}`}>{prState || "OPEN"}</span><span className={`check-state ${checkState}`}>checks {checkState}</span>{lifecycle?.review_decision ? <span>{lifecycle.review_decision}</span> : null}</div><div><button disabled={busyTask === task.id} onClick={() => syncLifecycle(task)}>Refresh PR</button>{task.pull_request_url ? <button onClick={() => window.open(task.pull_request_url, "_blank", "noopener,noreferrer")}>Open GitHub</button> : null}</div>{lifecycle?.checks.checks.length ? <ul>{lifecycle.checks.checks.slice(0, 8).map((check) => <li key={`${check.name}-${check.state}`}><span>{check.name}</span><b>{check.state}</b></li>)}</ul> : null}{lifecycle?.cleanup_blocked ? <small>{lifecycle.cleanup_blocked}</small> : null}</div> : null}
           {worktree && <details className="activity-card" open><summary><span>⑂</span><div><strong>{worktree.branch}</strong><small>{worktree.changes.length} working changes · base {worktree.base}</small></div><b>⌄</b></summary>
@@ -198,7 +213,19 @@ export function BackgroundTasksPanel({ projectId, onOpenSession }: { projectId: 
             </div>
             {(worktree.working_diff || worktree.branch_diff) ? <pre>{worktree.working_diff || worktree.branch_diff}</pre> : <p>No diff against {worktree.base}.</p>}
           </details>}
-          <footer><button onClick={() => onOpenSession(task.session_id)}>Open session</button>{task.worktree_path && <button onClick={() => inspectWorktree(task)} disabled={busyTask === task.id}>{busyTask === task.id ? "Working…" : worktree ? "Refresh branch" : "Review branch"}</button>}{(["queued", "running", "waiting_for_approval", "waiting_for_input"].includes(task.status)) && <button onClick={() => cancel(task)}>{task.status === "running" ? "Request stop" : "Cancel"}</button>}</footer>
+          {expanded && <section className="task-detail-drawer">
+            <div className="task-detail-grid">
+              <article><span>Phase</span><strong>{taskPhase(task.status)}</strong><small>{task.status.replaceAll("_", " ")}</small></article>
+              <article><span>Conversation</span><strong>Session #{task.session_id}</strong><small>Open the linked conversation to steer or continue.</small></article>
+              <article><span>Workspace</span><strong>{task.worktree_branch || "Project workspace"}</strong><small>{task.worktree_path || "No isolated worktree recorded"}</small></article>
+              <article><span>Verification</span><strong>{checkState === "none" ? "Not reported" : checkState}</strong><small>{lifecycle?.checks.checks.length ? `${lifecycle.checks.checks.length} checks available` : "No linked checks yet"}</small></article>
+            </div>
+            {worktree?.changes?.length ? <div className="task-detail-section"><div><p className="eyebrow">Files changed</p><strong>{worktree.changes.length} files</strong></div><ul>{worktree.changes.slice(0, 12).map(path => <li key={path}>{path}</li>)}</ul></div> : null}
+            {task.pull_request_number ? <div className="task-detail-section"><div><p className="eyebrow">Delivery</p><strong>Pull request #{task.pull_request_number}</strong></div><p>{prState || "OPEN"}{lifecycle?.review_decision ? ` · ${lifecycle.review_decision}` : ""}</p></div> : null}
+            {(task.status === "waiting_for_input" || task.status === "waiting_for_approval") && <div className="task-attention"><strong>{task.status === "waiting_for_input" ? "Needs your input" : "Needs your approval"}</strong><p>Open the linked conversation to resolve this task and continue.</p></div>}
+            <div className="task-detail-actions"><button onClick={() => onOpenSession(task.session_id)}>Open conversation</button>{task.worktree_path && <button onClick={() => inspectWorktree(task)} disabled={busyTask === task.id}>{busyTask === task.id ? "Working…" : worktree ? "Refresh files" : "Inspect files"}</button>}{task.pull_request_url ? <button onClick={() => window.open(task.pull_request_url, "_blank", "noopener,noreferrer")}>Open pull request</button> : null}</div>
+          </section>}
+          <footer><button onClick={() => setExpandedTask(expanded ? null : task.id)}>{expanded ? "Hide details" : "View task"}</button><button onClick={() => onOpenSession(task.session_id)}>Open conversation</button>{task.worktree_path && <button onClick={() => inspectWorktree(task)} disabled={busyTask === task.id}>{busyTask === task.id ? "Working…" : worktree ? "Refresh branch" : "Review branch"}</button>}{(["queued", "running", "waiting_for_approval", "waiting_for_input"].includes(task.status)) && <button onClick={() => cancel(task)}>{task.status === "running" ? "Request stop" : "Cancel"}</button>}</footer>
         </article>;
       }) : <div className="empty-panel"><span>◷</span><h3>No queued work</h3><p>Queue a prompt here or import an open GitHub issue from the Changes panel.</p></div>}
     </section>{notice && <div className="queue-notice">{notice}</div>}

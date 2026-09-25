@@ -96,11 +96,23 @@ export function Conversation({ sessionId, onChanged }: { sessionId: number; onCh
     const last = timeline[timeline.length - 1];
     if (["text_delta", "command_output"].includes(event.kind) && last?.kind === event.kind && last.run_id === event.run_id) {
       last.payload = { text: last.payload.text + event.payload.text };
-    } else if (!["assistant_start", "assistant_end", "status"].includes(event.kind)) timeline.push({ ...event });
+    } else if (!["assistant_start", "assistant_end", "status", "command_output", "tool_started", "tool_result"].includes(event.kind)) timeline.push({ ...event });
   }
   const decided = new Set(events.filter(e => e.kind === "approval_decided").map(e => e.payload.command_run_id));
+  const activityEvents = [...events]
+    .filter(event => ["command_output", "tool_started", "tool_result"].includes(event.kind))
+    .sort((a, b) => a.id - b.id);
+  const currentEvents = current ? events.filter(event => event.run_id === current.id) : [];
+  const taskPhase = current?.status === "waiting_for_approval" ? "Needs approval"
+    : current?.status === "waiting_for_input" ? "Needs input"
+    : current?.status === "stopping" ? "Stopping"
+    : current?.status === "running" && currentEvents.some(event => event.kind === "tool_started") ? "Working"
+    : current?.status === "running" ? "Thinking"
+    : current?.status === "completed" ? "Complete"
+    : current?.status ? current.status.replaceAll("_", " ") : "";
+
   return <>
-    <details className="conversation-memory"><summary>Saved preferences and decisions</summary><textarea aria-label="Saved preferences and decisions" value={memory} onChange={e => setMemory(e.target.value)} maxLength={8000} /><button onClick={() => act(`/sessions/${sessionId}/memory`, { content: memory }, "PUT")}>Save context</button></details>
+    <details className="conversation-memory"><summary>Conversation memory</summary><textarea aria-label="Saved preferences and decisions" value={memory} onChange={e => setMemory(e.target.value)} maxLength={8000} /><button onClick={() => act(`/sessions/${sessionId}/memory`, { content: memory }, "PUT")}>Save context</button></details>
     <div className="messages live-messages" role="log" aria-label="Conversation" onScroll={e => {
       const el = e.currentTarget; following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
     }}>
@@ -113,9 +125,6 @@ export function Conversation({ sessionId, onChanged }: { sessionId: number; onCh
           return <article key={event.id} className="message assistant"><div className="bubble">{p.content}</div></article>;
         }
         if (event.kind === "text_delta" || event.kind === "user_message") return <article key={event.id} className={`message ${event.kind === "user_message" ? "user" : "assistant"}`}><div className="message-avatar">{event.kind === "user_message" ? "You" : "O"}</div><div className="bubble">{p.text || p.content}</div></article>;
-        if (event.kind === "command_output") return <pre key={event.id} className="live-command-output">{p.text}</pre>;
-        if (event.kind === "tool_started") return <div key={event.id} className="live-progress">{p.tool.replaceAll("_", " ")} {p.arguments?.path || ""}</div>;
-        if (event.kind === "tool_result") return <details key={event.id} className="activity-card"><summary>{p.summary}</summary><pre>{JSON.stringify(p.result, null, 2)}</pre></details>;
         if (event.kind === "change_approval") return <section key={event.id} className="interaction-card"><strong>Review {p.path}</strong><pre>{p.diff}</pre>{current?.id === event.run_id && active && !events.some(e => e.kind === "tool_result" && e.payload.result?.change_id === p.change_id) && <div><button onClick={() => act(`/projects/${p.project_id}/changes/${p.change_id}/apply`, {})}>Apply change</button><button onClick={() => act(`/projects/${p.project_id}/changes/${p.change_id}/reject`)}>Reject</button></div>}</section>;
         if (event.kind === "approval") return <section key={event.id} className="interaction-card"><strong>Command approval</strong><pre>{p.command}</pre><small>Working directory: {p.cwd}</small>{!decided.has(p.command_run_id) && current?.id === event.run_id && active ? <div><button onClick={() => act(`/commands/${p.command_run_id}/decision`, { accepted: true })}>Approve once</button><button onClick={() => act(`/commands/${p.command_run_id}/decision`, { accepted: false })}>Decline</button></div> : <p>Approval closed</p>}</section>;
         if (event.kind === "question") return <section key={event.id} className="interaction-card"><strong>{p.question}</strong>{current?.id === event.run_id && current.status === "waiting_for_input" && <p>Reply below to continue.</p>}</section>;
@@ -125,11 +134,26 @@ export function Conversation({ sessionId, onChanged }: { sessionId: number; onCh
         if (event.kind === "progress") return <p key={event.id} className="live-progress">{p.message}</p>;
         return null;
       })}
-      {current && <div className="run-status" role="status">{current.status.replaceAll("_", " ")}</div>}
+      {activityEvents.length > 0 && <details className="conversation-activity">
+        <summary><span>Activity</span><small>{activityEvents.length} technical events</small></summary>
+        <div className="conversation-activity-list">
+          {activityEvents.map(event => {
+            const p = event.payload;
+            if (event.kind === "command_output") return <pre key={event.id} className="live-command-output">{p.text}</pre>;
+            if (event.kind === "tool_started") return <div key={event.id} className="activity-line"><span>●</span><div><strong>{p.tool.replaceAll("_", " ")}</strong><small>{p.arguments?.path || "Working with project context"}</small></div></div>;
+            return <details key={event.id} className="activity-card"><summary>{p.summary || "Tool result"}</summary><pre>{JSON.stringify(p.result, null, 2)}</pre></details>;
+          })}
+        </div>
+      </details>}
+      {current && <section className={`task-status-card ${active ? "active" : ""}`} role="status">
+        <div className="task-status-icon">{active ? "●" : current.status === "completed" ? "✓" : "○"}</div>
+        <div className="task-status-copy"><strong>{active ? "Olladex is working" : "Task status"}</strong><small>{taskPhase}</small></div>
+        {active && <span>You can keep chatting</span>}
+      </section>}
       {current && ["interrupted", "cancelled", "budget_exhausted", "failed"].includes(current.status) && <section className="interaction-card"><p>Completed work is retained. Review the activity before continuing; an interrupted command may have changed files.</p><button onClick={() => act(`/sessions/${sessionId}/runs`, { content: "Continue the task. Inspect saved work and uncertain command outcomes before making further changes.", resume_id: current.id })}>Continue from saved context</button></section>}
       <div ref={tail} />
     </div>
     {error && <p className="conversation-error" role="alert">{error}</p>}
-    <form className="composer" onSubmit={send}><textarea aria-label="Message Olladex" value={prompt} onChange={e => setPrompt(e.target.value)} placeholder={active ? "Add guidance, ask a question, or answer below…" : "Discuss an idea or ask Olladex to work on it…"} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} /><div className="composer-actions"><span>{active ? "Your message will be read at the next safe boundary" : "Local conversation · reviewable changes"}</span>{active && <button type="button" onClick={() => act(`/runs/${current.id}`, undefined, "DELETE")}>Stop</button>}<button className="primary" disabled={!prompt.trim() || sending || !ready}>{active ? current.status === "waiting_for_input" ? "Reply" : "Send guidance" : "Send"}</button></div></form>
+    <form className="composer" onSubmit={send}><textarea aria-label="Message Olladex" value={prompt} onChange={e => setPrompt(e.target.value)} placeholder={active ? "Keep chatting — add guidance or change direction…" : "Ask Olladex anything…"} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} /><div className="composer-actions"><span>{active ? "Olladex is working · you can keep chatting" : "Local conversation · reviewable changes"}</span>{active && <button type="button" onClick={() => act(`/runs/${current.id}`, undefined, "DELETE")}>Stop</button>}<button className="primary" disabled={!prompt.trim() || sending || !ready}>{active ? current.status === "waiting_for_input" ? "Reply" : "Send" : "Send"}</button></div></form>
   </>;
 }
