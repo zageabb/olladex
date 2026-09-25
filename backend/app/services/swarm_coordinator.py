@@ -75,7 +75,7 @@ def _reconcile(swarm_id: int) -> None:
     reviewer = next((item for item in agents if item.get("task_kind") == "reviewer"), None)
     challenger = next((item for item in agents if item.get("task_kind") == "challenger"), None)
 
-    failed = [item for item in specialists if item.get("status") in {"failed", "budget_exhausted"}]
+    failed = [item for item in specialists if item.get("status") in {"failed", "budget_exhausted", "interrupted"}]
     active = [item for item in specialists if item.get("status") in {"queued", "running", "waiting_for_input", "waiting_for_approval"}]
     completed = [item for item in specialists if item.get("status") == "completed"]
 
