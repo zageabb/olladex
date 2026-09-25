@@ -122,7 +122,7 @@ test('swarm board shows coordinator timeline and advances incremental polling cu
 
   await page.getByRole('button', {name:'Open agent'}).first().click();
   await expect(page.getByRole('heading', {name:'Changed files'})).toBeVisible();
-  await expect(page.getByText('backend/app/auth.py')).toBeVisible();
+  await expect(page.getByText('backend/app/auth.py', {exact:true})).toBeVisible();
   await expect(page.getByRole('heading', {name:'Commands'})).toBeVisible();
   await expect(page.getByText('pytest backend/tests/test_auth.py')).toBeVisible();
   await expect(page.getByRole('heading', {name:'Findings & hand-offs'})).toBeVisible();
