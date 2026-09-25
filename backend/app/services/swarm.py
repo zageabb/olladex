@@ -550,6 +550,10 @@ def board_snapshot(
             for agent in agent_items
         ) / len(agent_items))
 
+    tool_usage_total = sum(int(agent.get("tool_usage") or 0) for agent in agent_items)
+    tool_budget_per_agent = max((int(agent.get("tool_budget") or 0) for agent in agent_items), default=0)
+    tool_budget_capacity = int(run.get("max_agents") or 0) * tool_budget_per_agent if tool_budget_per_agent else 0
+
     integration_ready = bool(
         run.get("status") == "completed"
         and any(
@@ -574,6 +578,9 @@ def board_snapshot(
             "completed_agents": complete,
             "failed_agents": failed,
             "progress": overall_progress,
+            "tool_usage": tool_usage_total,
+            "tool_budget_capacity": tool_budget_capacity,
+            "coordinator_budget": run.get("coordinator_budget") or {"used": 0, "budget": 0, "remaining": 0},
             "integration_ready": integration_ready,
         },
         "events": agent_events,
