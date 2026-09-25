@@ -919,3 +919,6 @@ button.primary:hover { background: var(--blue-2); }
 .agent-board-integration details{margin:0 9px 9px}
 .agent-board-integration pre{max-height:220px;overflow:auto;margin:6px 0 0;padding:8px;background:#101b2e;color:#dbe7f5;border-radius:7px;font-size:8px;white-space:pre-wrap}
 @media(max-width:1050px){.agent-board-integration-actions{grid-template-columns:1fr 1fr}.agent-board-integration-actions label{grid-column:1/-1}}
+
+.agent-board-run-select{margin-top:7px;display:flex;align-items:center;gap:6px;color:#748297;font-size:8px;font-weight:700;text-transform:uppercase}
+.agent-board-run-select select{max-width:260px;padding:5px 7px;border:1px solid #dfe6ef;border-radius:7px;background:#fff;color:var(--ink);font-size:8px;text-transform:none}
