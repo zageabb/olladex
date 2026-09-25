@@ -338,7 +338,11 @@ def _swarm_integration_branches(swarm_id: int, task_ids: list[int]) -> tuple[dic
             raise HTTPException(409, str(exc)) from exc
         if summary.get("changes"):
             raise HTTPException(409, f"Task #{task_id} still has uncommitted changes")
-        if branch not in branches:
+        try:
+            changed = integration.changed_files(project, branch)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        if changed and branch not in branches:
             branches.append(branch)
     if not branches:
         raise HTTPException(409, "Select at least one completed specialist task")
@@ -357,8 +361,8 @@ def swarm_integration_preflight(swarm_id: int, body: SwarmIntegrationSelectionRe
 @router.post("/swarms/{swarm_id}/integration")
 def create_swarm_integration(swarm_id: int, body: SwarmIntegrationSelectionRequest):
     run, project, branches = _swarm_integration_branches(swarm_id, body.task_ids)
-    if run["status"] not in {"completed", "reviewing", "integrating"}:
-        raise HTTPException(409, "Swarm must reach verification before integration")
+    if run["status"] != "completed":
+        raise HTTPException(409, "Swarm final verification must complete before integration")
     try:
         result = integration.create(project, swarm_id, branches, body.base, namespace="swarm")
     except ValueError as exc:
