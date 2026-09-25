@@ -288,6 +288,14 @@ def steer_swarm_coordinator(swarm_id: int, body: AgentInputRequest):
         raise HTTPException(409, str(exc)) from exc
 
 
+@router.post("/swarms/{swarm_id}/broadcast")
+def broadcast_swarm_guidance(swarm_id: int, body: AgentInputRequest):
+    try:
+        return swarm_service.broadcast_guidance(swarm_id, body.content)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 @router.post("/swarms/{swarm_id}/pause")
 def pause_swarm(swarm_id: int):
     try:
