@@ -173,7 +173,7 @@ def create_swarm(project_id: int, body: SwarmCreateRequest):
         coordinator_profile_id, coordinator_model = swarm_service.coordinator_model(profile)
         planning_project = dict(project)
         planning_project["profile_chat_model"] = coordinator_model or project.get("profile_chat_model")
-        plan = orchestration_service.decompose(planning_project, body.objective, specialist_budget)
+        plan = orchestration_service.decompose(planning_project, body.objective, specialist_budget, swarm_mode=True)
 
         child_ids: list[int] = []
         created: list[dict] = []
