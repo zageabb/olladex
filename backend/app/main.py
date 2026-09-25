@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 import secrets
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from . import __version__
 from .config import settings
@@ -154,6 +155,73 @@ def update_project_settings(project_id: int, body: ProjectSettingsRequest):
         conn.execute(f"UPDATE projects SET {assignments} WHERE id=?", (*updates.values(), project_id))
     return get_project(project_id)
 
+
+
+class WorkspaceCreate(BaseModel):
+    name: str
+    description: str = ""
+
+class WorkspaceMembership(BaseModel):
+    project_id: int
+
+@app.get("/api/workspaces")
+def list_workspaces():
+    with connect() as conn:
+        items = rows(conn.execute("SELECT * FROM workspaces ORDER BY name"))
+        for item in items:
+            item["projects"] = rows(conn.execute(
+                "SELECT p.id,p.name,p.path FROM workspace_projects wp JOIN projects p ON p.id=wp.project_id WHERE wp.workspace_id=? ORDER BY p.name",
+                (item["id"],),
+            ))
+    return items
+
+@app.post("/api/workspaces")
+def create_workspace(body: WorkspaceCreate):
+    stamp = now()
+    try:
+        with connect() as conn:
+            cursor = conn.execute(
+                "INSERT INTO workspaces(name,description,created_at,updated_at) VALUES(?,?,?,?)",
+                (body.name.strip(), body.description.strip(), stamp, stamp),
+            )
+            workspace_id = cursor.lastrowid
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(409, "A workspace with that name already exists") from exc
+    with connect() as conn:
+        return dict(conn.execute("SELECT * FROM workspaces WHERE id=?", (workspace_id,)).fetchone())
+
+@app.post("/api/workspaces/{workspace_id}/projects")
+def add_project_to_workspace(workspace_id: int, body: WorkspaceMembership):
+    stamp = now()
+    with connect() as conn:
+        if not conn.execute("SELECT id FROM workspaces WHERE id=?", (workspace_id,)).fetchone():
+            raise HTTPException(404, "Workspace not found")
+        if not conn.execute("SELECT id FROM projects WHERE id=?", (body.project_id,)).fetchone():
+            raise HTTPException(404, "Project not found")
+        existing = conn.execute("SELECT workspace_id FROM workspace_projects WHERE project_id=?", (body.project_id,)).fetchone()
+        if existing and existing["workspace_id"] != workspace_id:
+            raise HTTPException(409, "Project already belongs to another workspace")
+        conn.execute(
+            "INSERT OR IGNORE INTO workspace_projects(workspace_id,project_id,created_at) VALUES(?,?,?)",
+            (workspace_id, body.project_id, stamp),
+        )
+    return {"workspace_id": workspace_id, "project_id": body.project_id}
+
+@app.delete("/api/workspaces/{workspace_id}/projects/{project_id}")
+def remove_project_from_workspace(workspace_id: int, project_id: int):
+    with connect() as conn:
+        conn.execute("DELETE FROM workspace_projects WHERE workspace_id=? AND project_id=?", (workspace_id, project_id))
+    return {"workspace_id": workspace_id, "project_id": project_id, "status": "removed"}
+
+@app.get("/api/projects/{project_id}/workspace")
+def project_workspace(project_id: int):
+    get_project(project_id)
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT w.* FROM workspace_projects wp JOIN workspaces w ON w.id=wp.workspace_id WHERE wp.project_id=?",
+            (project_id,),
+        ).fetchone()
+    return dict(row) if row else None
 
 @app.get("/api/model-profiles")
 def model_profiles():
@@ -360,9 +428,26 @@ def run_session_agent(session_id: int, content: str) -> dict:
             conn.execute("UPDATE sessions SET title=? WHERE id=?", (title, session_id))
         conn.execute("INSERT INTO messages(session_id,role,content,created_at,run_id) VALUES(?,?,?,?,?)", (session_id, "user", content, now(), conversation_runtime.current_id()))
     project = get_project(session["project_id"])
+    with connect() as conn:
+        personal_row = conn.execute("SELECT content FROM memory_scopes WHERE scope='personal' AND scope_key='default'").fetchone()
+        project_row = conn.execute("SELECT content FROM memory_scopes WHERE scope='project' AND scope_key=?", (str(session["project_id"]),)).fetchone()
+        workspace_row = conn.execute(
+            "SELECT ms.content FROM workspace_projects wp JOIN memory_scopes ms ON ms.scope='workspace' AND ms.scope_key=CAST(wp.workspace_id AS TEXT) WHERE wp.project_id=?",
+            (session["project_id"],),
+        ).fetchone()
+    scoped_memory = []
+    if personal_row and personal_row["content"].strip():
+        scoped_memory.append("Personal memory:\n" + personal_row["content"].strip())
+    if workspace_row and workspace_row["content"].strip():
+        scoped_memory.append("Workspace memory:\n" + workspace_row["content"].strip())
+    if project_row and project_row["content"].strip():
+        scoped_memory.append("Project memory:\n" + project_row["content"].strip())
+    if session["memory"]:
+        scoped_memory.append("Conversation memory:\n" + session["memory"])
+    memory_context = "\n\n".join(scoped_memory)
     from .services import conversation_runtime
     conversation_runtime._local.session_id = session_id
-    answer, activities = ollama.chat(project, [*history, {"role": "user", "content": content}], session_summary=(session["summary"] or "") + "\n\nUser-managed preferences and decisions:\n" + (session["memory"] or ""))
+    answer, activities = ollama.chat(project, [*history, {"role": "user", "content": content}], session_summary=(session["summary"] or "") + ("\n\n" + memory_context if memory_context else ""))
     for activity in activities:
         if not activity.pop("_persisted", False):
             persist_activity(project, session_id, activity)
