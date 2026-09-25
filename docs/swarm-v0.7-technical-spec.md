@@ -1157,3 +1157,45 @@ Defer:
 **Swarm should orchestrate existing Olladex agents, event streams, task queues and worktrees rather than create a second execution architecture.**
 
 That keeps the feature understandable, recoverable and maintainable while turning Olladex into a visible, controllable local multi-agent software-engineering environment.
+
+
+## 43. Interaction Layer Integration Contract
+
+The parallel Interaction Layer branch should treat Swarm execution as a backend capability and consume stable Swarm APIs rather than reimplement orchestration logic in the UI.
+
+Preferred board endpoint:
+
+```text
+GET /api/swarms/{swarm_id}/board
+```
+
+Cursor parameters:
+
+```text
+after_event
+after_coordinator_event
+after_blackboard
+limit
+```
+
+The response contains:
+
+- `swarm`: durable Swarm state and agent list;
+- `summary`: total/active/completed/failed counts, concurrency, overall progress and integration readiness;
+- `events`: incremental agent events;
+- `coordinator_events`: incremental Coordinator decisions/status/budget events;
+- `blackboard`: incremental shared knowledge entries.
+
+The Interaction Layer should own presentation of this data. The Swarm backend remains responsible for:
+
+- model/profile resolution;
+- agent spawning and concurrency;
+- dependency handling;
+- worktree isolation;
+- Blackboard persistence;
+- Coordinator decisions and budgets;
+- recovery/follow-up/helper agents;
+- review gating;
+- integration readiness and integration execution.
+
+This separation is intentional so the Interaction Layer can evolve independently without creating a second orchestration implementation.
