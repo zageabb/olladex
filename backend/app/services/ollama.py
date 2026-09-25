@@ -320,7 +320,7 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
             runtime.checkpoint(messages)
             runtime.emit("assistant_start", {})
             message = _stream_chat(http, {
-                "model": model or project.get("profile_chat_model") or project.get("model") or settings.ollama_model,
+                "model": model or task_queue.current_assigned_model() or project.get("profile_chat_model") or project.get("model") or settings.ollama_model,
                 "messages": messages,
                 "tools": TOOLS,
                 "options": {"num_ctx": context_tokens, "temperature": project.get("profile_temperature") if project.get("profile_temperature") is not None else 0.2},
