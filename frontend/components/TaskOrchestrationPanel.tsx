@@ -13,6 +13,12 @@ type LeadDraft = { title:string; objective:string; maxTasks:number };
 type LeadResponse = { lead:Node; specialists:unknown[]; reviewer:unknown; plan:{title:string;role:string;prompt:string;depends_on:number[]}[] };
 type IntegrationState = { lead_task_id:number; path:string; branch:string; base:string; diff?:string; changes?:string[]; check_command?:string; check_status?:string; check_output?:string; pull_request_number?:number; pull_request_url?:string; pull_request_state?:string };
 type IntegrationPreflight = { lead_task_id:number; task_ids:number[]; base:string; branches:string[]; files_by_branch:Record<string,string[]>; overlaps:{path:string;branches:string[]}[] };
+type SwarmListItem = { id:number; title:string; status:string; max_agents:number; max_concurrency:number; total_agents_created:number };
+type SwarmAgent = { id:number; title:string; status:string; agent_role:string; progress?:number; assigned_model?:string; current_activity?:string };
+type SwarmBoard = {
+  swarm:{ id:number; title:string; status:string; agents?:SwarmAgent[] };
+  summary:{ total_agents:number; active_agents:number; completed_agents:number; failed_agents:number; progress:number; max_agents:number; max_concurrency:number; integration_ready:boolean };
+};
 
 export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:number; onCreated:()=>void }) {
   const [graph,setGraph]=useState<Graph>({project_id:projectId,nodes:[]});
@@ -29,9 +35,24 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
   const [prBody,setPrBody]=useState("Integrated and validated by Olladex multi-agent orchestration.");
   const [notice,setNotice]=useState("");
   const [busy,setBusy]=useState(false);
+  const [swarmBoard,setSwarmBoard]=useState<SwarmBoard|null>(null);
 
   useEffect(()=>{ load(); const timer=window.setInterval(load,3000); return()=>window.clearInterval(timer); },[projectId]);
-  async function load(){ try{ setGraph(await request<Graph>(`/projects/${projectId}/orchestration`)); }catch(error){ setNotice(error instanceof Error?error.message:String(error)); } }
+  async function load(){
+    try{
+      const [nextGraph,swarmRuns]=await Promise.all([
+        request<Graph>(`/projects/${projectId}/orchestration`),
+        request<SwarmListItem[]>(`/projects/${projectId}/swarms`)
+      ]);
+      setGraph(nextGraph);
+      const selectedSwarm=swarmRuns.find(item=>!["completed","failed","cancelled"].includes(item.status))||swarmRuns[0];
+      if(selectedSwarm){
+        setSwarmBoard(await request<SwarmBoard>(`/swarms/${selectedSwarm.id}/board?limit=40`));
+      }else{
+        setSwarmBoard(null);
+      }
+    }catch(error){ setNotice(error instanceof Error?error.message:String(error)); }
+  }
 
   const roots=useMemo(()=>graph.nodes.filter(node=>!node.parent_task_id),[graph.nodes]);
   const byId=useMemo(()=>new Map(graph.nodes.map(node=>[node.id,node])),[graph.nodes]);
@@ -53,12 +74,16 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
 
   const activeAgents=graph.nodes.filter(node=>["running","coordinating","queued"].includes(node.status));
   const completedAgents=graph.nodes.filter(node=>node.status==="completed");
+  const boardAgents=swarmBoard?.swarm.agents||[];
+  const boardTotal=swarmBoard?swarmBoard.summary.total_agents:graph.nodes.length;
+  const boardActive=swarmBoard?swarmBoard.summary.active_agents:activeAgents.length;
+  const boardCompleted=swarmBoard?swarmBoard.summary.completed_agents:completedAgents.length;
 
   return <section className={styles.panel}>
     <section className="agent-board-shell">
-      <div><p className="eyebrow">Agent board</p><h3>Under the hood</h3><p>Normal tasks stay simple. Expand this view when you want to inspect specialist agents, roles and execution state.</p></div>
-      <div className="agent-board-metrics"><span><strong>{graph.nodes.length}</strong> agents</span><span><strong>{activeAgents.length}</strong> active</span><span><strong>{completedAgents.length}</strong> complete</span></div>
-      <div className="agent-board-preview">{graph.nodes.length?graph.nodes.slice(0,8).map(node=><article key={node.id}><span className={`agent-dot ${node.status}`}>●</span><div><strong>{node.title}</strong><small>{node.agent_role} · {node.status.replaceAll("_"," ")}</small></div></article>):<p>No specialist agents yet. Swarm-backed tasks will appear here through the same board.</p>}</div>
+      <div><p className="eyebrow">Agent board</p><h3>{swarmBoard?swarmBoard.swarm.title:"Under the hood"}</h3><p>{swarmBoard?`Swarm #${swarmBoard.swarm.id} · ${swarmBoard.swarm.status.replaceAll("_"," ")} · ${swarmBoard.summary.progress}% complete`:"Normal tasks stay simple. Expand this view when you want to inspect specialist agents, roles and execution state."}</p></div>
+      <div className="agent-board-metrics"><span><strong>{boardTotal}</strong> agents</span><span><strong>{boardActive}</strong> active</span><span><strong>{boardCompleted}</strong> complete</span></div>
+      <div className="agent-board-preview">{swarmBoard&&boardAgents.length?boardAgents.slice(0,8).map(agent=><article key={agent.id}><span className={`agent-dot ${agent.status}`}>●</span><div><strong>{agent.title}</strong><small>{agent.agent_role} · {agent.status.replaceAll("_"," ")}{typeof agent.progress==="number"?` · ${agent.progress}%`:""}</small></div></article>):graph.nodes.length?graph.nodes.slice(0,8).map(node=><article key={node.id}><span className={`agent-dot ${node.status}`}>●</span><div><strong>{node.title}</strong><small>{node.agent_role} · {node.status.replaceAll("_"," ")}</small></div></article>):<p>No specialist agents yet. Swarm-backed tasks will appear here through the same board.</p>}</div>
     </section>
     <div className={styles.hero}><div><p className="eyebrow">Advanced orchestration</p><h3>Coordinate larger work</h3><p>Start with one objective. Olladex breaks it into specialist tasks, waits for dependencies, then gives you a review and integration path.</p></div><span className={styles.count}>{graph.nodes.length} tasks</span></div>
 
