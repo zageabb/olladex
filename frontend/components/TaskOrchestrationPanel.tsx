@@ -19,6 +19,8 @@ type SwarmAgentDetail = { task:SwarmAgent; commands:{id:number;command:string;ou
 type SwarmBoard = {
   swarm:{ id:number; title:string; status:string; agents?:SwarmAgent[]; coordinator_activity?:{category:string;content:string}|null; coordinator_budget?:{used:number;budget:number;remaining:number} };
   summary:{ total_agents:number; active_agents:number; completed_agents:number; failed_agents:number; progress:number; max_agents:number; max_concurrency:number; integration_ready:boolean };
+  coordinator_events?:{id:number;kind:string;payload:Record<string,unknown>;created_at:string}[];
+  blackboard?:{id:number;task_id?:number|null;category:string;content:string;key?:string;created_at:string}[];
 };
 type SwarmSkill = { project_id:number; skill:"swarm"; enabled:boolean };
 type SwarmProfile = { id:number; name:string; max_agents:number; max_concurrency:number; require_reviewer:number; require_challenger:number };
@@ -210,7 +212,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
   return <section className={styles.panel}>
     <section className="agent-board-shell">
       <div><p className="eyebrow">Agent board</p><h3>{swarmBoard?swarmBoard.swarm.title:"Under the hood"}</h3><p>{swarmBoard?`Swarm #${swarmBoard.swarm.id} · ${swarmBoard.swarm.status.replaceAll("_"," ")} · ${swarmBoard.summary.progress}% complete`:"Normal tasks stay simple. Expand this view when you want to inspect specialist agents, roles and execution state."}</p></div>
-      <div className="agent-board-metrics"><span><strong>{boardTotal}</strong> agents</span><span><strong>{boardActive}</strong> active</span><span><strong>{boardCompleted}</strong> complete</span></div>
+      <div className="agent-board-metrics"><span><strong>{boardTotal}</strong> agents</span><span><strong>{boardActive}</strong> active</span><span><strong>{boardCompleted}</strong> complete</span>{swarmBoard?.summary.integration_ready&&<span><strong>✓</strong> integrate</span>}</div>
       {swarmBoard&&<>
         <article className="agent-board-coordinator"><span className={`agent-dot ${swarmBoard.swarm.status}`}>●</span><div><strong>Coordinator</strong><small>budget {swarmBoard.swarm.coordinator_budget?.used||0}/{swarmBoard.swarm.coordinator_budget?.budget||0} · {swarmBoard.swarm.coordinator_activity?.content||"Monitoring specialist progress and dependencies"}</small></div><div className="agent-board-control-actions">{swarmBoard.swarm.status==="paused"?<button type="button" onClick={()=>swarmAction("resume")} disabled={busy}>Resume</button>:["running","reviewing","waiting"].includes(swarmBoard.swarm.status)&&<button type="button" onClick={()=>swarmAction("pause")} disabled={busy}>Pause</button>}{!["completed","failed","cancelled"].includes(swarmBoard.swarm.status)&&<button type="button" onClick={()=>swarmAction("stop")} disabled={busy}>Stop</button>}</div></article>
         {!["completed","failed","cancelled"].includes(swarmBoard.swarm.status)&&<form className="agent-board-guidance" onSubmit={event=>{event.preventDefault();sendSwarmGuidance(false);}}><input value={swarmGuidance} onChange={event=>setSwarmGuidance(event.target.value)} placeholder="Guide the Swarm…"/><button disabled={busy||!swarmGuidance.trim()}>Coordinator</button><button type="button" onClick={()=>sendSwarmGuidance(true)} disabled={busy||!swarmGuidance.trim()}>Apply to all</button></form>}
@@ -225,6 +227,10 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
           <article><strong>Findings</strong>{selectedSwarmAgent.blackboard.length?<ul>{selectedSwarmAgent.blackboard.slice().reverse().slice(0,8).map(item=><li key={item.id}><b>{item.category}</b> {item.content}</li>)}</ul>:<p>No task-specific Blackboard entries yet.</p>}</article>
         </div>
       </section>}
+      {swarmBoard&&<div className="agent-board-observability">
+        <details><summary>Coordinator timeline · {swarmBoard.coordinator_events?.length||0}</summary><div>{swarmBoard.coordinator_events?.length?swarmBoard.coordinator_events.slice().reverse().slice(0,12).map(item=><article key={item.id}><b>{item.kind.replaceAll("_"," ")}</b><span>{coordinatorPayloadText(item.payload)}</span></article>):<p>No Coordinator events yet.</p>}</div></details>
+        <details><summary>Blackboard · {swarmBoard.blackboard?.length||0}</summary><div>{swarmBoard.blackboard?.length?swarmBoard.blackboard.slice().reverse().slice(0,12).map(item=><article key={item.id}><b>{item.category}</b><span>{item.content}</span>{item.task_id?<small>Agent #{item.task_id}</small>:<small>Coordinator</small>}</article>):<p>No shared knowledge yet.</p>}</div></details>
+      </div>}
     </section>
     <details className={styles.advanced}>
       <summary>Swarm controls · {swarmSkill?.enabled?"enabled":"disabled"}</summary>
@@ -267,4 +273,13 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
 
     {notice&&<div className={styles.notice}>{notice}</div>}
   </section>;
+}
+
+
+function coordinatorPayloadText(payload:Record<string,unknown>){
+  for(const key of ["content","reason","status","title","purpose"]){
+    const value=payload[key];
+    if(typeof value==="string"&&value.trim())return value;
+  }
+  return "Coordinator event";
 }
