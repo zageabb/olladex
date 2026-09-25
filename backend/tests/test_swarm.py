@@ -325,3 +325,32 @@ def test_coordinator_can_add_followup_for_blackboard_risk(tmp_path, monkeypatch)
     assert followup["agent_role"] == "tester"
     assert followup["id"] in deps
     assert reviewer_row["status"] == "queued"
+
+
+def test_task_role_profile_runtime_settings_are_exposed(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id)
+    with connect() as conn:
+        profile = conn.execute("SELECT * FROM model_profiles WHERE name='Fast review'").fetchone()
+        profile_id = int(profile["id"])
+    task = task_queue.enqueue(
+        project_id,
+        session_id,
+        "Profiled agent",
+        "work",
+        swarm_id=swarm_id,
+        model_profile_id=profile_id,
+        assigned_model=profile["chat_model"],
+        source_kind="swarm_specialist",
+    )
+
+    task_queue._local.task_id = task["id"]
+    try:
+        runtime = task_queue.current_model_settings()
+    finally:
+        task_queue._local.task_id = None
+
+    assert runtime["chat_model"] == profile["chat_model"]
+    assert runtime["temperature"] == profile["temperature"]
+    assert runtime["context_files"] == profile["context_files"]
+    assert runtime["agent_tool_budget"] > 0
