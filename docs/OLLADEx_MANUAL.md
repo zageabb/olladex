@@ -81,6 +81,7 @@ The navigation rail provides the principal work areas:
 | **Diagrams** | Mermaid and Graphviz/DOT editor and SVG preview/export. |
 | **Office** | Inspect Office/PDF files and create basic DOCX/XLSX/PPTX files. |
 | **Queue** | Persistent background tasks and multi-agent orchestration. |
+| **Swarm** | Optional local multi-agent Swarm board, Coordinator, role models, live activity and integration workflow. Available on `feature/swarm-v0.7` until merged. |
 | **Project** | Ollama, project, model profile, approval, Git identity, context and repository intelligence settings. |
 
 ### 3.3 Project and chat sidebar
@@ -551,7 +552,50 @@ olladex/integration-<lead-task-id>
 
 Conflict-safe cherry-pick integration aborts instead of modifying `main` when a conflict cannot be safely applied.
 
+### 14.7 Swarm skill — feature branch
+
+The `feature/swarm-v0.7` branch adds an optional **Swarm** workspace above the lower-level Queue/Orchestration controls.
+
+Use it when one larger objective benefits from several local specialist agents.
+
+1. open **Swarm** from the left rail;
+2. enable the Swarm skill for the selected project;
+3. choose a Swarm preset;
+4. set the maximum agent count and concurrency;
+5. optionally expand **Role model settings** and assign local Olladex model profiles to Coordinator, backend/coder, tester, researcher, reviewer and challenger roles;
+6. enter the objective and start the Swarm;
+7. use the Agent Board to watch task state, assigned model, worktree branch, latest activity and dependency graph;
+8. open an agent for its detailed event timeline and to send guidance;
+9. use **Send to Coordinator** for constraints that should affect later replanning/recovery;
+10. inspect the Blackboard for findings, decisions, risks and hand-offs;
+11. after verification completes, select completed implementation branches and run integration preflight;
+12. create the Swarm integration worktree, run combined checks, then push and create the final PR when appropriate.
+
+Swarm execution remains local to the configured Ollama server. Swarm model assignments are validated before the run begins.
+
+Maximum agents and maximum concurrency are separate settings. The global Olladex task-worker pool can still impose a lower machine-wide concurrency ceiling.
+
+The Swarm Coordinator can:
+
+- monitor specialist state;
+- preserve explicit dependency ordering;
+- recover from failed/interrupted specialists when capacity remains;
+- inspect Blackboard risks before final review;
+- add one bounded follow-up specialist when justified;
+- keep challenger before reviewer;
+- preserve user guidance across later decisions.
+
+Each specialist works in an isolated task worktree. Important plans, tool activity, findings, decisions, risks and final hand-offs are visible on the board; Olladex does not expose or depend on raw hidden model chain-of-thought.
+
+Swarm integration branches use a separate namespace:
+
+```text
+olladex/integration-swarm-<swarm-id>
+```
+
 ---
+
+
 
 ## 15. Project settings
 
