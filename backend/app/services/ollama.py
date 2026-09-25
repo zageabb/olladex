@@ -129,6 +129,18 @@ def _execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
     elif name == "update_plan":
         result = {"steps": args["steps"]}
         runtime.emit("plan", result)
+    elif name == "update_progress":
+        completed = int(args["completed_steps"])
+        total = int(args["total_steps"])
+        if completed < 0 or total < 1 or completed > total:
+            raise ValueError("Progress requires 0 <= completed_steps <= total_steps")
+        current_step = str(args.get("current_step") or "").strip()
+        percent = round((completed / total) * 100)
+        result = {"completed_steps": completed, "total_steps": total, "progress": percent, "current_step": current_step}
+        task_id = task_queue.current_task_id()
+        if task_id:
+            task_queue.set_progress(task_id, percent, current_step)
+        runtime.emit("progress", result)
     elif name == "swarm_read_blackboard":
         swarm_id = task_queue.current_swarm_id()
         if not swarm_id:
@@ -337,7 +349,7 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
         "Finish with the outcome, relevant verification and remaining limitations. Work only inside the selected repository. "
         "Use tools to inspect evidence before answering. Keep the user informed in concise language. "
         "Do not invent file contents or command results. When asked to change code, make focused edits, run appropriate checks, and summarize changes. "
-        "When running inside a swarm, use update_plan before meaningful groups of work, publish important evidence-backed findings, engineering decisions and risks to the shared blackboard, "
+        "When running inside a swarm, use update_plan before meaningful groups of work, use update_progress after completing meaningful plan steps, publish important evidence-backed findings, engineering decisions and risks to the shared blackboard, "
         "and publish one concise swarm handoff before finishing that states the outcome, changed files, checks run, remaining risks and what downstream agents should know. "
         "Read the blackboard when dependency context or another specialist's findings would materially help your task.\n\n"
         + "\n\nOriginal conversation objective:\n" + next((m["content"] for m in history if m.get("role") == "user"), request)[:4000]
