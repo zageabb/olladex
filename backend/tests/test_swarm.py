@@ -431,3 +431,73 @@ def test_recovery_keeps_reviewer_downstream_of_challenger(tmp_path, monkeypatch)
     assert recovery["id"] in challenger_deps
     assert failed["id"] not in challenger_deps
     assert reviewer_deps == [challenger["id"]]
+
+
+def test_dynamic_initial_budget_reserves_one_recovery_slot():
+    dynamic = {
+        "require_reviewer": 1,
+        "require_challenger": 0,
+        "dynamic_size": 1,
+    }
+    fixed = {
+        "require_reviewer": 1,
+        "require_challenger": 0,
+        "dynamic_size": 0,
+    }
+
+    assert swarm.initial_specialist_budget(dynamic, 5) == 3
+    assert swarm.initial_specialist_budget(fixed, 5) == 4
+    assert swarm.initial_specialist_budget(dynamic, 3) == 2
+
+
+def test_challenger_only_profile_completes_after_challenger(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id, max_agents=3, max_concurrency=2)
+    with connect() as conn:
+        profile_id = int(conn.execute("SELECT id FROM swarm_profiles WHERE name='Deep Development'").fetchone()["id"])
+        conn.execute(
+            "UPDATE swarm_runs SET profile_id=? WHERE id=?",
+            (profile_id, swarm_id),
+        )
+
+    specialist = task_queue.enqueue(
+        project_id, session_id, "Done", "done",
+        swarm_id=swarm_id, source_kind="swarm_specialist", agent_role="backend", task_kind="backend",
+    )
+    challenger = task_queue.enqueue(
+        project_id, session_id, "Challenge", "challenge",
+        swarm_id=swarm_id, source_kind="swarm_challenger", agent_role="challenger", task_kind="challenger",
+        depends_on=[specialist["id"]], priority=200,
+    )
+    with connect() as conn:
+        conn.execute("UPDATE background_tasks SET status='completed',result='ok',completed_at=? WHERE id=?", (now(), specialist["id"]))
+        conn.execute("UPDATE background_tasks SET status='completed',result='checked',completed_at=? WHERE id=?", (now(), challenger["id"]))
+
+    swarm_coordinator._reconcile(swarm_id)
+
+    assert swarm.get_run(swarm_id)["status"] == "completed"
+
+
+def test_challenger_only_profile_fails_when_challenger_fails(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id, max_agents=3, max_concurrency=2)
+    with connect() as conn:
+        profile_id = int(conn.execute("SELECT id FROM swarm_profiles WHERE name='Deep Development'").fetchone()["id"])
+        conn.execute("UPDATE swarm_runs SET profile_id=? WHERE id=?", (profile_id, swarm_id))
+
+    specialist = task_queue.enqueue(
+        project_id, session_id, "Done", "done",
+        swarm_id=swarm_id, source_kind="swarm_specialist", agent_role="backend", task_kind="backend",
+    )
+    challenger = task_queue.enqueue(
+        project_id, session_id, "Challenge", "challenge",
+        swarm_id=swarm_id, source_kind="swarm_challenger", agent_role="challenger", task_kind="challenger",
+        depends_on=[specialist["id"]], priority=200,
+    )
+    with connect() as conn:
+        conn.execute("UPDATE background_tasks SET status='completed',result='ok',completed_at=? WHERE id=?", (now(), specialist["id"]))
+        conn.execute("UPDATE background_tasks SET status='failed',error='boom',completed_at=? WHERE id=?", (now(), challenger["id"]))
+
+    swarm_coordinator._reconcile(swarm_id)
+
+    assert swarm.get_run(swarm_id)["status"] == "failed"
