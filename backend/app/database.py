@@ -145,6 +145,15 @@ CREATE TABLE IF NOT EXISTS background_tasks (
   started_at TEXT NOT NULL DEFAULT '',
   completed_at TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS memory_scopes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scope TEXT NOT NULL,
+  scope_key TEXT NOT NULL,
+  content TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(scope, scope_key)
+);
 CREATE TABLE IF NOT EXISTS github_operations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
