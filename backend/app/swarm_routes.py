@@ -143,6 +143,14 @@ def delete_swarm_profile(profile_id: int):
         raise HTTPException(409, str(exc)) from exc
 
 
+@router.post("/projects/{project_id}/swarms/self-test")
+def swarm_self_test(project_id: int, profile_id: int):
+    try:
+        return swarm_service.self_test(project_id, profile_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 @router.get("/projects/{project_id}/swarms/preflight")
 def swarm_preflight(project_id: int, profile_id: int, max_agents: int | None = None, max_concurrency: int | None = None):
     try:
