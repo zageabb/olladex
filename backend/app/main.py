@@ -52,12 +52,16 @@ def startup() -> None:
     from .services import conversation_runtime
     conversation_runtime.init()
     task_queue.start(process_background_task)
+    from .services import swarm_coordinator
+    swarm_coordinator.start_active()
 
 
 def shutdown() -> None:
     from .services import conversation_runtime
     conversation_runtime.shutdown()
     terminal_jobs.shutdown()
+    from .services import swarm_coordinator
+    swarm_coordinator.shutdown()
     task_queue.stop()
 
 
