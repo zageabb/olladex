@@ -24,6 +24,8 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
   const [selectedId,setSelectedId]=useState<number|null>(null);
   const [selected,setSelected]=useState<SwarmRun|null>(null);
   const [blackboard,setBlackboard]=useState<BlackboardItem[]>([]);
+  const [blackboardCategory,setBlackboardCategory]=useState("");
+  const [blackboardAgent,setBlackboardAgent]=useState("");
   const [events,setEvents]=useState<SwarmEvent[]>([]);
   const [coordinatorEvents,setCoordinatorEvents]=useState<CoordinatorEvent[]>([]);
   const [profileId,setProfileId]=useState("");
@@ -332,6 +334,7 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
   const selectedAgent=selectedAgentId?agents.find(agent=>agent.id===selectedAgentId)||null:null;
   const selectedAgentEvents=selectedAgent?events.filter(item=>item.task_id===selectedAgent.id):[];
   const integrationCandidates=agents.filter(agent=>agent.status==="completed"&&agent.task_kind!=="reviewer"&&agent.task_kind!=="challenger"&&Boolean(agent.worktree_branch));
+  const filteredBlackboard=blackboard.filter(item=>(!blackboardCategory||item.category===blackboardCategory)&&(!blackboardAgent||(blackboardAgent==="coordinator"?!item.task_id:String(item.task_id)===blackboardAgent)));
   const activeSwarmProfile=selected?profiles.find(item=>item.id===selected.profile_id):undefined;
   const coordinatorProfile=activeSwarmProfile?.coordinator_profile_id?modelProfiles.find(item=>item.id===activeSwarmProfile.coordinator_profile_id):undefined;
 
@@ -466,8 +469,13 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
         </section>}
 
         <section>
-          <div className={styles.sectionHead}><div><p className="eyebrow">Shared knowledge</p><h3>Blackboard</h3></div><span>{blackboard.length} entries</span></div>
-          <div className={styles.blackboard}>{blackboard.length?blackboard.slice().reverse().map(item=><article key={item.id}><header><strong>{item.category}</strong>{item.task_id&&<span>Agent #{item.task_id}</span>}{item.confidence!=null&&<span>{Math.round(item.confidence*100)}%</span>}</header><p>{item.content}</p>{item.key&&<small>{item.key}</small>}</article>):<div className={styles.empty}>No shared findings yet.</div>}</div>
+          <div className={styles.sectionHead}><div><p className="eyebrow">Shared knowledge</p><h3>Blackboard</h3></div><span>{filteredBlackboard.length}/{blackboard.length} entries</span></div>
+          <div className={styles.blackboardFilters}>
+            <select value={blackboardCategory} onChange={event=>setBlackboardCategory(event.target.value)}><option value="">All categories</option>{Array.from(new Set(blackboard.map(item=>item.category))).sort().map(category=><option key={category} value={category}>{category}</option>)}</select>
+            <select value={blackboardAgent} onChange={event=>setBlackboardAgent(event.target.value)}><option value="">All sources</option><option value="coordinator">Coordinator</option>{agents.map(agent=><option key={agent.id} value={String(agent.id)}>Agent #{agent.id} · {agent.agent_role}</option>)}</select>
+            {(blackboardCategory||blackboardAgent)&&<button onClick={()=>{setBlackboardCategory("");setBlackboardAgent("");}}>Clear filters</button>}
+          </div>
+          <div className={styles.blackboard}>{filteredBlackboard.length?filteredBlackboard.slice().reverse().map(item=><article key={item.id}><header><strong>{item.category}</strong>{item.task_id?<span>Agent #{item.task_id}</span>:<span>Coordinator</span>}{item.confidence!=null&&<span>{Math.round(item.confidence*100)}%</span>}</header><p>{item.content}</p>{item.key&&<small>{item.key}</small>}</article>):<div className={styles.empty}>{blackboard.length?"No entries match these filters.":"No shared findings yet."}</div>}</div>
         </section>
         </>:<div className={styles.emptyLarge}><span>✦</span><h3>Select or start a swarm</h3><p>The board will show every local agent, its assigned model, task dependencies, worktree and shared findings.</p></div>}
       </div>
