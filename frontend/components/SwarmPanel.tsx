@@ -218,6 +218,19 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
     finally{setBusy(false);}
   }
 
+  async function broadcastGuidance(){
+    if(!selected||!coordinatorGuidance.trim())return;
+    setBusy(true);
+    try{
+      const result=await request<{queued_tasks_updated:number;active_runs_steered:number}>("/swarms/"+selected.id+"/broadcast",{
+        method:"POST",body:JSON.stringify({content:coordinatorGuidance.trim()})
+      });
+      setCoordinatorGuidance("");
+      setNotice("Guidance applied across swarm · "+result.active_runs_steered+" active steered · "+result.queued_tasks_updated+" queued updated");
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
+  }
+
   async function steerAgent(agent:Agent){
     if(!guidance.trim())return;
     setBusy(true);
@@ -388,6 +401,7 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
         {!["completed","failed","cancelled","integrating"].includes(selected.status)&&<form className={styles.coordinatorGuidance} onSubmit={event=>{event.preventDefault();steerCoordinator();}}>
           <input value={coordinatorGuidance} onChange={event=>setCoordinatorGuidance(event.target.value)} placeholder="Guide Coordinator — e.g. prioritise tests; do not change public API"/>
           <button disabled={busy||!coordinatorGuidance.trim()}>Send to Coordinator</button>
+          <button type="button" onClick={broadcastGuidance} disabled={busy||!coordinatorGuidance.trim()}>Apply to all agents</button>
         </form>}
 
         <div className={styles.metrics}>
