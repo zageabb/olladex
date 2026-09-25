@@ -463,20 +463,28 @@ def publish(swarm_id: int, category: str, content: str, *, task_id: int | None =
     return result
 
 
-def blackboard(swarm_id: int, *, category: str = "", task_id: int | None = None) -> list[dict]:
-    clauses = ["swarm_id=?"]
-    params: list[object] = [swarm_id]
+def blackboard(
+    swarm_id: int,
+    *,
+    category: str = "",
+    task_id: int | None = None,
+    after: int = 0,
+    limit: int | None = None,
+) -> list[dict]:
+    clauses = ["swarm_id=?", "id>?"]
+    params: list[object] = [swarm_id, max(0, int(after or 0))]
     if category:
         clauses.append("category=?")
         params.append(category.strip().lower())
     if task_id is not None:
         clauses.append("task_id=?")
         params.append(task_id)
+    sql = "SELECT * FROM swarm_blackboard WHERE " + " AND ".join(clauses) + " ORDER BY id"
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(max(1, min(int(limit or 200), 1000)))
     with connect() as conn:
-        return [dict(row) for row in conn.execute(
-            "SELECT * FROM swarm_blackboard WHERE " + " AND ".join(clauses) + " ORDER BY id",
-            params,
-        )]
+        return [dict(row) for row in conn.execute(sql, params)]
 
 
 def _agent_counts(swarm_id: int) -> dict:
