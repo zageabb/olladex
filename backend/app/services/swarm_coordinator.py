@@ -196,6 +196,7 @@ def _followup_decision(run: dict, profile: dict, completed: list[dict], risks: l
         "completed": [{"id":x["id"], "title":x["title"], "role":x["agent_role"], "result":x.get("result","")[-800:]} for x in completed],
         "risks": risks[-30:],
         "remaining_slots": int(run["max_agents"])-int(run["total_agents_created"]),
+        "user_guidance": run.get("coordinator_instructions") or "",
     }
     prompt = (
         "You are the persistent Coordinator for a local Olladex software-engineering swarm. "
@@ -337,6 +338,7 @@ def _recovery_decision(run: dict, profile: dict, failed: list[dict], completed: 
         "completed": [{"id":x["id"], "title":x["title"], "role":x["agent_role"], "result":x.get("result","")[-800:]} for x in completed],
         "blackboard": board[-40:],
         "remaining_slots": int(run["max_agents"])-int(run["total_agents_created"]),
+        "user_guidance": run.get("coordinator_instructions") or "",
     }
     prompt = (
         "You are the persistent Coordinator for a local Olladex software-engineering swarm. "
