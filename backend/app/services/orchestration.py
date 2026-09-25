@@ -7,9 +7,10 @@ from . import ollama, workspace
 
 
 ALLOWED_ROLES = {"worker", "frontend", "backend", "tester", "reviewer", "researcher", "architect", "coder", "documentation"}
+SWARM_SPECIALIST_ROLES = {"worker", "frontend", "backend", "tester", "researcher", "architect", "coder", "documentation"}
 
 
-def decompose(project: dict, objective: str, max_tasks: int = 6) -> list[dict]:
+def decompose(project: dict, objective: str, max_tasks: int = 6, *, swarm_mode: bool = False) -> list[dict]:
     if not objective.strip():
         raise ValueError("Lead objective is required")
     max_tasks = max(2, min(int(max_tasks or 6), 16))
@@ -54,7 +55,8 @@ Objective:\n{objective.strip()}\n\nRepository intelligence:\n{json.dumps(intelli
             continue
         title = str(item.get("title") or f"Specialist task {source_index + 1}").strip()[:256]
         role = str(item.get("role") or "worker").strip().lower()
-        if role not in ALLOWED_ROLES:
+        allowed_roles = SWARM_SPECIALIST_ROLES if swarm_mode else ALLOWED_ROLES
+        if role not in allowed_roles:
             role = "worker"
         task_prompt = str(item.get("prompt") or "").strip()
         if not task_prompt:
