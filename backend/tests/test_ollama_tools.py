@@ -63,3 +63,11 @@ def test_background_task_write_is_blocked_without_an_isolated_worktree(tmp_path,
     assert result["recoverable"] is True
     assert "isolated Git worktree" in result["error"]
     assert activity["tool"] == "write_file"
+
+
+def test_swarm_blackboard_tools_are_strictly_validated():
+    finding = ollama.validate_arguments("swarm_publish_finding", {"content": "Evidence", "key": "auth"})
+    assert finding == {"content": "Evidence", "key": "auth"}
+
+    read = ollama.validate_arguments("swarm_read_blackboard", {"category": "risk"})
+    assert read == {"category": "risk"}
