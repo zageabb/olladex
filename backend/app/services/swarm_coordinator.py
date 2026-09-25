@@ -213,7 +213,7 @@ def _consider_help_request(run: dict, completed: list[dict]) -> bool:
         int(run["project_id"]),
         session_id,
         title,
-        prompt,
+        _guided_prompt(run, prompt),
         source_kind="swarm_help",
         source_ref=f"swarm:{swarm_id}:help:{request['id']}:requester:{request['task_id']}",
         depends_on=[int(item["id"]) for item in completed],
@@ -312,6 +312,13 @@ def _append_verification_dependency(swarm_id: int, task_id: int) -> None:
                 )
 
 
+def _guided_prompt(run: dict, prompt: str) -> str:
+    guidance = str(run.get("coordinator_instructions") or "").strip()
+    if not guidance:
+        return prompt
+    return prompt + "\n\nPersistent swarm-wide user guidance:\n" + guidance
+
+
 def _consider_pre_review(run: dict, profile: dict, completed: list[dict]) -> bool:
     swarm_id = int(run["id"])
     risks = swarm.blackboard(swarm_id, category="risk")
@@ -359,7 +366,7 @@ def _consider_pre_review(run: dict, profile: dict, completed: list[dict]) -> boo
         int(run["project_id"]),
         session_id,
         title,
-        prompt,
+        _guided_prompt(run, prompt),
         source_kind="swarm_followup",
         source_ref=f"swarm:{swarm_id}:pre-review",
         depends_on=[int(item["id"]) for item in completed],
@@ -470,7 +477,7 @@ def _consider_recovery(run: dict, failed: list[dict], completed: list[dict]) -> 
         int(run["project_id"]),
         session_id,
         title,
-        prompt,
+        _guided_prompt(run, prompt),
         source_kind="swarm_recovery",
         source_ref=(
             f"swarm:{swarm_id}:recovery:{prior_recovery + 1}:failed:"
