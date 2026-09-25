@@ -805,3 +805,27 @@ def test_broadcast_guidance_updates_queued_and_active_agents(tmp_path, monkeypat
         item["kind"] == "broadcast" and item["payload"].get("active_runs_steered") == 1
         for item in timeline
     )
+
+
+def test_coordinator_budget_is_persistent_and_exhaustion_is_recorded_once(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id)
+    with connect() as conn:
+        profile_id = int(conn.execute("SELECT profile_id FROM swarm_runs WHERE id=?", (swarm_id,)).fetchone()["profile_id"])
+        conn.execute("UPDATE swarm_profiles SET coordinator_tool_budget=2 WHERE id=?", (profile_id,))
+
+    first = swarm.consume_coordinator_budget(swarm_id, "first")
+    second = swarm.consume_coordinator_budget(swarm_id, "second")
+    third = swarm.consume_coordinator_budget(swarm_id, "third")
+    fourth = swarm.consume_coordinator_budget(swarm_id, "fourth")
+
+    assert first == {"allowed": True, "used": 1, "budget": 2, "remaining": 1}
+    assert second == {"allowed": True, "used": 2, "budget": 2, "remaining": 0}
+    assert third["allowed"] is False
+    assert fourth["allowed"] is False
+    assert swarm.coordinator_budget(swarm_id) == {"used": 2, "budget": 2, "remaining": 0}
+    assert swarm.get_run(swarm_id)["coordinator_budget"]["used"] == 2
+
+    timeline = swarm.coordinator_events(swarm_id)
+    assert len([item for item in timeline if item["kind"] == "model_call"]) == 2
+    assert len([item for item in timeline if item["kind"] == "budget_exhausted"]) == 1
