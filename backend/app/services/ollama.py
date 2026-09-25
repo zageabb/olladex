@@ -26,6 +26,10 @@ for tool_name, description, properties in [
     ("ask_user", "Ask a necessary clarification and wait for the answer before continuing.", {"question": {"type":"string"}}),
     ("remember_preference", "Save an explicit user request to remember a preference or decision. Do not infer personal facts or save secrets.", {"preference": {"type":"string"}}),
     ("update_plan", "Show or revise a short plan for a multi-step task.", {"steps": {"type":"array", "items": {"type":"string"}}}),
+    ("swarm_read_blackboard", "Read shared structured findings for the current swarm.", {"category": {"type":"string"}}),
+    ("swarm_publish_finding", "Publish an important evidence-backed finding to the current swarm blackboard.", {"content": {"type":"string"}, "key": {"type":"string"}}),
+    ("swarm_publish_decision", "Publish a meaningful engineering decision to the current swarm blackboard.", {"content": {"type":"string"}, "key": {"type":"string"}}),
+    ("swarm_publish_risk", "Publish an identified risk or uncertainty to the current swarm blackboard.", {"content": {"type":"string"}, "key": {"type":"string"}}),
 ]:
     TOOLS.append({"type":"function", "function": {"name":tool_name, "description":description,
         "parameters": {"type":"object", "properties":properties, "required":list(properties), "additionalProperties":False}}})
@@ -123,6 +127,31 @@ def _execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
     elif name == "update_plan":
         result = {"steps": args["steps"]}
         runtime.emit("plan", result)
+    elif name == "swarm_read_blackboard":
+        swarm_id = task_queue.current_swarm_id()
+        if not swarm_id:
+            raise ValueError("This agent is not running inside a swarm")
+        from . import swarm as swarm_service
+        result = swarm_service.blackboard(swarm_id, category=str(args.get("category") or ""))
+    elif name in {"swarm_publish_finding", "swarm_publish_decision", "swarm_publish_risk"}:
+        swarm_id = task_queue.current_swarm_id()
+        task_id = task_queue.current_task_id()
+        if not swarm_id or not task_id:
+            raise ValueError("This agent is not running inside a swarm")
+        from . import swarm as swarm_service
+        category = {
+            "swarm_publish_finding": "finding",
+            "swarm_publish_decision": "decision",
+            "swarm_publish_risk": "risk",
+        }[name]
+        result = swarm_service.publish(
+            swarm_id,
+            category,
+            str(args.get("content") or ""),
+            task_id=task_id,
+            key=str(args.get("key") or ""),
+        )
+        runtime.emit(category, {"task_id": task_id, "blackboard_id": result["id"], "content": result["content"], "key": result.get("key", "")})
     elif name == "apply_patch":
         before = workspace.read_text(project, args["path"])
         old = args["old_text"]
@@ -296,7 +325,9 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
         "Incorporate steering messages while preserving the original objective. Never claim success if checks failed or approval is pending. "
         "Finish with the outcome, relevant verification and remaining limitations. Work only inside the selected repository. "
         "Use tools to inspect evidence before answering. Keep the user informed in concise language. "
-        "Do not invent file contents or command results. When asked to change code, make focused edits, run appropriate checks, and summarize changes.\n\n"
+        "Do not invent file contents or command results. When asked to change code, make focused edits, run appropriate checks, and summarize changes. "
+        "When running inside a swarm, publish important evidence-backed findings, engineering decisions and risks to the shared blackboard using the swarm tools. "
+        "Read the blackboard when dependency context or another specialist's findings would materially help your task.\n\n"
         + "\n\nOriginal conversation objective:\n" + next((m["content"] for m in history if m.get("role") == "user"), request)[:4000]
         + "\n\n" + workspace.project_summary(project)
         + ("\n\nProject instructions:\n" + project.get("instructions", "") if project.get("instructions", "").strip() else "")
