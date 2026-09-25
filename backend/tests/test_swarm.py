@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from backend.app.config import settings
 from backend.app.database import connect, init_db, now
-from backend.app.services import conversation_runtime, swarm, task_queue
+from backend.app.services import conversation_runtime, swarm, swarm_coordinator, task_queue
 
 
 def _seed(tmp_path, monkeypatch):
@@ -178,3 +178,76 @@ def test_builtin_swarm_profile_name_is_protected(tmp_path, monkeypatch):
         assert "cannot be changed" in str(exc)
     else:
         raise AssertionError("Built-in Swarm profile names should be protected")
+
+
+def test_coordinator_spawns_recovery_and_retargets_reviewer(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id, max_agents=4, max_concurrency=2)
+    with connect() as conn:
+        profile_id = int(conn.execute("SELECT id FROM swarm_profiles WHERE name='Development'").fetchone()["id"])
+        conn.execute("UPDATE swarm_runs SET profile_id=? WHERE id=?", (profile_id, swarm_id))
+
+    failed = task_queue.enqueue(
+        project_id, session_id, "Broken backend task", "break",
+        swarm_id=swarm_id, agent_role="backend", task_kind="backend", source_kind="swarm_specialist",
+    )
+    completed = task_queue.enqueue(
+        project_id, session_id, "Completed research", "research",
+        swarm_id=swarm_id, agent_role="researcher", task_kind="researcher", source_kind="swarm_specialist",
+    )
+    reviewer = task_queue.enqueue(
+        project_id, session_id, "Review", "review",
+        swarm_id=swarm_id, agent_role="reviewer", task_kind="reviewer", source_kind="swarm_reviewer",
+        depends_on=[failed["id"], completed["id"]], priority=300,
+    )
+
+    with connect() as conn:
+        conn.execute("UPDATE background_tasks SET status='failed',error='boom',completed_at=? WHERE id=?", (now(), failed["id"]))
+        conn.execute("UPDATE background_tasks SET status='completed',result='useful finding',completed_at=? WHERE id=?", (now(), completed["id"]))
+
+    monkeypatch.setattr(
+        swarm_coordinator,
+        "_recovery_decision",
+        lambda run, profile, failed_items, completed_items: {
+            "action": "spawn",
+            "role": "backend",
+            "title": "Recovery backend",
+            "prompt": "Repair the failed backend work using completed research.",
+            "reason": "A bounded recovery is available.",
+        },
+    )
+
+    swarm_coordinator._reconcile(swarm_id)
+
+    agents = swarm.list_agents(swarm_id)
+    recovery = next(item for item in agents if item["source_kind"] == "swarm_recovery")
+    reviewer_row = next(item for item in agents if item["id"] == reviewer["id"])
+    reviewer_deps = reviewer_row["depends_on"]
+    if isinstance(reviewer_deps, str):
+        import json
+        reviewer_deps = json.loads(reviewer_deps)
+
+    assert recovery["agent_role"] == "backend"
+    assert recovery["id"] in reviewer_deps
+    assert completed["id"] in reviewer_deps
+    assert failed["id"] not in reviewer_deps
+    assert reviewer_row["status"] == "queued"
+
+
+def test_verification_waits_while_failed_swarm_dependency_can_be_recovered(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id, max_agents=3, max_concurrency=1)
+    failed = task_queue.enqueue(
+        project_id, session_id, "Failed", "fail",
+        swarm_id=swarm_id, source_kind="swarm_specialist", agent_role="backend", task_kind="backend", priority=10,
+    )
+    reviewer = task_queue.enqueue(
+        project_id, session_id, "Review", "review",
+        swarm_id=swarm_id, source_kind="swarm_reviewer", agent_role="reviewer", task_kind="reviewer",
+        depends_on=[failed["id"]], priority=300,
+    )
+    with connect() as conn:
+        conn.execute("UPDATE background_tasks SET status='failed',error='boom',completed_at=? WHERE id=?", (now(), failed["id"]))
+
+    assert task_queue._claim_next() is None
+    assert task_queue.get(reviewer["id"])["status"] == "queued"
