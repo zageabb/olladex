@@ -514,6 +514,52 @@ def write_blackboard(swarm_id: int, body: BlackboardWriteRequest):
         raise HTTPException(409, str(exc)) from exc
 
 
+@router.get("/swarm-agents/{task_id}")
+def swarm_agent_detail(task_id: int):
+    task = task_queue.get(task_id)
+    if not task or not task.get("swarm_id"):
+        raise HTTPException(404, "Swarm agent not found")
+    project = _project(int(task["project_id"]))
+    with connect() as conn:
+        run = conn.execute(
+            "SELECT * FROM agent_runs WHERE task_id=? ORDER BY id DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        commands = [dict(row) for row in conn.execute(
+            "SELECT id,command,output,exit_code,status,cwd,created_at,updated_at "
+            "FROM command_runs WHERE task_id=? ORDER BY id DESC LIMIT 50",
+            (task_id,),
+        )]
+    for item in commands:
+        item["output"] = str(item.get("output") or "")[-20000:]
+    board = swarm_service.blackboard(int(task["swarm_id"]), task_id=task_id, limit=100)
+    worktree_summary = None
+    changed_files: list[str] = []
+    path = str(task.get("worktree_path") or "")
+    branch = str(task.get("worktree_branch") or "")
+    if path:
+        try:
+            worktree_summary = worktrees.summary(project, path)
+        except ValueError:
+            worktree_summary = {"path": path, "branch": branch, "unavailable": True}
+    if branch:
+        try:
+            changed_files = integration.changed_files(project, branch)
+        except ValueError:
+            changed_files = []
+    return {
+        "task": swarm_service.list_agents(int(task["swarm_id"])) and next(
+            (item for item in swarm_service.list_agents(int(task["swarm_id"])) if item["id"] == task_id),
+            task,
+        ),
+        "run": dict(run) if run else None,
+        "commands": commands,
+        "blackboard": board,
+        "changed_files": changed_files,
+        "worktree": worktree_summary,
+    }
+
+
 @router.post("/swarm-agents/{task_id}/input")
 def steer_swarm_agent(task_id: int, body: AgentInputRequest):
     task = task_queue.get(task_id)
