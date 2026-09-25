@@ -1,5 +1,11 @@
 # Olladex v0.7 — Swarm Technical Specification
 
+> Implementation status: active development on `feature/swarm-v0.7` / PR #7.
+>
+> Implemented in the current branch: persistent Swarm schema/profiles, per-project skill toggle, per-role local Ollama model profiles, concurrency-aware scheduling, isolated worktrees, Blackboard tools, merged live activity, agent steering, structured hand-offs, persistent reactive Coordinator with recovery and pre-review gates, Agent Board UI, SQLite concurrency hardening, Swarm integration preflight/worktree/checks/push/PR flow, backend regression tests, and Playwright coverage.
+>
+> Remaining polish: richer graph visualisation, deeper integration UX/status presentation, and any issues found during real local-Ollama dogfooding.
+
 ## 1. Purpose
 
 Introduce an optional **Swarm skill** to Olladex that allows a user to give one substantial objective to a coordinating local LLM, which decomposes the objective into tasks and manages multiple specialised local LLM agents.
