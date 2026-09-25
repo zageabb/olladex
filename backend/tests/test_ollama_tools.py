@@ -71,3 +71,6 @@ def test_swarm_blackboard_tools_are_strictly_validated():
 
     read = ollama.validate_arguments("swarm_read_blackboard", {"category": "risk"})
     assert read == {"category": "risk"}
+
+    handoff = ollama.validate_arguments("swarm_publish_handoff", {"content": "Done", "key": "final"})
+    assert handoff == {"content": "Done", "key": "final"}
