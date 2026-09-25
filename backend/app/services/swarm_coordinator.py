@@ -94,12 +94,18 @@ def _reconcile(swarm_id: int) -> None:
     failed = [item for item in specialists if item.get("status") in {"failed", "budget_exhausted", "interrupted"}]
     active = [item for item in specialists if item.get("status") in {"queued", "running", "waiting_for_input", "waiting_for_approval"}]
     completed = [item for item in specialists if item.get("status") == "completed"]
+    recovered_ids = _recovered_failure_ids(completed)
+    unresolved_failed = [item for item in failed if int(item["id"]) not in recovered_ids]
 
-    if failed and not active:
-        _consider_recovery(run, failed, completed)
+    if unresolved_failed and not active:
+        _consider_recovery(run, unresolved_failed, completed)
         return
 
-    if specialists and len(completed) == len(specialists):
+    effective_specialists = [item for item in specialists if item not in failed or int(item["id"]) in recovered_ids]
+    if effective_specialists and all(
+        item.get("status") == "completed" or int(item["id"]) in recovered_ids
+        for item in effective_specialists
+    ):
         if run["status"] == "running":
             if _consider_pre_review(run, profile=swarm.get_profile(int(run["profile_id"])), completed=completed):
                 return
@@ -290,7 +296,10 @@ def _consider_recovery(run: dict, failed: list[dict], completed: list[dict]) -> 
         title,
         prompt,
         source_kind="swarm_recovery",
-        source_ref=f"swarm:{swarm_id}:recovery:{prior_recovery + 1}",
+        source_ref=(
+            f"swarm:{swarm_id}:recovery:{prior_recovery + 1}:failed:"
+            + ",".join(str(int(item["id"])) for item in failed)
+        ),
         depends_on=dependency_ids,
         agent_role=role,
         swarm_id=swarm_id,
@@ -404,6 +413,24 @@ def _new_session(project_id: int, title: str) -> int:
             (project_id, title[:200], stamp, stamp),
         )
         return int(cursor.lastrowid)
+
+
+def _recovered_failure_ids(completed: list[dict]) -> set[int]:
+    recovered: set[int] = set()
+    for item in completed:
+        if item.get("source_kind") != "swarm_recovery":
+            continue
+        source_ref = str(item.get("source_ref") or "")
+        marker = ":failed:"
+        if marker not in source_ref:
+            continue
+        raw_ids = source_ref.split(marker, 1)[1]
+        for value in raw_ids.split(","):
+            try:
+                recovered.add(int(value))
+            except (TypeError, ValueError):
+                continue
+    return recovered
 
 
 def _recovery_count(swarm_id: int) -> int:
