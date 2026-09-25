@@ -1,4 +1,4 @@
-from backend.app.services import task_queue
+from backend.app.services import ollama, task_queue
 from backend.app.services.ollama import execute_tool
 
 
