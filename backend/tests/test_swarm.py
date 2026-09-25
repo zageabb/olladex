@@ -373,6 +373,10 @@ def test_coordinator_guidance_is_persisted_and_audited(tmp_path, monkeypatch):
     assert activity
     assert "Prioritise regression tests." in activity["content"]
 
+    timeline = swarm.coordinator_events(swarm_id)
+    assert any(item["kind"] == "guidance" and item["payload"].get("content") == "Do not change the public API." for item in timeline)
+    assert any(item["kind"] == "guidance" and item["payload"].get("content") == "Prioritise regression tests." for item in timeline)
+
 
 def test_recovery_keeps_reviewer_downstream_of_challenger(tmp_path, monkeypatch):
     project_id, session_id = _seed(tmp_path, monkeypatch)
@@ -591,3 +595,23 @@ def test_verification_tasks_do_not_start_before_coordinator_opens_review(tmp_pat
 
     claimed = task_queue._claim_next()
     assert claimed and claimed["id"] == reviewer["id"]
+
+
+def test_coordinator_status_timeline_is_append_only(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id)
+
+    swarm.set_status(swarm_id, "reviewing")
+    swarm.pause(swarm_id)
+    swarm.resume(swarm_id)
+    swarm.set_status(swarm_id, "completed")
+
+    timeline = swarm.coordinator_events(swarm_id)
+    statuses = [
+        item["payload"].get("status")
+        for item in timeline
+        if item["kind"] == "status"
+    ]
+
+    assert statuses == ["reviewing", "paused", "running", "completed"]
+    assert [item["id"] for item in timeline] == sorted(item["id"] for item in timeline)
