@@ -13,6 +13,7 @@ _stop = threading.Event()
 
 
 def start_active() -> None:
+    _stop.clear()
     with connect() as conn:
         ids = [int(row["id"]) for row in conn.execute(
             "SELECT id FROM swarm_runs WHERE status IN ('running','waiting','reviewing','integrating','paused') AND cancel_requested=0"
@@ -22,6 +23,7 @@ def start_active() -> None:
 
 
 def start(swarm_id: int) -> None:
+    _stop.clear()
     with _lock:
         thread = _threads.get(swarm_id)
         if thread and thread.is_alive():
@@ -45,6 +47,7 @@ def shutdown() -> None:
 
 
 def _loop(swarm_id: int) -> None:
+    error_count = 0
     try:
         while not _stop.is_set():
             with connect() as conn:
@@ -58,7 +61,20 @@ def _loop(swarm_id: int) -> None:
                 time.sleep(.5)
                 continue
 
-            _reconcile(swarm_id)
+            try:
+                _reconcile(swarm_id)
+                error_count = 0
+            except Exception as exc:
+                error_count += 1
+                _publish_once(
+                    swarm_id,
+                    "risk",
+                    f"coordinator-error-{error_count}",
+                    f"Coordinator monitoring error: {exc}",
+                )
+                if error_count >= 3:
+                    swarm.set_status(swarm_id, "failed")
+                    return
             time.sleep(.75)
     finally:
         with _lock:
@@ -230,6 +246,14 @@ def _consider_recovery(run: dict, failed: list[dict], completed: list[dict]) -> 
 
     decision = _recovery_decision(run, profile, failed, completed)
     action = str(decision.get("action") or "fail").lower()
+    if action == "defer":
+        _publish_once(
+            swarm_id,
+            "risk",
+            f"recovery-deferred-{prior_recovery}",
+            str(decision.get("reason") or "Coordinator recovery planning is temporarily unavailable; the swarm will retry."),
+        )
+        return
     if action != "spawn":
         reason = str(decision.get("reason") or "Coordinator could not identify a safe recovery task.")
         _publish_once(swarm_id, "risk", f"recovery-stop-{prior_recovery}", reason)
@@ -339,7 +363,7 @@ def _recovery_decision(run: dict, profile: dict, failed: list[dict], completed: 
         data = json.loads(raw)
         return data if isinstance(data, dict) else {"action": "fail", "reason": "Coordinator returned no decision."}
     except Exception as exc:
-        return {"action": "fail", "reason": f"Coordinator recovery planning failed: {exc}"}
+        return {"action": "defer", "reason": f"Coordinator recovery planning is temporarily unavailable: {exc}"}
 
 
 def _project(project_id: int) -> dict:
