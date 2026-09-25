@@ -560,6 +560,10 @@ def board_snapshot(
         )
     )
 
+    agent_events = events(swarm_id, after=after_event, limit=limit)
+    coordinator_items = coordinator_events(swarm_id, after=after_coordinator_event, limit=limit)
+    blackboard_items = blackboard(swarm_id, after=after_blackboard, limit=limit)
+
     return {
         "swarm": run,
         "summary": {
@@ -572,9 +576,14 @@ def board_snapshot(
             "progress": overall_progress,
             "integration_ready": integration_ready,
         },
-        "events": events(swarm_id, after=after_event, limit=limit),
-        "coordinator_events": coordinator_events(swarm_id, after=after_coordinator_event, limit=limit),
-        "blackboard": blackboard(swarm_id, after=after_blackboard, limit=limit),
+        "events": agent_events,
+        "coordinator_events": coordinator_items,
+        "blackboard": blackboard_items,
+        "cursors": {
+            "event": int(agent_events[-1]["id"]) if agent_events else max(0, int(after_event)),
+            "coordinator_event": int(coordinator_items[-1]["id"]) if coordinator_items else max(0, int(after_coordinator_event)),
+            "blackboard": int(blackboard_items[-1]["id"]) if blackboard_items else max(0, int(after_blackboard)),
+        },
     }
 
 
