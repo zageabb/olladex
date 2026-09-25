@@ -35,13 +35,7 @@ export function ConversationTaskSummary({ sessionId, title, onOpenConversation }
         if (disposed) return;
         const latest = runs[runs.length - 1] || null;
         setRun(latest);
-        if (!latest) { setEvents([]); return; }
-        try {
-          const data = await request<Event[]>(`/runs/${latest.id}/events?after=0`);
-          if (!disposed) setEvents(Array.isArray(data) ? data : []);
-        } catch {
-          if (!disposed) setEvents([]);
-        }
+        if (!latest) return;
       } catch (e) {
         if (!disposed) setError(e instanceof Error ? e.message : String(e));
       }
@@ -71,7 +65,7 @@ export function ConversationTaskSummary({ sessionId, title, onOpenConversation }
     <div className="conversation-task-body">
       <div className="conversation-task-metrics">
         <article><span>Phase</span><strong>{phase(run.status)}</strong></article>
-        <article><span>Activity</span><strong>{toolStarts.length} tool steps</strong></article>
+        <article><span>Execution</span><strong>Foreground</strong></article>
         <article><span>Attention</span><strong>{run.status === "waiting_for_input" ? "Input needed" : run.status === "waiting_for_approval" ? "Approval needed" : "None"}</strong></article>
       </div>
       {latestTool ? <p className="conversation-task-now">Now: {String(latestTool.tool || "working").replaceAll("_", " ")}{latestTool.arguments?.path ? ` · ${latestTool.arguments.path}` : ""}</p> : null}
