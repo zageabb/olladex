@@ -96,6 +96,8 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
   let integrationBuilt = false;
   let integrationPushed = false;
   let finalPrCreated = false;
+  const coordinatorAfter:string[] = [];
+  const blackboardAfter:string[] = [];
   const run = {
     id:7,title:'Auth hardening',status:'reviewing',max_agents:5,max_concurrency:3,total_agents_created:2
   };
@@ -112,6 +114,11 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
       return true;
     }
     if (p === '/api/swarms/7/board') {
+      const coordinatorCursor=url.searchParams.get('after_coordinator_event')||'0';
+      const blackboardCursor=url.searchParams.get('after_blackboard')||'0';
+      coordinatorAfter.push(coordinatorCursor);
+      blackboardAfter.push(blackboardCursor);
+      const initial=coordinatorCursor==='0'&&blackboardCursor==='0';
       await json({
         swarm:{
           id:7,title:'Auth hardening',status:'reviewing',
@@ -127,15 +134,15 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
           progress:100,max_agents:5,max_concurrency:3,integration_ready:true
         },
         events:[],
-        coordinator_events:[
+        coordinator_events:initial?[
           {id:20,kind:'status',payload:{status:'reviewing'},created_at:new Date().toISOString()},
           {id:21,kind:'decision',payload:{content:'Coordinator opened final verification.'},created_at:new Date().toISOString()}
-        ],
-        blackboard:[
+        ]:[],
+        blackboard:initial?[
           {id:1,task_id:null,category:'decision',content:'Review gate opened.',created_at:new Date().toISOString()},
           {id:2,task_id:11,category:'finding',content:'Auth dependency is centralized.',created_at:new Date().toISOString()}
-        ],
-        cursors:{event:0,coordinator_event:0,blackboard:0}
+        ]:[],
+        cursors:{event:0,coordinator_event:21,blackboard:2}
       });
       return true;
     }
@@ -196,6 +203,8 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
   await expect(page.getByText(/reviewer · completed · 100%/)).toBeVisible();
   await expect(page.getByText(/budget 3\/20/)).toBeVisible();
   await expect(page.getByText('Coordinator opened final verification.', {exact:true}).first()).toBeVisible();
+  await expect.poll(()=>coordinatorAfter.includes('21'),{timeout:5000}).toBe(true);
+  await expect.poll(()=>blackboardAfter.includes('2'),{timeout:5000}).toBe(true);
 
   await page.getByPlaceholder('Guide the Swarm…').fill('Prioritise regression tests.');
   await page.getByRole('button', {name:'Coordinator'}).click();
