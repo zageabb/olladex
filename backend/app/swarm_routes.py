@@ -334,6 +334,26 @@ def swarm_agents(swarm_id: int):
         raise HTTPException(404, str(exc)) from exc
 
 
+@router.get("/swarms/{swarm_id}/board")
+def swarm_board(
+    swarm_id: int,
+    after_event: int = 0,
+    after_coordinator_event: int = 0,
+    after_blackboard: int = 0,
+    limit: int = 200,
+):
+    try:
+        return swarm_service.board_snapshot(
+            swarm_id,
+            after_event=after_event,
+            after_coordinator_event=after_coordinator_event,
+            after_blackboard=after_blackboard,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
 @router.get("/swarms/{swarm_id}/coordinator/events")
 def coordinator_events(swarm_id: int, after: int = 0, limit: int = 200):
     try:
