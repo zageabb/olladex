@@ -354,3 +354,18 @@ def test_task_role_profile_runtime_settings_are_exposed(tmp_path, monkeypatch):
     assert runtime["temperature"] == profile["temperature"]
     assert runtime["context_files"] == profile["context_files"]
     assert runtime["agent_tool_budget"] > 0
+
+
+def test_coordinator_guidance_is_persisted_and_audited(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id)
+
+    first = swarm.steer_coordinator(swarm_id, "Do not change the public API.")
+    second = swarm.steer_coordinator(swarm_id, "Prioritise regression tests.")
+
+    assert "Do not change the public API." in second["coordinator_instructions"]
+    assert "Prioritise regression tests." in second["coordinator_instructions"]
+
+    decisions = swarm.blackboard(swarm_id, category="decision")
+    assert any("Do not change the public API." in item["content"] for item in decisions)
+    assert any("Prioritise regression tests." in item["content"] for item in decisions)
