@@ -11,6 +11,7 @@ import { ProjectPanel } from "../components/ProjectPanel";
 import { TaskOrchestrationPanel } from "../components/TaskOrchestrationPanel";
 import { TerminalPanel } from "../components/TerminalPanel";
 import { Conversation } from "../components/Conversation";
+import { ConversationTaskSummary } from "../components/ConversationTaskSummary";
 import { request } from "../lib/api";
 
 type Project = { id: number; name: string; path: string; model: string; approval_mode: "review" | "assisted" | "autonomous"; instructions: string; git_author_name: string; git_author_email: string; model_profile_id?: number; profile_name?: string; profile_chat_model?: string; profile_embedding_model?: string; profile_temperature?: number; profile_max_steps?: number; profile_context_files?: number; profile_context_chars?: number };
@@ -222,7 +223,7 @@ export default function Home() {
           {tab === "terminal" && <TerminalPanel projectId={project.id} />}
           {tab === "diagrams" && <DiagramStudio initialSource={diagramSource} initialEngine={diagramEngine} />}
           {tab === "office" && <OfficePanel projectId={project.id} selectedPath={selected?.path} onCreated={refreshTree} />}
-          {tab === "tasks" && <div className="tasks-workspace"><TaskOrchestrationPanel projectId={project.id} onCreated={() => setNotice("Orchestrated task queued")} /><BackgroundTasksPanel projectId={project.id} onOpenSession={openTaskSession} /></div>}
+          {tab === "tasks" && <div className="tasks-workspace">{session ? <ConversationTaskSummary sessionId={session.id} title={session.title} onOpenConversation={() => setTab("files")} /> : null}<TaskOrchestrationPanel projectId={project.id} onCreated={() => setNotice("Orchestrated task queued")} /><BackgroundTasksPanel projectId={project.id} onOpenSession={openTaskSession} /></div>}
           {tab === "project" && <ProjectPanel project={project} onUpdated={(updated) => { setProject(updated); setProjects((items) => items.map((item) => item.id === updated.id ? updated : item)); }} />}
         </> : <EmptyWorkspace onOpen={() => setShowOpen(true)} />}
       </section>
