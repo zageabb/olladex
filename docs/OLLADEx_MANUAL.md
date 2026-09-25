@@ -605,6 +605,13 @@ Open an agent from the board to inspect:
 
 A specialist may use **request help** when one additional bounded specialist would materially improve the result. The specialist does not create another agent directly. Its request is written to the Blackboard and the Coordinator decides whether to decline it or use spare dynamic-swarm capacity to create one helper. Final challenger/reviewer verification remains downstream of any helper that is created.
 
+Coordinator guidance has two scopes:
+
+- **Send to Coordinator** stores the instruction for later planning, recovery and follow-up decisions.
+- **Apply to all agents** stores the same persistent instruction, injects it into queued task prompts and live-steers currently active agents. Any helper/recovery/follow-up agents created later also inherit the persistent guidance.
+
+The configured **Coordinator budget** limits autonomous Coordinator model decisions. Initial decomposition, specialist-help decisions, pre-review risk decisions and recovery decisions consume that budget. Usage is shown on the Coordinator card and recorded in the durable Coordinator timeline. Once exhausted, Olladex uses conservative fallbacks rather than making additional autonomous Coordinator model calls.
+
 Swarm integration branches use a separate namespace:
 
 ```text
