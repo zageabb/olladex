@@ -927,3 +927,10 @@ button.primary:hover { background: var(--blue-2); }
 .agent-board-agent-guidance input{min-width:0;padding:7px 8px;border:1px solid #dfe6ef;border-radius:7px;background:#fff;color:var(--ink);font-size:8px}
 .agent-board-agent-guidance button{padding:6px 8px;font-size:8px}
 @media(max-width:760px){.agent-board-agent-guidance{grid-template-columns:1fr}}
+
+.swarm-model-test-results{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:6px}
+.swarm-model-test-results article{padding:8px;display:grid;gap:3px;background:#fff;border:1px solid #e5eaf1;border-radius:7px}
+.swarm-model-test-results article.ok{border-color:#cde7d5;background:#f3faf5}
+.swarm-model-test-results article.failed{border-color:#efd1ce;background:#fff5f4}
+.swarm-model-test-results strong{font-size:8px}
+.swarm-model-test-results span,.swarm-model-test-results small{color:#68788e;font-size:8px;line-height:1.35}
