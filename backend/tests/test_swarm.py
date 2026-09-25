@@ -501,3 +501,59 @@ def test_challenger_only_profile_fails_when_challenger_fails(tmp_path, monkeypat
     swarm_coordinator._reconcile(swarm_id)
 
     assert swarm.get_run(swarm_id)["status"] == "failed"
+
+
+def test_successful_recovery_supersedes_original_failure_without_repeating(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id, max_agents=5, max_concurrency=2)
+    with connect() as conn:
+        profile_id = int(conn.execute("SELECT id FROM swarm_profiles WHERE name='Development'").fetchone()["id"])
+        conn.execute("UPDATE swarm_runs SET profile_id=? WHERE id=?", (profile_id, swarm_id))
+
+    failed = task_queue.enqueue(
+        project_id, session_id, "Broken backend", "break",
+        swarm_id=swarm_id, agent_role="backend", task_kind="backend", source_kind="swarm_specialist",
+    )
+    completed = task_queue.enqueue(
+        project_id, session_id, "Research", "research",
+        swarm_id=swarm_id, agent_role="researcher", task_kind="researcher", source_kind="swarm_specialist",
+    )
+    reviewer = task_queue.enqueue(
+        project_id, session_id, "Review", "review",
+        swarm_id=swarm_id, agent_role="reviewer", task_kind="reviewer", source_kind="swarm_reviewer",
+        depends_on=[failed["id"], completed["id"]], priority=300,
+    )
+    with connect() as conn:
+        conn.execute("UPDATE background_tasks SET status='failed',error='boom',completed_at=? WHERE id=?", (now(), failed["id"]))
+        conn.execute("UPDATE background_tasks SET status='completed',result='useful',completed_at=? WHERE id=?", (now(), completed["id"]))
+
+    monkeypatch.setattr(
+        swarm_coordinator,
+        "_recovery_decision",
+        lambda run, profile, failed_items, completed_items: {
+            "action": "spawn",
+            "role": "backend",
+            "title": "Recovery backend",
+            "prompt": "Repair the failed backend work.",
+            "reason": "Recoverable.",
+        },
+    )
+
+    swarm_coordinator._reconcile(swarm_id)
+    agents = swarm.list_agents(swarm_id)
+    recovery = next(item for item in agents if item["source_kind"] == "swarm_recovery")
+    assert (":failed:" + str(failed["id"])) in recovery["source_ref"]
+
+    with connect() as conn:
+        conn.execute(
+            "UPDATE background_tasks SET status='completed',result='recovered',completed_at=? WHERE id=?",
+            (now(), recovery["id"]),
+        )
+
+    swarm_coordinator._reconcile(swarm_id)
+
+    agents = swarm.list_agents(swarm_id)
+    recoveries = [item for item in agents if item["source_kind"] == "swarm_recovery"]
+    assert len(recoveries) == 1
+    assert swarm.get_run(swarm_id)["status"] == "reviewing"
+    assert task_queue.get(reviewer["id"])["status"] == "queued"
