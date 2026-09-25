@@ -557,3 +557,34 @@ def test_successful_recovery_supersedes_original_failure_without_repeating(tmp_p
     assert len(recoveries) == 1
     assert swarm.get_run(swarm_id)["status"] == "reviewing"
     assert task_queue.get(reviewer["id"])["status"] == "queued"
+
+
+def test_verification_tasks_do_not_start_before_coordinator_opens_review(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id, max_agents=3, max_concurrency=2)
+
+    specialist = task_queue.enqueue(
+        project_id, session_id, "Done", "done",
+        swarm_id=swarm_id, source_kind="swarm_specialist", agent_role="backend", task_kind="backend", priority=10,
+    )
+    reviewer = task_queue.enqueue(
+        project_id, session_id, "Review", "review",
+        swarm_id=swarm_id, source_kind="swarm_reviewer", agent_role="reviewer", task_kind="reviewer",
+        depends_on=[specialist["id"]], priority=300,
+    )
+    with connect() as conn:
+        conn.execute(
+            "UPDATE background_tasks SET status='completed',result='ok',completed_at=? WHERE id=?",
+            (now(), specialist["id"]),
+        )
+
+    # Dependency is complete, but the Coordinator has not yet opened review.
+    assert swarm.get_run(swarm_id)["status"] == "running"
+    assert task_queue._claim_next() is None
+    assert task_queue.get(reviewer["id"])["status"] == "queued"
+
+    with connect() as conn:
+        conn.execute("UPDATE swarm_runs SET status='reviewing' WHERE id=?", (swarm_id,))
+
+    claimed = task_queue._claim_next()
+    assert claimed and claimed["id"] == reviewer["id"]
