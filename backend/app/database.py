@@ -180,7 +180,15 @@ CREATE TABLE IF NOT EXISTS swarm_runs (
   cancel_requested INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   started_at TEXT NOT NULL DEFAULT '',
-  completed_at TEXT NOT NULL DEFAULT ''
+  completed_at TEXT NOT NULL DEFAULT '',
+  integration_path TEXT NOT NULL DEFAULT '',
+  integration_branch TEXT NOT NULL DEFAULT '',
+  integration_check_command TEXT NOT NULL DEFAULT '',
+  integration_check_status TEXT NOT NULL DEFAULT '',
+  integration_check_output TEXT NOT NULL DEFAULT '',
+  integration_pr_number INTEGER NOT NULL DEFAULT 0,
+  integration_pr_url TEXT NOT NULL DEFAULT '',
+  integration_pr_state TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS swarm_blackboard (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -231,6 +239,16 @@ ADDITIVE_COLUMNS = {
     "file_changes": {"workspace_path": "TEXT NOT NULL DEFAULT ''","hunks": "TEXT NOT NULL DEFAULT '[]'", "applied_content": "TEXT NOT NULL DEFAULT ''", "updated_at": "TEXT NOT NULL DEFAULT ''"},
     "command_runs": {"task_id": "INTEGER", "run_id": "INTEGER", "cwd": "TEXT NOT NULL DEFAULT ''","status": "TEXT NOT NULL DEFAULT 'completed'", "updated_at": "TEXT NOT NULL DEFAULT ''"},
     "git_operations": {"remote_url": "TEXT NOT NULL DEFAULT ''"},
+    "swarm_runs": {
+        "integration_path": "TEXT NOT NULL DEFAULT ''",
+        "integration_branch": "TEXT NOT NULL DEFAULT ''",
+        "integration_check_command": "TEXT NOT NULL DEFAULT ''",
+        "integration_check_status": "TEXT NOT NULL DEFAULT ''",
+        "integration_check_output": "TEXT NOT NULL DEFAULT ''",
+        "integration_pr_number": "INTEGER NOT NULL DEFAULT 0",
+        "integration_pr_url": "TEXT NOT NULL DEFAULT ''",
+        "integration_pr_state": "TEXT NOT NULL DEFAULT ''",
+    },
     "background_tasks": {
         "worktree_path": "TEXT NOT NULL DEFAULT ''", "worktree_branch": "TEXT NOT NULL DEFAULT ''",
         "pull_request_number": "INTEGER NOT NULL DEFAULT 0", "pull_request_url": "TEXT NOT NULL DEFAULT ''", "pull_request_state": "TEXT NOT NULL DEFAULT ''",
