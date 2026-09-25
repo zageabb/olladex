@@ -1184,7 +1184,8 @@ The response contains:
 - `summary`: total/active/completed/failed counts, concurrency, overall progress and integration readiness;
 - `events`: incremental agent events;
 - `coordinator_events`: incremental Coordinator decisions/status/budget events;
-- `blackboard`: incremental shared knowledge entries.
+- `blackboard`: incremental shared knowledge entries;
+- `cursors`: the next `event`, `coordinator_event` and `blackboard` cursor values to send on the next poll.
 
 The Interaction Layer should own presentation of this data. The Swarm backend remains responsible for:
 
