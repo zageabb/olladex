@@ -15,14 +15,23 @@ def decompose(project: dict, objective: str, max_tasks: int = 6, *, swarm_mode: 
         raise ValueError("Lead objective is required")
     max_tasks = max(2, min(int(max_tasks or 6), 16))
     intelligence = workspace.repository_intelligence(project)
+    if swarm_mode:
+        role_text = "architect|backend|frontend|coder|tester|researcher|documentation|worker"
+        verification_rule = (
+            "- do not create reviewer or challenger tasks; Olladex reserves those roles for final verification.\n"
+            "- create explicit implementation/testing/research tasks when useful."
+        )
+    else:
+        role_text = "backend|frontend|tester|reviewer|researcher|worker"
+        verification_rule = "- create explicit test/review work when useful."
     prompt = f"""You are the lead software-engineering coordinator for Olladex.
 Break the objective into 2-{max_tasks} focused specialist tasks that can execute in parallel where safe.
 Return JSON only with this exact shape:
-{{"tasks":[{{"title":"...","role":"backend|frontend|tester|reviewer|researcher|worker","prompt":"...","depends_on":[0,1]}}]}}
+{{"tasks":[{{"title":"...","role":"{role_text}","prompt":"...","depends_on":[0,1]}}]}}
 Rules:
 - depends_on contains zero-based indexes of earlier tasks only.
 - keep tasks narrowly scoped and implementation-ready.
-- create explicit test/review work when useful.
+{verification_rule}
 - do not create a final consolidation task; Olladex adds that automatically.
 
 Objective:\n{objective.strip()}\n\nRepository intelligence:\n{json.dumps(intelligence, default=str)[:16000]}"""
