@@ -284,6 +284,14 @@ def get_swarm(swarm_id: int):
         raise HTTPException(404, str(exc)) from exc
 
 
+@router.post("/swarms/{swarm_id}/coordinator/input")
+def steer_swarm_coordinator(swarm_id: int, body: AgentInputRequest):
+    try:
+        return swarm_service.steer_coordinator(swarm_id, body.content)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 @router.post("/swarms/{swarm_id}/pause")
 def pause_swarm(swarm_id: int):
     try:
