@@ -31,6 +31,7 @@ def test_task_and_pr_review_routes_are_mounted():
     assert "/api/swarms/{swarm_id}/blackboard" in paths
     assert "/api/swarms/{swarm_id}/events" in paths
     assert "/api/swarms/{swarm_id}/coordinator/events" in paths
+    assert "/api/swarms/{swarm_id}/board" in paths
     assert "/api/swarms/{swarm_id}/pause" in paths
     assert "/api/swarms/{swarm_id}/resume" in paths
     assert "/api/swarm-agents/{task_id}" in paths
