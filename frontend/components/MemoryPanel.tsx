@@ -39,7 +39,7 @@ export function MemoryPanel({ projectId, projectName, sessionId }: { projectId: 
       try {
         const [personal, workspace, project] = await Promise.all([
           request<ScopedMemory>("/memory/personal"),
-          request<ScopedMemory>("/memory/workspace"),
+          request<ScopedMemory>(`/projects/${projectId}/workspace`).then(async workspace => workspace?.id ? request<ScopedMemory>(`/memory/workspace?workspace_id=${workspace.id}`) : ({ scope: "workspace", scope_key: "", content: "", updated_at: "" } as ScopedMemory)),
           request<ScopedMemory>(`/memory/project?project_id=${projectId}`),
         ]);
         if (disposed) return;
@@ -56,7 +56,12 @@ export function MemoryPanel({ projectId, projectName, sessionId }: { projectId: 
   async function saveScoped(scopeName: Exclude<Scope, "conversation">) {
     setNotice("Saving…");
     try {
-      const suffix = scopeName === "project" ? `?project_id=${projectId}` : "";
+      let suffix = scopeName === "project" ? `?project_id=${projectId}` : "";
+      if (scopeName === "workspace") {
+        const workspace = await request<{ id: number } | null>(`/projects/${projectId}/workspace`);
+        if (!workspace?.id) { setNotice("Assign this project to a workspace first"); return; }
+        suffix = `?workspace_id=${workspace.id}`;
+      }
       const result = await request<ScopedMemory>(`/memory/${scopeName}${suffix}`, { method: "PUT", body: JSON.stringify({ content: scopedDraft[scopeName] }) });
       setScoped(current => ({ ...current, [scopeName]: result.content }));
       setScopedDraft(current => ({ ...current, [scopeName]: result.content }));
@@ -98,8 +103,8 @@ export function MemoryPanel({ projectId, projectName, sessionId }: { projectId: 
     </section>}
 
     {scope === "workspace" && <section className="memory-scope-card live">
-      <header><div><p className="eyebrow">Workspace memory</p><h3>Default workspace</h3></div><span>Persistent</span></header>
-      <p>This scope is persisted now, but is not automatically injected into model context until explicit project-to-workspace membership exists.</p>
+      <header><div><p className="eyebrow">Workspace memory</p><h3>Assigned workspace</h3></div><span>Live</span></header>
+      <p>Workspace memory is now injected only when this project belongs to a named workspace.</p>
       <textarea value={scopedDraft.workspace} onChange={event => setScopedDraft(current => ({ ...current, workspace: event.target.value }))} maxLength={8000} placeholder="Shared architecture, reusable services, cross-project decisions…" />
       <div className="memory-actions"><small>{scopedDraft.workspace.length.toLocaleString()} / 8,000 characters</small><button onClick={() => setScopedDraft(current => ({ ...current, workspace: scoped.workspace }))} disabled={scopedDraft.workspace === scoped.workspace}>Reset</button><button className="primary" onClick={() => saveScoped("workspace")} disabled={scopedDraft.workspace === scoped.workspace}>Save memory</button></div>
     </section>}
