@@ -263,6 +263,8 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
   const selectedAgent=selectedAgentId?agents.find(agent=>agent.id===selectedAgentId)||null:null;
   const selectedAgentEvents=selectedAgent?events.filter(item=>item.task_id===selectedAgent.id):[];
   const integrationCandidates=agents.filter(agent=>agent.status==="completed"&&agent.task_kind!=="reviewer"&&agent.task_kind!=="challenger"&&Boolean(agent.worktree_branch));
+  const activeSwarmProfile=selected?profiles.find(item=>item.id===selected.profile_id):undefined;
+  const coordinatorProfile=activeSwarmProfile?.coordinator_profile_id?modelProfiles.find(item=>item.id===activeSwarmProfile.coordinator_profile_id):undefined;
 
   return <div className={styles.panel}>
     <section className={styles.hero}>
@@ -317,7 +319,7 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
         </header>
 
         <article className={styles.coordinator}>
-          <div><i className={styles.dot+" "+(selected.status==="failed"?"failed":selected.status==="completed"?"completed":"running")}/><span><strong>Coordinator</strong><small>{selected.status==="reviewing"?"Evaluating verification and review flow":selected.status==="running"?"Monitoring specialists, Blackboard and recovery conditions":selected.status==="paused"?"Paused with swarm":"Coordinator "+selected.status}</small></span></div>
+          <div><i className={styles.dot+" "+(selected.status==="failed"?"failed":selected.status==="completed"?"completed":"running")}/><span><strong>Coordinator</strong><small>{coordinatorProfile?.chat_model||"Project default"} · {selected.status==="reviewing"?"Evaluating verification and review flow":selected.status==="running"?"Monitoring specialists, Blackboard and recovery conditions":selected.status==="paused"?"Paused with swarm":"Coordinator "+selected.status}</small></span></div>
           <b>{selected.status}</b>
         </article>
 
