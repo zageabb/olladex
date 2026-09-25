@@ -56,7 +56,24 @@ def stop() -> None:
     _threads = [thread for thread in _threads if thread.is_alive()]
 
 
-def enqueue(project_id: int, session_id: int, title: str, prompt: str, source_kind: str = "manual", source_ref: str = "", parent_task_id: int | None = None, depends_on: list[int] | None = None, agent_role: str = "worker") -> dict:
+def enqueue(
+    project_id: int,
+    session_id: int,
+    title: str,
+    prompt: str,
+    source_kind: str = "manual",
+    source_ref: str = "",
+    parent_task_id: int | None = None,
+    depends_on: list[int] | None = None,
+    agent_role: str = "worker",
+    *,
+    swarm_id: int | None = None,
+    model_profile_id: int | None = None,
+    assigned_model: str = "",
+    task_kind: str = "specialist",
+    priority: int = 100,
+    depth: int = 0,
+) -> dict:
     stamp = now()
     dependency_ids = [int(item) for item in (depends_on or []) if int(item) > 0]
     with connect() as conn:
@@ -68,10 +85,24 @@ def enqueue(project_id: int, session_id: int, title: str, prompt: str, source_ki
             dependency = conn.execute("SELECT id,project_id FROM background_tasks WHERE id=?", (dependency_id,)).fetchone()
             if not dependency or dependency["project_id"] != project_id:
                 raise ValueError(f"Dependency task #{dependency_id} must exist in the same project")
+        if swarm_id is not None:
+            swarm = conn.execute("SELECT id,project_id,status,max_agents,total_agents_created FROM swarm_runs WHERE id=?", (swarm_id,)).fetchone()
+            if not swarm or int(swarm["project_id"]) != project_id:
+                raise ValueError("Swarm must exist in the same project")
+            if swarm["status"] in {"completed", "failed", "cancelled"}:
+                raise ValueError("Cannot add tasks to a finished swarm")
+            if int(swarm["total_agents_created"] or 0) >= int(swarm["max_agents"] or 1):
+                raise ValueError("Swarm has reached its maximum agent count")
         cursor = conn.execute(
-            "INSERT INTO background_tasks(project_id,session_id,title,prompt,source_kind,source_ref,status,parent_task_id,depends_on,agent_role,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-            (project_id, session_id, title, prompt, source_kind, source_ref, "queued", parent_task_id, json.dumps(dependency_ids), agent_role or "worker", stamp),
+            "INSERT INTO background_tasks(project_id,session_id,title,prompt,source_kind,source_ref,status,parent_task_id,depends_on,agent_role,swarm_id,model_profile_id,assigned_model,task_kind,priority,depth,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                project_id, session_id, title, prompt, source_kind, source_ref, "queued",
+                parent_task_id, json.dumps(dependency_ids), agent_role or "worker", swarm_id,
+                model_profile_id, assigned_model, task_kind or "specialist", int(priority), int(depth), stamp,
+            ),
         )
+        if swarm_id is not None:
+            conn.execute("UPDATE swarm_runs SET total_agents_created=total_agents_created+1 WHERE id=?", (swarm_id,))
         task_id = cursor.lastrowid
     _wake.set()
     return get(task_id)
@@ -138,6 +169,14 @@ def current_worktree_path() -> str:
         return ""
     task = get(task_id)
     return task.get("worktree_path", "") if task else ""
+
+
+def current_assigned_model() -> str:
+    task_id = current_task_id()
+    if not task_id:
+        return ""
+    task = get(task_id)
+    return str(task.get("assigned_model") or "") if task else ""
 
 
 def _dependency_ids(task: dict) -> list[int]:
@@ -208,8 +247,25 @@ def _dependency_branches(task: dict) -> list[str]:
 
 def _claim_next() -> dict | None:
     with connect() as conn:
-        candidates = [dict(row) for row in conn.execute("SELECT * FROM background_tasks WHERE status='queued' ORDER BY id LIMIT 100")]
+        candidates = [dict(row) for row in conn.execute("SELECT * FROM background_tasks WHERE status='queued' ORDER BY priority ASC,id ASC LIMIT 100")]
         for task in candidates:
+            swarm_id = task.get("swarm_id")
+            if swarm_id:
+                swarm = conn.execute("SELECT status,max_concurrency,cancel_requested FROM swarm_runs WHERE id=?", (swarm_id,)).fetchone()
+                if not swarm:
+                    conn.execute("UPDATE background_tasks SET status='failed',error=?,completed_at=? WHERE id=? AND status='queued'", ("Swarm no longer exists", now(), task["id"]))
+                    continue
+                if swarm["cancel_requested"] or swarm["status"] == "cancelled":
+                    conn.execute("UPDATE background_tasks SET status='cancelled',cancel_requested=1,completed_at=? WHERE id=? AND status='queued'", (now(), task["id"]))
+                    continue
+                if swarm["status"] in {"paused", "planning"}:
+                    continue
+                active = conn.execute(
+                    "SELECT COUNT(*) FROM background_tasks WHERE swarm_id=? AND status IN ('running','waiting_for_approval','waiting_for_input')",
+                    (swarm_id,),
+                ).fetchone()[0]
+                if int(active) >= max(1, int(swarm["max_concurrency"] or 1)):
+                    continue
             ready, blocked_reason = _dependency_state(conn, task)
             if blocked_reason:
                 conn.execute("UPDATE background_tasks SET status='failed',error=?,completed_at=? WHERE id=? AND status='queued'", (blocked_reason, now(), task["id"]))
