@@ -16,6 +16,22 @@ class SwarmSkillRequest(BaseModel):
     enabled: bool
 
 
+class SwarmProfileRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    enabled: bool = True
+    coordinator_profile_id: int | None = None
+    default_worker_profile_id: int | None = None
+    role_profiles: dict[str, int] = Field(default_factory=dict)
+    max_agents: int = Field(default=6, ge=2, le=20)
+    max_concurrency: int = Field(default=3, ge=1, le=8)
+    max_depth: int = Field(default=1, ge=1, le=4)
+    dynamic_size: bool = True
+    agent_tool_budget: int = Field(default=30, ge=1, le=200)
+    coordinator_tool_budget: int = Field(default=20, ge=1, le=200)
+    require_reviewer: bool = True
+    require_challenger: bool = False
+
+
 class SwarmCreateRequest(BaseModel):
     objective: str = Field(min_length=1, max_length=100_000)
     title: str = Field(default="", max_length=256)
@@ -79,6 +95,30 @@ def update_swarm_skill(project_id: int, body: SwarmSkillRequest):
 @router.get("/swarm-profiles")
 def swarm_profiles():
     return swarm_service.list_profiles()
+
+
+@router.post("/swarm-profiles")
+def create_swarm_profile(body: SwarmProfileRequest):
+    try:
+        return swarm_service.create_profile(body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.put("/swarm-profiles/{profile_id}")
+def update_swarm_profile(profile_id: int, body: SwarmProfileRequest):
+    try:
+        return swarm_service.update_profile(profile_id, body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.delete("/swarm-profiles/{profile_id}")
+def delete_swarm_profile(profile_id: int):
+    try:
+        return swarm_service.delete_profile(profile_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.get("/projects/{project_id}/swarms")
