@@ -278,7 +278,7 @@ def list_agents(swarm_id: int) -> list[dict]:
 
 
 def _event_summary(kind: str, payload: dict) -> str:
-    if kind in {"finding", "decision", "risk"}:
+    if kind in {"finding", "decision", "risk", "handoff"}:
         return str(payload.get("content") or "")
     if kind == "progress":
         return str(payload.get("message") or "Working")
