@@ -229,6 +229,7 @@ def create_run(
             (project_id, session_id, title[:256], objective, "planning", profile_id, max_agents_value, concurrency_value, stamp, stamp),
         )
         swarm_id = int(cursor.lastrowid)
+    emit_coordinator_event(swarm_id, "created", {"status": "planning", "title": title[:256]})
     return get_run(swarm_id)
 
 
@@ -332,6 +333,33 @@ def events(swarm_id: int, after: int = 0, limit: int = 200) -> list[dict]:
         item["payload"] = _json_object(item.get("payload"))
     return rows
 
+def emit_coordinator_event(swarm_id: int, kind: str, payload: dict) -> dict:
+    stamp = now()
+    with connect() as conn:
+        if not conn.execute("SELECT id FROM swarm_runs WHERE id=?", (swarm_id,)).fetchone():
+            raise ValueError("Swarm not found")
+        cursor = conn.execute(
+            "INSERT INTO swarm_coordinator_events(swarm_id,kind,payload,created_at) VALUES(?,?,?,?)",
+            (swarm_id, kind, json.dumps(payload, default=str), stamp),
+        )
+        row = conn.execute("SELECT * FROM swarm_coordinator_events WHERE id=?", (cursor.lastrowid,)).fetchone()
+    result = dict(row)
+    result["payload"] = _json_object(result.get("payload"))
+    return result
+
+
+def coordinator_events(swarm_id: int, after: int = 0, limit: int = 200) -> list[dict]:
+    limit = max(1, min(int(limit or 200), 1000))
+    with connect() as conn:
+        rows = [dict(row) for row in conn.execute(
+            "SELECT * FROM swarm_coordinator_events WHERE swarm_id=? AND id>? ORDER BY id ASC LIMIT ?",
+            (swarm_id, max(0, int(after)), limit),
+        )]
+    for item in rows:
+        item["payload"] = _json_object(item.get("payload"))
+    return rows
+
+
 def steer_coordinator(swarm_id: int, content: str) -> dict:
     content = content.strip()
     if not content:
@@ -348,6 +376,7 @@ def steer_coordinator(swarm_id: int, content: str) -> dict:
             combined = combined[-12000:]
         conn.execute("UPDATE swarm_runs SET coordinator_instructions=? WHERE id=?", (combined, swarm_id))
     publish(swarm_id, "decision", "User guidance to Coordinator: " + content, key="")
+    emit_coordinator_event(swarm_id, "guidance", {"content": content})
     return {"swarm_id": swarm_id, "status": "received", "coordinator_instructions": combined}
 
 
@@ -359,6 +388,7 @@ def pause(swarm_id: int) -> dict:
         if row["status"] not in {"running", "reviewing", "waiting"}:
             raise ValueError("Only active orchestration can be paused")
         conn.execute("UPDATE swarm_runs SET status='paused' WHERE id=?", (swarm_id,))
+    emit_coordinator_event(swarm_id, "status", {"status": "paused"})
     return get_run(swarm_id)
 
 
@@ -370,6 +400,7 @@ def resume(swarm_id: int) -> dict:
         if row["status"] != "paused":
             raise ValueError("Only paused swarms can be resumed")
         conn.execute("UPDATE swarm_runs SET status='running' WHERE id=?", (swarm_id,))
+    emit_coordinator_event(swarm_id, "status", {"status": "running", "reason": "resumed"})
     return get_run(swarm_id)
 
 
@@ -385,16 +416,24 @@ def cancel(swarm_id: int) -> dict:
         )]
     for task_id in task_ids:
         task_queue.cancel(task_id)
+    emit_coordinator_event(swarm_id, "status", {"status": "cancelled"})
     return get_run(swarm_id)
 
 
 def set_status(swarm_id: int, status: str) -> None:
     stamp = now() if status in TERMINAL_STATUSES else ""
     with connect() as conn:
+        row = conn.execute("SELECT status FROM swarm_runs WHERE id=?", (swarm_id,)).fetchone()
+        if not row:
+            raise ValueError("Swarm not found")
+        previous = str(row["status"])
+        if previous == status:
+            return
         if stamp:
             conn.execute("UPDATE swarm_runs SET status=?,completed_at=? WHERE id=?", (status, stamp, swarm_id))
         else:
             conn.execute("UPDATE swarm_runs SET status=? WHERE id=?", (status, swarm_id))
+    emit_coordinator_event(swarm_id, "status", {"status": status, "previous": previous})
 
 
 def publish(swarm_id: int, category: str, content: str, *, task_id: int | None = None, key: str = "", confidence: float | None = None) -> dict:
@@ -414,7 +453,14 @@ def publish(swarm_id: int, category: str, content: str, *, task_id: int | None =
             (swarm_id, task_id, category, key, content, confidence, stamp),
         )
         row = conn.execute("SELECT * FROM swarm_blackboard WHERE id=?", (cursor.lastrowid,)).fetchone()
-    return dict(row)
+    result = dict(row)
+    if task_id is None and category in {"decision", "risk"}:
+        emit_coordinator_event(
+            swarm_id,
+            category,
+            {"content": content, "key": key, "confidence": confidence},
+        )
+    return result
 
 
 def blackboard(swarm_id: int, *, category: str = "", task_id: int | None = None) -> list[dict]:
