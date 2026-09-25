@@ -398,6 +398,74 @@ def steer_coordinator(swarm_id: int, content: str) -> dict:
     return {"swarm_id": swarm_id, "status": "received", "coordinator_instructions": combined}
 
 
+def broadcast_guidance(swarm_id: int, content: str) -> dict:
+    content = content.strip()
+    if not content:
+        raise ValueError("Swarm guidance cannot be empty")
+
+    coordinator = steer_coordinator(swarm_id, content)
+    marker = "\n\nSwarm-wide user guidance:\n" + content
+
+    with connect() as conn:
+        run = conn.execute("SELECT status FROM swarm_runs WHERE id=?", (swarm_id,)).fetchone()
+        if not run:
+            raise ValueError("Swarm not found")
+        if run["status"] in TERMINAL_STATUSES:
+            raise ValueError("Finished swarms cannot be steered")
+
+        queued_ids = [
+            int(row["id"])
+            for row in conn.execute(
+                "SELECT id FROM background_tasks WHERE swarm_id=? AND status='queued'",
+                (swarm_id,),
+            )
+        ]
+        for task_id in queued_ids:
+            row = conn.execute("SELECT prompt FROM background_tasks WHERE id=?", (task_id,)).fetchone()
+            prompt = str(row["prompt"] or "") if row else ""
+            if content not in prompt[-12000:]:
+                conn.execute(
+                    "UPDATE background_tasks SET prompt=? WHERE id=?",
+                    ((prompt + marker)[-100000:], task_id),
+                )
+
+        active_runs = [
+            int(row["id"])
+            for row in conn.execute(
+                "SELECT ar.id FROM agent_runs ar "
+                "JOIN background_tasks bt ON bt.id=ar.task_id "
+                "WHERE bt.swarm_id=? AND ar.status IN ('running','waiting_for_approval','waiting_for_input')",
+                (swarm_id,),
+            )
+        ]
+
+    from . import conversation_runtime
+    steered: list[int] = []
+    for run_id in active_runs:
+        try:
+            conversation_runtime.steer(run_id, "Swarm-wide user guidance: " + content)
+            steered.append(run_id)
+        except Exception:
+            # A run may finish between the query and steering. Queued/future work
+            # still retains the persistent guidance.
+            continue
+
+    emit_coordinator_event(
+        swarm_id,
+        "broadcast",
+        {
+            "content": content,
+            "queued_tasks_updated": len(queued_ids),
+            "active_runs_steered": len(steered),
+        },
+    )
+    return {
+        **coordinator,
+        "queued_tasks_updated": len(queued_ids),
+        "active_runs_steered": len(steered),
+    }
+
+
 def pause(swarm_id: int) -> dict:
     with connect() as conn:
         row = conn.execute("SELECT status FROM swarm_runs WHERE id=?", (swarm_id,)).fetchone()
