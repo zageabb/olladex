@@ -251,3 +251,77 @@ def test_verification_waits_while_failed_swarm_dependency_can_be_recovered(tmp_p
 
     assert task_queue._claim_next() is None
     assert task_queue.get(reviewer["id"])["status"] == "queued"
+
+
+def test_coordinator_opens_review_gate_when_no_risks_remain(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id, max_agents=3, max_concurrency=2)
+    with connect() as conn:
+        profile_id = int(conn.execute("SELECT id FROM swarm_profiles WHERE name='Development'").fetchone()["id"])
+        conn.execute("UPDATE swarm_runs SET profile_id=? WHERE id=?", (profile_id, swarm_id))
+
+    specialist = task_queue.enqueue(
+        project_id, session_id, "Done", "done",
+        swarm_id=swarm_id, source_kind="swarm_specialist", agent_role="backend", task_kind="backend",
+    )
+    reviewer = task_queue.enqueue(
+        project_id, session_id, "Review", "review",
+        swarm_id=swarm_id, source_kind="swarm_reviewer", agent_role="reviewer", task_kind="reviewer",
+        depends_on=[specialist["id"]], priority=300,
+    )
+    with connect() as conn:
+        conn.execute("UPDATE background_tasks SET status='completed',result='ok',completed_at=? WHERE id=?", (now(), specialist["id"]))
+
+    swarm_coordinator._reconcile(swarm_id)
+
+    assert swarm.get_run(swarm_id)["status"] == "reviewing"
+    claimed = task_queue._claim_next()
+    assert claimed and claimed["id"] == reviewer["id"]
+
+
+def test_coordinator_can_add_followup_for_blackboard_risk(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id, max_agents=4, max_concurrency=2)
+    with connect() as conn:
+        profile_id = int(conn.execute("SELECT id FROM swarm_profiles WHERE name='Development'").fetchone()["id"])
+        conn.execute("UPDATE swarm_runs SET profile_id=? WHERE id=?", (profile_id, swarm_id))
+
+    specialist = task_queue.enqueue(
+        project_id, session_id, "Done", "done",
+        swarm_id=swarm_id, source_kind="swarm_specialist", agent_role="backend", task_kind="backend",
+    )
+    reviewer = task_queue.enqueue(
+        project_id, session_id, "Review", "review",
+        swarm_id=swarm_id, source_kind="swarm_reviewer", agent_role="reviewer", task_kind="reviewer",
+        depends_on=[specialist["id"]], priority=300,
+    )
+    with connect() as conn:
+        conn.execute("UPDATE background_tasks SET status='completed',result='ok',completed_at=? WHERE id=?", (now(), specialist["id"]))
+    swarm.publish(swarm_id, "risk", "Authentication edge case still lacks a regression test.", task_id=specialist["id"])
+
+    monkeypatch.setattr(
+        swarm_coordinator,
+        "_followup_decision",
+        lambda run, profile, completed, risks: {
+            "action": "spawn",
+            "role": "tester",
+            "title": "Regression verification",
+            "prompt": "Add and run the missing authentication regression test.",
+            "reason": "The risk is concrete and testable.",
+        },
+    )
+
+    swarm_coordinator._reconcile(swarm_id)
+
+    run = swarm.get_run(swarm_id)
+    followup = next(item for item in run["agents"] if item["source_kind"] == "swarm_followup")
+    reviewer_row = next(item for item in run["agents"] if item["id"] == reviewer["id"])
+    deps = reviewer_row["depends_on"]
+    if isinstance(deps, str):
+        import json
+        deps = json.loads(deps)
+
+    assert run["status"] == "running"
+    assert followup["agent_role"] == "tester"
+    assert followup["id"] in deps
+    assert reviewer_row["status"] == "queued"
