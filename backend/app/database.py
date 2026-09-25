@@ -145,6 +145,61 @@ CREATE TABLE IF NOT EXISTS background_tasks (
   started_at TEXT NOT NULL DEFAULT '',
   completed_at TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS swarm_profiles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  coordinator_profile_id INTEGER REFERENCES model_profiles(id) ON DELETE SET NULL,
+  default_worker_profile_id INTEGER REFERENCES model_profiles(id) ON DELETE SET NULL,
+  role_profiles TEXT NOT NULL DEFAULT '{}',
+  max_agents INTEGER NOT NULL DEFAULT 6,
+  max_concurrency INTEGER NOT NULL DEFAULT 3,
+  max_depth INTEGER NOT NULL DEFAULT 1,
+  dynamic_size INTEGER NOT NULL DEFAULT 1,
+  agent_tool_budget INTEGER NOT NULL DEFAULT 30,
+  coordinator_tool_budget INTEGER NOT NULL DEFAULT 20,
+  require_reviewer INTEGER NOT NULL DEFAULT 1,
+  require_challenger INTEGER NOT NULL DEFAULT 0,
+  is_builtin INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS swarm_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  objective TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'planning',
+  profile_id INTEGER REFERENCES swarm_profiles(id) ON DELETE SET NULL,
+  coordinator_task_id INTEGER REFERENCES background_tasks(id) ON DELETE SET NULL,
+  integration_task_id INTEGER REFERENCES background_tasks(id) ON DELETE SET NULL,
+  max_agents INTEGER NOT NULL DEFAULT 6,
+  max_concurrency INTEGER NOT NULL DEFAULT 3,
+  total_agents_created INTEGER NOT NULL DEFAULT 0,
+  cancel_requested INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  started_at TEXT NOT NULL DEFAULT '',
+  completed_at TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS swarm_blackboard (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  swarm_id INTEGER NOT NULL REFERENCES swarm_runs(id) ON DELETE CASCADE,
+  task_id INTEGER REFERENCES background_tasks(id) ON DELETE SET NULL,
+  category TEXT NOT NULL,
+  key TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL,
+  confidence REAL,
+  supersedes_id INTEGER REFERENCES swarm_blackboard(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS swarm_blackboard_swarm ON swarm_blackboard(swarm_id,id);
+CREATE TABLE IF NOT EXISTS project_skills (
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  skill TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY(project_id,skill)
+);
 CREATE TABLE IF NOT EXISTS github_operations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -183,6 +238,14 @@ ADDITIVE_COLUMNS = {
         "integration_path": "TEXT NOT NULL DEFAULT ''", "integration_branch": "TEXT NOT NULL DEFAULT ''",
         "integration_check_command": "TEXT NOT NULL DEFAULT ''", "integration_check_status": "TEXT NOT NULL DEFAULT ''", "integration_check_output": "TEXT NOT NULL DEFAULT ''",
         "integration_pr_number": "INTEGER NOT NULL DEFAULT 0", "integration_pr_url": "TEXT NOT NULL DEFAULT ''", "integration_pr_state": "TEXT NOT NULL DEFAULT ''",
+        "swarm_id": "INTEGER REFERENCES swarm_runs(id) ON DELETE CASCADE",
+        "model_profile_id": "INTEGER REFERENCES model_profiles(id) ON DELETE SET NULL",
+        "assigned_model": "TEXT NOT NULL DEFAULT ''",
+        "task_kind": "TEXT NOT NULL DEFAULT 'specialist'",
+        "priority": "INTEGER NOT NULL DEFAULT 100",
+        "depth": "INTEGER NOT NULL DEFAULT 0",
+        "progress": "INTEGER NOT NULL DEFAULT 0",
+        "current_activity": "TEXT NOT NULL DEFAULT ''",
     },
 }
 
@@ -209,6 +272,24 @@ def init_db() -> None:
         for profile in defaults:
             conn.execute("INSERT OR IGNORE INTO model_profiles(name,chat_model,embedding_model,temperature,max_steps,context_files,context_chars,is_builtin,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)", (*profile, stamp, stamp))
         conn.execute("UPDATE model_profiles SET is_builtin=1 WHERE name IN ('Balanced local','Fast review','Deep implementation')")
+        balanced = conn.execute("SELECT id FROM model_profiles WHERE name='Balanced local'").fetchone()
+        fast = conn.execute("SELECT id FROM model_profiles WHERE name='Fast review'").fetchone()
+        deep = conn.execute("SELECT id FROM model_profiles WHERE name='Deep implementation'").fetchone()
+        balanced_id = balanced[0] if balanced else None
+        fast_id = fast[0] if fast else balanced_id
+        deep_id = deep[0] if deep else balanced_id
+        swarm_defaults = [
+            ("Quick Review", balanced_id, fast_id, 3, 2, 1, 1, 0),
+            ("Development", balanced_id, deep_id, 5, 3, 1, 1, 0),
+            ("Bug Hunt", balanced_id, deep_id, 4, 3, 1, 1, 0),
+            ("Deep Development", deep_id, deep_id, 8, 3, 1, 1, 1),
+        ]
+        for name, coordinator_id, worker_id, max_agents, max_concurrency, max_depth, reviewer, challenger in swarm_defaults:
+            conn.execute(
+                "INSERT OR IGNORE INTO swarm_profiles(name,coordinator_profile_id,default_worker_profile_id,max_agents,max_concurrency,max_depth,require_reviewer,require_challenger,is_builtin,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,1,?,?)",
+                (name, coordinator_id, worker_id, max_agents, max_concurrency, max_depth, reviewer, challenger, stamp, stamp),
+            )
+        conn.execute("UPDATE swarm_profiles SET is_builtin=1 WHERE name IN ('Quick Review','Development','Bug Hunt','Deep Development')")
 
 
 @contextmanager
