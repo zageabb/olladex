@@ -28,6 +28,7 @@ type SwarmSkill = { project_id:number; skill:"swarm"; enabled:boolean };
 type SwarmProfile = { id:number; name:string; max_agents:number; max_concurrency:number; max_depth:number; dynamic_size:number; agent_tool_budget:number; coordinator_tool_budget:number; require_reviewer:number; require_challenger:number; coordinator_profile_id?:number|null; default_worker_profile_id?:number|null; role_profiles?:Record<string,number> };
 type ModelProfile = { id:number; name:string; chat_model:string };
 type SwarmPreflight = { ready:boolean; checks:{name:string;ok:boolean;detail:string}[]; max_agents:number; max_concurrency:number };
+type SwarmModelSelfTest = { ready:boolean; models:{model:string;roles:string[];ok:boolean;latency_ms:number;response:string;error?:string}[] };
 type SwarmIntegrationPlan = { task_ids?:number[]; branches:string[]; overlaps:{path:string;branches:string[]}[]; files_by_branch?:Record<string,string[]>; path?:string; branch?:string; check_status?:string; check_output?:string };
 
 export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:number; onCreated:()=>void }) {
@@ -57,6 +58,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
   const [swarmMaxAgents,setSwarmMaxAgents]=useState(5);
   const [swarmConcurrency,setSwarmConcurrency]=useState(3);
   const [swarmPreflight,setSwarmPreflight]=useState<SwarmPreflight|null>(null);
+  const [swarmSelfTest,setSwarmSelfTest]=useState<SwarmModelSelfTest|null>(null);
   const [selectedSwarmAgentId,setSelectedSwarmAgentId]=useState<number|null>(null);
   const [selectedSwarmAgent,setSelectedSwarmAgent]=useState<SwarmAgentDetail|null>(null);
   const [agentGuidance,setAgentGuidance]=useState("");
@@ -202,6 +204,17 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
       setNotice(`Stop requested for agent #${selectedSwarmAgent.task.id}`);
       setSelectedSwarmAgentId(null);
       await load();
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
+  }
+
+  async function testSwarmModels(){
+    if(!swarmProfileId)return;
+    setBusy(true);setSwarmSelfTest(null);
+    try{
+      const result=await request<SwarmModelSelfTest>(`/projects/${projectId}/swarms/self-test?profile_id=${swarmProfileId}`,{method:"POST"});
+      setSwarmSelfTest(result);
+      setNotice(result.ready?"All configured Swarm models responded":"One or more configured Swarm models failed the self-test");
     }catch(error){setNotice(error instanceof Error?error.message:String(error));}
     finally{setBusy(false);}
   }
@@ -452,7 +465,8 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
             <label className="swarm-check"><input type="checkbox" checked={Boolean(profile.dynamic_size)} onChange={event=>updateSwarmProfile(profile.id,{dynamic_size:event.target.checked?1:0})}/> Dynamic size</label>
             <label className="swarm-check"><input type="checkbox" checked={Boolean(profile.require_reviewer)} onChange={event=>updateSwarmProfile(profile.id,{require_reviewer:event.target.checked?1:0})}/> Final reviewer</label>
             <label className="swarm-check"><input type="checkbox" checked={Boolean(profile.require_challenger)} onChange={event=>updateSwarmProfile(profile.id,{require_challenger:event.target.checked?1:0})}/> Challenger</label>
-            <div className={styles.actions}><button type="button" onClick={()=>saveSwarmProfile(profile)} disabled={busy}>Save Swarm settings</button></div>
+            <div className={styles.actions}><button type="button" onClick={()=>saveSwarmProfile(profile)} disabled={busy}>Save Swarm settings</button><button type="button" onClick={testSwarmModels} disabled={busy}>Test local models</button></div>
+            {swarmSelfTest&&<div className="swarm-model-test-results">{swarmSelfTest.models.map(item=><article key={item.model} className={item.ok?"ok":"failed"}><strong>{item.model}</strong><span>{item.ok?"ready":"failed"} · {item.latency_ms} ms</span><small>{item.roles.join(", ")}</small>{!item.ok&&<small>{item.error||item.response||"Unexpected model response"}</small>}</article>)}</div>}
           </div></details>})()}
         </>}
       </div>
