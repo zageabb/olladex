@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 
 from ..database import connect, now
 from . import ollama, task_queue
@@ -199,6 +200,83 @@ def validate_models(profile: dict) -> dict:
     if missing:
         raise ValueError("Required local Ollama model(s) are not installed: " + ", ".join(missing))
     return {"installed": sorted(installed), "assignments": assignments}
+
+
+def preflight(
+    project_id: int,
+    profile_id: int,
+    *,
+    max_agents: int | None = None,
+    max_concurrency: int | None = None,
+) -> dict:
+    profile = get_profile(profile_id)
+    requested_agents = max(2, min(int(max_agents or profile["max_agents"]), 20))
+    requested_concurrency = max(1, min(int(max_concurrency or profile["max_concurrency"]), requested_agents, 8))
+
+    checks: list[dict] = []
+    with connect() as conn:
+        project = conn.execute("SELECT id,path FROM projects WHERE id=?", (project_id,)).fetchone()
+        if not project:
+            raise ValueError("Project not found")
+        journal_mode = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+        busy_timeout = int(conn.execute("PRAGMA busy_timeout").fetchone()[0])
+
+    checks.append({
+        "name": "sqlite_wal",
+        "ok": journal_mode == "wal",
+        "detail": f"journal_mode={journal_mode}",
+    })
+    checks.append({
+        "name": "sqlite_busy_timeout",
+        "ok": busy_timeout >= 5000,
+        "detail": f"busy_timeout={busy_timeout}ms",
+    })
+
+    path = str(project["path"] or "")
+    git_ok = False
+    git_detail = "Project path is not a Git repository"
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=path,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=10,
+            check=False,
+        )
+        git_ok = completed.returncode == 0 and completed.stdout.strip() == "true"
+        git_detail = completed.stdout.strip() or git_detail
+    except (OSError, subprocess.SubprocessError) as exc:
+        git_detail = str(exc)
+    checks.append({"name": "git_repository", "ok": git_ok, "detail": git_detail})
+
+    try:
+        model_status = validate_models(profile)
+        checks.append({
+            "name": "ollama_models",
+            "ok": True,
+            "detail": ", ".join(sorted(set(model_status.get("assignments", {}).values()))) or "No explicit model assignments",
+        })
+    except ValueError as exc:
+        model_status = {"installed": [], "assignments": {}}
+        checks.append({"name": "ollama_models", "ok": False, "detail": str(exc)})
+
+    checks.append({
+        "name": "swarm_limits",
+        "ok": requested_concurrency <= requested_agents,
+        "detail": f"max_agents={requested_agents}, max_concurrency={requested_concurrency}",
+    })
+
+    return {
+        "ready": all(item["ok"] for item in checks),
+        "project_id": project_id,
+        "profile_id": profile_id,
+        "max_agents": requested_agents,
+        "max_concurrency": requested_concurrency,
+        "checks": checks,
+        "models": model_status,
+    }
 
 
 def create_run(
