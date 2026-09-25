@@ -27,6 +27,7 @@ def test_task_and_pr_review_routes_are_mounted():
     assert "/api/swarm-profiles" in paths
     assert "/api/projects/{project_id}/swarms" in paths
     assert "/api/projects/{project_id}/swarms/preflight" in paths
+    assert "/api/projects/{project_id}/swarms/self-test" in paths
     assert "/api/swarms/{swarm_id}" in paths
     assert "/api/swarms/{swarm_id}/agents" in paths
     assert "/api/swarms/{swarm_id}/blackboard" in paths
