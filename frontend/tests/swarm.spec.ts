@@ -94,10 +94,11 @@ test('interaction layer can enable, preflight and start a swarm', async ({ page 
   await expect.poll(() => savedCoordinatorProfile).toBe(2);
 
   await page.getByRole('button', {name:'Test local models'}).click();
-  await expect(page.getByText('phi4:14b')).toBeVisible();
-  await expect(page.getByText(/420 ms/)).toBeVisible();
-  await expect(page.getByText('qwen2.5-coder:7b')).toBeVisible();
-  await expect(page.getByText(/280 ms/)).toBeVisible();
+  const modelResults=page.locator('.swarm-model-test-results');
+  await expect(modelResults.getByText('phi4:14b', {exact:true})).toBeVisible();
+  await expect(modelResults.getByText(/420 ms/)).toBeVisible();
+  await expect(modelResults.getByText('qwen2.5-coder:7b', {exact:true})).toBeVisible();
+  await expect(modelResults.getByText(/280 ms/)).toBeVisible();
 
   await page.getByPlaceholder('Describe the larger outcome for the Swarm…').fill('Harden authentication');
   await page.getByRole('button', {name:'Preflight & start Swarm'}).click();
@@ -232,7 +233,7 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
   await page.getByText('Inspect auth').click();
   await expect(page.getByText('backend/app/auth.py')).toBeVisible();
   await expect(page.getByText('pytest backend/tests/test_auth.py')).toBeVisible();
-  await expect(page.getByText('Auth dependency is centralized.').last()).toBeVisible();
+  await expect(page.locator('.agent-board-detail').getByText('Auth dependency is centralized.', {exact:true})).toBeVisible();
 
   await page.getByText(/Coordinator timeline · 2/).click();
   await expect(page.getByText('Coordinator opened final verification.').last()).toBeVisible();
