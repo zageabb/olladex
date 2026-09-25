@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import subprocess
 
 from backend.app.config import settings
 from backend.app.database import connect, init_db, now
@@ -906,3 +907,49 @@ def test_sqlite_wal_handles_parallel_swarm_writers(tmp_path, monkeypatch):
     assert len(swarm.blackboard(swarm_id, limit=1000)) == 120
     coordinator = swarm.coordinator_events(swarm_id, limit=1000)
     assert len([item for item in coordinator if item["kind"] == "test_event"]) == 120
+
+
+def test_swarm_preflight_checks_git_sqlite_models_and_limits(tmp_path, monkeypatch):
+    project_id, _ = _seed(tmp_path, monkeypatch)
+    with connect() as conn:
+        project_path = conn.execute("SELECT path FROM projects WHERE id=?", (project_id,)).fetchone()["path"]
+        profile_id = int(conn.execute("SELECT id FROM swarm_profiles WHERE name='Development'").fetchone()["id"])
+
+    subprocess.run(["git", "init"], cwd=project_path, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    monkeypatch.setattr(
+        swarm,
+        "validate_models",
+        lambda profile: {
+            "installed": ["phi4:14b", "qwen2.5-coder:7b"],
+            "assignments": {"coordinator": "phi4:14b", "backend": "qwen2.5-coder:7b"},
+        },
+    )
+
+    result = swarm.preflight(project_id, profile_id, max_agents=6, max_concurrency=3)
+
+    assert result["ready"] is True
+    assert result["max_agents"] == 6
+    assert result["max_concurrency"] == 3
+    checks = {item["name"]: item for item in result["checks"]}
+    assert checks["sqlite_wal"]["ok"] is True
+    assert checks["sqlite_busy_timeout"]["ok"] is True
+    assert checks["git_repository"]["ok"] is True
+    assert checks["ollama_models"]["ok"] is True
+    assert checks["swarm_limits"]["ok"] is True
+
+
+def test_swarm_preflight_reports_missing_local_models_without_creating_run(tmp_path, monkeypatch):
+    project_id, _ = _seed(tmp_path, monkeypatch)
+    with connect() as conn:
+        profile_id = int(conn.execute("SELECT id FROM swarm_profiles WHERE name='Development'").fetchone()["id"])
+
+    monkeypatch.setattr(swarm, "validate_models", lambda profile: (_ for _ in ()).throw(ValueError("Required local Ollama model(s) are not installed: phi4:14b")))
+
+    result = swarm.preflight(project_id, profile_id)
+
+    assert result["ready"] is False
+    model_check = next(item for item in result["checks"] if item["name"] == "ollama_models")
+    assert model_check["ok"] is False
+    assert "phi4:14b" in model_check["detail"]
+    with connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM swarm_runs").fetchone()[0] == 0
