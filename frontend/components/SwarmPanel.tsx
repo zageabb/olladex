@@ -9,6 +9,7 @@ type SwarmProfile = { id:number; name:string; max_agents:number; max_concurrency
 type Agent = { id:number; title:string; status:string; agent_role:string; assigned_model:string; task_kind:string; priority:number; progress:number; current_activity:string; depends_on?:number[]|string; run_id?:number|null; worktree_branch?:string; result?:string; error?:string; created_at:string; started_at?:string };
 type SwarmRun = { id:number; project_id:number; title:string; objective:string; status:string; profile_id:number; max_agents:number; max_concurrency:number; total_agents_created:number; created_at:string; started_at:string; completed_at:string; agents?:Agent[]; agent_counts?:Record<string,number> };
 type BlackboardItem = { id:number; task_id?:number|null; category:string; key:string; content:string; confidence?:number|null; created_at:string };
+type SwarmEvent = { id:number; run_id:number; task_id:number; task_title:string; agent_role:string; assigned_model:string; kind:string; payload:Record<string,unknown>; created_at:string };
 
 export function SwarmPanel({ projectId }: { projectId:number }) {
   const [skill,setSkill]=useState<Skill|null>(null);
@@ -17,6 +18,7 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
   const [selectedId,setSelectedId]=useState<number|null>(null);
   const [selected,setSelected]=useState<SwarmRun|null>(null);
   const [blackboard,setBlackboard]=useState<BlackboardItem[]>([]);
+  const [events,setEvents]=useState<SwarmEvent[]>([]);
   const [profileId,setProfileId]=useState("");
   const [title,setTitle]=useState("");
   const [objective,setObjective]=useState("");
@@ -28,17 +30,18 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
   useEffect(()=>{ loadBootstrap(); },[projectId]);
 
   useEffect(()=>{
-    if(!selectedId){ setSelected(null); setBlackboard([]); return; }
+    if(!selectedId){ setSelected(null); setBlackboard([]); setEvents([]); return; }
     let disposed=false;
     async function refresh(){
       try{
         const results=await Promise.all([
           request<SwarmRun>("/swarms/"+selectedId),
-          request<BlackboardItem[]>("/swarms/"+selectedId+"/blackboard")
+          request<BlackboardItem[]>("/swarms/"+selectedId+"/blackboard"),
+          request<SwarmEvent[]>("/swarms/"+selectedId+"/events?after=0&limit=200")
         ]);
         if(disposed)return;
-        const run=results[0]; const board=results[1];
-        setSelected(run); setBlackboard(board);
+        const run=results[0]; const board=results[1]; const activity=results[2];
+        setSelected(run); setBlackboard(board); setEvents(activity);
         setRuns(items=>items.map(item=>item.id===run.id?{...item,...run}:item));
       }catch(error){ if(!disposed)setNotice(error instanceof Error?error.message:String(error)); }
     }
@@ -201,6 +204,16 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
         </section>
 
         <section>
+          <div className={styles.sectionHead}><div><p className="eyebrow">Live activity</p><h3>Agent timeline</h3></div><span>{events.length} events</span></div>
+          <div className={styles.timeline}>{events.length?events.slice().reverse().map(item=><article key={item.id}>
+            <time>{new Date(item.created_at).toLocaleTimeString()}</time>
+            <strong>Agent #{item.task_id} · {item.agent_role}</strong>
+            <b>{item.kind}</b>
+            <p>{eventText(item)}</p>
+          </article>):<div className={styles.empty}>No activity yet.</div>}</div>
+        </section>
+
+        <section>
           <div className={styles.sectionHead}><div><p className="eyebrow">Shared knowledge</p><h3>Blackboard</h3></div><span>{blackboard.length} entries</span></div>
           <div className={styles.blackboard}>{blackboard.length?blackboard.slice().reverse().map(item=><article key={item.id}><header><strong>{item.category}</strong>{item.task_id&&<span>Agent #{item.task_id}</span>}{item.confidence!=null&&<span>{Math.round(item.confidence*100)}%</span>}</header><p>{item.content}</p>{item.key&&<small>{item.key}</small>}</article>):<div className={styles.empty}>No shared findings yet.</div>}</div>
         </section>
@@ -209,4 +222,16 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
     </section>
     {notice&&<div className={styles.notice}>{notice}</div>}
   </div>;
+}
+
+
+function eventText(item:SwarmEvent){
+  const payload=item.payload||{};
+  const direct=payload["content"]||payload["message"]||payload["summary"]||payload["status"]||payload["question"];
+  if(typeof direct==="string"&&direct.trim())return direct;
+  const steps=payload["steps"];
+  if(Array.isArray(steps))return steps.map(String).join(" · ");
+  const tool=payload["tool"];
+  if(typeof tool==="string")return "Using "+tool;
+  return item.task_title||item.kind.replaceAll("_"," ");
 }
