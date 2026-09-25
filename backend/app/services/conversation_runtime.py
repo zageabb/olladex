@@ -105,6 +105,26 @@ def state(status, run_id=None):
         emit('status', {'status': status}, run_id)
 
 
+def state_with_event(status, kind, payload, run_id=None):
+    run_id = run_id or current_id()
+    if not run_id:
+        return
+    stamp = now()
+    with connect() as conn:
+        conn.execute('UPDATE agent_runs SET status=?,updated_at=? WHERE id=?', (status, stamp, run_id))
+        row = conn.execute('SELECT task_id FROM agent_runs WHERE id=?', (run_id,)).fetchone()
+        if row and row['task_id'] and status in ACTIVE:
+            conn.execute('UPDATE background_tasks SET status=? WHERE id=?', (status, row['task_id']))
+        conn.execute(
+            'INSERT INTO agent_events(run_id,kind,payload,created_at) VALUES(?,?,?,?)',
+            (run_id, 'status', json.dumps({'status': status}), stamp),
+        )
+        conn.execute(
+            'INSERT INTO agent_events(run_id,kind,payload,created_at) VALUES(?,?,?,?)',
+            (run_id, kind, json.dumps(payload), stamp),
+        )
+
+
 def checkpoint(messages):
     if current_id():
         with connect() as conn:
@@ -171,8 +191,11 @@ def command(project, command):
         # Publish the approval event only after the durable run/task state is ready.
         # A UI reacting immediately to the event can then approve without racing a
         # still-'running' agent state.
-        state('waiting_for_approval')
-        emit('approval', {'command_run_id': command_id, 'command': command, 'cwd': cwd})
+        state_with_event(
+            'waiting_for_approval',
+            'approval',
+            {'command_run_id': command_id, 'command': command, 'cwd': cwd},
+        )
         while True:
             check_cancelled()
             with connect() as conn:
