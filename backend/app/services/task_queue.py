@@ -266,6 +266,12 @@ def _claim_next() -> dict | None:
                 if swarm["cancel_requested"] or swarm["status"] == "cancelled":
                     conn.execute("UPDATE background_tasks SET status='cancelled',cancel_requested=1,completed_at=? WHERE id=? AND status='queued'", (now(), task["id"]))
                     continue
+                if swarm["status"] in {"completed", "failed"}:
+                    conn.execute(
+                        "UPDATE background_tasks SET status='cancelled',error=?,completed_at=? WHERE id=? AND status='queued'",
+                        ("Swarm already finished", now(), task["id"]),
+                    )
+                    continue
                 if swarm["status"] in {"paused", "planning"}:
                     continue
                 active = conn.execute(
