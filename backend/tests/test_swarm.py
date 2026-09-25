@@ -369,6 +369,9 @@ def test_coordinator_guidance_is_persisted_and_audited(tmp_path, monkeypatch):
     decisions = swarm.blackboard(swarm_id, category="decision")
     assert any("Do not change the public API." in item["content"] for item in decisions)
     assert any("Prioritise regression tests." in item["content"] for item in decisions)
+    activity = swarm.get_run(swarm_id)["coordinator_activity"]
+    assert activity
+    assert "Prioritise regression tests." in activity["content"]
 
 
 def test_recovery_keeps_reviewer_downstream_of_challenger(tmp_path, monkeypatch):
