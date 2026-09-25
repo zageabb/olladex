@@ -94,9 +94,11 @@ test('interaction agent board renders live swarm snapshot instead of legacy grap
       await json({
         swarm:{
           id:7,title:'Auth hardening',status:'reviewing',
+          coordinator_activity:{category:'decision',content:'Coordinator opened final verification.'},
+          coordinator_budget:{used:3,budget:20,remaining:17},
           agents:[
-            {id:11,title:'Inspect auth',status:'completed',agent_role:'backend',progress:100,assigned_model:'test'},
-            {id:12,title:'Final review',status:'queued',agent_role:'reviewer',progress:0,assigned_model:'test'}
+            {id:11,title:'Inspect auth',status:'completed',agent_role:'backend',progress:100,assigned_model:'test',tool_usage:6,tool_budget:30,current_activity:'Done',latest_insight:{category:'finding',content:'Auth dependency is centralized.'}},
+            {id:12,title:'Final review',status:'queued',agent_role:'reviewer',progress:0,assigned_model:'test',tool_usage:0,tool_budget:30,current_activity:''}
           ]
         },
         summary:{
@@ -105,6 +107,16 @@ test('interaction agent board renders live swarm snapshot instead of legacy grap
         },
         events:[],coordinator_events:[],blackboard:[],
         cursors:{event:0,coordinator_event:0,blackboard:0}
+      });
+      return true;
+    }
+    if (p === '/api/swarm-agents/11') {
+      await json({
+        task:{id:11,title:'Inspect auth',status:'completed',agent_role:'backend',progress:100,tool_usage:6,tool_budget:30,current_activity:'Done'},
+        commands:[{id:1,command:'pytest backend/tests/test_auth.py',output:'12 passed',exit_code:0,status:'completed'}],
+        blackboard:[{id:2,category:'finding',content:'Auth dependency is centralized.'}],
+        changed_files:['backend/app/auth.py'],
+        worktree:{branch_diff:'diff --git a/backend/app/auth.py b/backend/app/auth.py',working_diff:''}
       });
       return true;
     }
@@ -120,4 +132,11 @@ test('interaction agent board renders live swarm snapshot instead of legacy grap
   await expect(page.getByText(/backend · completed · 100%/)).toBeVisible();
   await expect(page.getByText('Final review')).toBeVisible();
   await expect(page.getByText(/reviewer · queued · 0%/)).toBeVisible();
+  await expect(page.getByText(/budget 3\/20/)).toBeVisible();
+  await expect(page.getByText('Coordinator opened final verification.')).toBeVisible();
+
+  await page.getByText('Inspect auth').click();
+  await expect(page.getByText('backend/app/auth.py')).toBeVisible();
+  await expect(page.getByText('pytest backend/tests/test_auth.py')).toBeVisible();
+  await expect(page.getByText('Auth dependency is centralized.').last()).toBeVisible();
 });
