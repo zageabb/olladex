@@ -261,6 +261,11 @@ def list_runs(project_id: int) -> list[dict]:
 
 def list_agents(swarm_id: int) -> list[dict]:
     with connect() as conn:
+        budget_row = conn.execute(
+            "SELECT sp.agent_tool_budget FROM swarm_runs sr LEFT JOIN swarm_profiles sp ON sp.id=sr.profile_id WHERE sr.id=?",
+            (swarm_id,),
+        ).fetchone()
+        tool_budget = int(budget_row["agent_tool_budget"] or 0) if budget_row else 0
         rows = [dict(row) for row in conn.execute(
             "SELECT bt.*, "
             "(SELECT ar.id FROM agent_runs ar WHERE ar.task_id=bt.id ORDER BY ar.id DESC LIMIT 1) AS run_id, "
@@ -275,9 +280,15 @@ def list_agents(swarm_id: int) -> list[dict]:
             except (TypeError, json.JSONDecodeError):
                 item["depends_on"] = []
             run_id = item.get("run_id")
+            item["tool_budget"] = tool_budget
             if not run_id:
+                item["tool_usage"] = 0
                 item["latest_event"] = None
                 continue
+            item["tool_usage"] = int(conn.execute(
+                "SELECT COUNT(*) FROM agent_events WHERE run_id=? AND kind='tool_started'",
+                (run_id,),
+            ).fetchone()[0])
             event = conn.execute(
                 "SELECT kind,payload,created_at FROM agent_events WHERE run_id=? "
                 "AND kind NOT IN ('text_delta','assistant_start') ORDER BY id DESC LIMIT 1",
