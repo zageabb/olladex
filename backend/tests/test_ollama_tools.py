@@ -75,6 +75,9 @@ def test_swarm_blackboard_tools_are_strictly_validated():
     handoff = ollama.validate_arguments("swarm_publish_handoff", {"content": "Done", "key": "final"})
     assert handoff == {"content": "Done", "key": "final"}
 
+    help_request = ollama.validate_arguments("swarm_request_help", {"content": "Need an independent tester", "key": "tests"})
+    assert help_request == {"content": "Need an independent tester", "key": "tests"}
+
 
 def test_update_progress_persists_step_based_percentage(tmp_path, monkeypatch):
     project = {"id": 1, "name": "Tools", "path": str(tmp_path), "model": "test"}
