@@ -50,6 +50,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
   const [swarmPreflight,setSwarmPreflight]=useState<SwarmPreflight|null>(null);
   const [selectedSwarmAgentId,setSelectedSwarmAgentId]=useState<number|null>(null);
   const [selectedSwarmAgent,setSelectedSwarmAgent]=useState<SwarmAgentDetail|null>(null);
+  const [swarmGuidance,setSwarmGuidance]=useState("");
 
   useEffect(()=>{ load(); loadSwarmSettings(); const timer=window.setInterval(load,3000); return()=>window.clearInterval(timer); },[projectId]);
   async function load(){
@@ -94,6 +95,45 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
       });
       setSwarmSkill(updated);
       setNotice(updated.enabled?"Swarm enabled for this project":"Swarm disabled for this project");
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
+  }
+
+  async function swarmAction(kind:"pause"|"resume"|"stop"){
+    if(!swarmBoard)return;
+    setBusy(true);
+    try{
+      if(kind==="stop") await request(`/swarms/${swarmBoard.swarm.id}`,{method:"DELETE"});
+      else await request(`/swarms/${swarmBoard.swarm.id}/${kind}`,{method:"POST"});
+      setNotice(kind==="stop"?"Swarm stopped":`Swarm ${kind}d`);
+      await load();
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
+  }
+
+  async function sendSwarmGuidance(all:boolean){
+    if(!swarmBoard||!swarmGuidance.trim())return;
+    setBusy(true);
+    try{
+      const endpoint=all
+        ? `/swarms/${swarmBoard.swarm.id}/broadcast`
+        : `/swarms/${swarmBoard.swarm.id}/coordinator/input`;
+      await request(endpoint,{method:"POST",body:JSON.stringify({content:swarmGuidance.trim()})});
+      setNotice(all?"Guidance applied across the Swarm":"Guidance sent to Coordinator");
+      setSwarmGuidance("");
+      await load();
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
+  }
+
+  async function stopSwarmAgent(){
+    if(!selectedSwarmAgent)return;
+    setBusy(true);
+    try{
+      await request(`/swarm-agents/${selectedSwarmAgent.task.id}`,{method:"DELETE"});
+      setNotice(`Stop requested for agent #${selectedSwarmAgent.task.id}`);
+      setSelectedSwarmAgentId(null);
+      await load();
     }catch(error){setNotice(error instanceof Error?error.message:String(error));}
     finally{setBusy(false);}
   }
@@ -171,10 +211,13 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
     <section className="agent-board-shell">
       <div><p className="eyebrow">Agent board</p><h3>{swarmBoard?swarmBoard.swarm.title:"Under the hood"}</h3><p>{swarmBoard?`Swarm #${swarmBoard.swarm.id} · ${swarmBoard.swarm.status.replaceAll("_"," ")} · ${swarmBoard.summary.progress}% complete`:"Normal tasks stay simple. Expand this view when you want to inspect specialist agents, roles and execution state."}</p></div>
       <div className="agent-board-metrics"><span><strong>{boardTotal}</strong> agents</span><span><strong>{boardActive}</strong> active</span><span><strong>{boardCompleted}</strong> complete</span></div>
-      {swarmBoard&&<article className="agent-board-coordinator"><span className={`agent-dot ${swarmBoard.swarm.status}`}>●</span><div><strong>Coordinator</strong><small>budget {swarmBoard.swarm.coordinator_budget?.used||0}/{swarmBoard.swarm.coordinator_budget?.budget||0} · {swarmBoard.swarm.coordinator_activity?.content||"Monitoring specialist progress and dependencies"}</small></div></article>}
+      {swarmBoard&&<>
+        <article className="agent-board-coordinator"><span className={`agent-dot ${swarmBoard.swarm.status}`}>●</span><div><strong>Coordinator</strong><small>budget {swarmBoard.swarm.coordinator_budget?.used||0}/{swarmBoard.swarm.coordinator_budget?.budget||0} · {swarmBoard.swarm.coordinator_activity?.content||"Monitoring specialist progress and dependencies"}</small></div><div className="agent-board-control-actions">{swarmBoard.swarm.status==="paused"?<button type="button" onClick={()=>swarmAction("resume")} disabled={busy}>Resume</button>:["running","reviewing","waiting"].includes(swarmBoard.swarm.status)&&<button type="button" onClick={()=>swarmAction("pause")} disabled={busy}>Pause</button>}{!["completed","failed","cancelled"].includes(swarmBoard.swarm.status)&&<button type="button" onClick={()=>swarmAction("stop")} disabled={busy}>Stop</button>}</div></article>
+        {!["completed","failed","cancelled"].includes(swarmBoard.swarm.status)&&<form className="agent-board-guidance" onSubmit={event=>{event.preventDefault();sendSwarmGuidance(false);}}><input value={swarmGuidance} onChange={event=>setSwarmGuidance(event.target.value)} placeholder="Guide the Swarm…"/><button disabled={busy||!swarmGuidance.trim()}>Coordinator</button><button type="button" onClick={()=>sendSwarmGuidance(true)} disabled={busy||!swarmGuidance.trim()}>Apply to all</button></form>}
+      </>}
       <div className="agent-board-preview">{swarmBoard&&boardAgents.length?boardAgents.slice(0,8).map(agent=><article key={agent.id} role="button" tabIndex={0} onClick={()=>setSelectedSwarmAgentId(agent.id)} onKeyDown={event=>{if(event.key==="Enter")setSelectedSwarmAgentId(agent.id);}}><span className={`agent-dot ${agent.status}`}>●</span><div><strong>{agent.title}</strong><small>{agent.agent_role} · {agent.status.replaceAll("_"," ")}{typeof agent.progress==="number"?` · ${agent.progress}%`:""}{agent.tool_budget?` · tools ${agent.tool_usage||0}/${agent.tool_budget}`:""}</small>{agent.current_activity&&<small>{agent.current_activity}</small>}{agent.latest_insight&&<small>{agent.latest_insight.category}: {agent.latest_insight.content}</small>}</div></article>):graph.nodes.length?graph.nodes.slice(0,8).map(node=><article key={node.id}><span className={`agent-dot ${node.status}`}>●</span><div><strong>{node.title}</strong><small>{node.agent_role} · {node.status.replaceAll("_"," ")}</small></div></article>):<p>No specialist agents yet. Swarm-backed tasks will appear here through the same board.</p>}</div>
       {selectedSwarmAgent&&<section className="agent-board-detail">
-        <header><div><p className="eyebrow">Agent #{selectedSwarmAgent.task.id}</p><h4>{selectedSwarmAgent.task.title}</h4><small>{selectedSwarmAgent.task.agent_role} · {selectedSwarmAgent.task.status.replaceAll("_"," ")}</small></div><button type="button" onClick={()=>setSelectedSwarmAgentId(null)}>Close</button></header>
+        <header><div><p className="eyebrow">Agent #{selectedSwarmAgent.task.id}</p><h4>{selectedSwarmAgent.task.title}</h4><small>{selectedSwarmAgent.task.agent_role} · {selectedSwarmAgent.task.status.replaceAll("_"," ")}</small></div><div className="agent-board-control-actions">{["queued","running","waiting_for_input","waiting_for_approval"].includes(selectedSwarmAgent.task.status)&&<button type="button" onClick={stopSwarmAgent} disabled={busy}>Stop agent</button>}<button type="button" onClick={()=>setSelectedSwarmAgentId(null)}>Close</button></div></header>
         <div className="agent-board-detail-grid">
           <article><strong>Activity</strong><p>{selectedSwarmAgent.task.current_activity||"No current activity"}</p><small>{selectedSwarmAgent.task.progress||0}% · tools {selectedSwarmAgent.task.tool_usage||0}/{selectedSwarmAgent.task.tool_budget||0}</small></article>
           <article><strong>Changed files</strong>{selectedSwarmAgent.changed_files.length?<ul>{selectedSwarmAgent.changed_files.map(path=><li key={path}>{path}</li>)}</ul>:<p>No committed branch changes yet.</p>}</article>
