@@ -13,6 +13,8 @@ type BlackboardItem = { id:number; task_id?:number|null; category:string; key:st
 type SwarmEvent = { id:number; run_id:number; task_id:number; task_title:string; agent_role:string; assigned_model:string; kind:string; payload:Record<string,unknown>; created_at:string };
 type CoordinatorEvent = { id:number; swarm_id:number; kind:string; payload:Record<string,unknown>; created_at:string };
 type IntegrationPlan = { branches:string[]; overlaps:{path:string;branches:string[]}[]; files_by_branch:Record<string,string[]>; path?:string; branch?:string; check_status?:string; check_output?:string };
+type AgentCommand = { id:number; command:string; output:string; exit_code:number; status:string; cwd:string; created_at:string; updated_at:string };
+type AgentDetail = { task:Agent; run?:{id:number;status:string;created_at:string;updated_at:string}|null; commands:AgentCommand[]; blackboard:BlackboardItem[]; changed_files:string[]; worktree?:{path?:string;branch?:string;branch_diff?:string;working_diff?:string;changes?:string[];unavailable?:boolean}|null };
 
 export function SwarmPanel({ projectId }: { projectId:number }) {
   const [skill,setSkill]=useState<Skill|null>(null);
@@ -32,6 +34,7 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
   const [notice,setNotice]=useState("");
   const [busy,setBusy]=useState(false);
   const [selectedAgentId,setSelectedAgentId]=useState<number|null>(null);
+  const [agentDetail,setAgentDetail]=useState<AgentDetail|null>(null);
   const [guidance,setGuidance]=useState("");
   const [coordinatorGuidance,setCoordinatorGuidance]=useState("");
   const [integrationIds,setIntegrationIds]=useState<number[]>([]);
@@ -86,6 +89,22 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
     const timer=window.setInterval(refresh,2000);
     return()=>{disposed=true;window.clearInterval(timer);};
   },[selectedId]);
+
+  useEffect(()=>{
+    if(!selectedAgentId){ setAgentDetail(null); return; }
+    let disposed=false;
+    async function refreshAgent(){
+      try{
+        const detail=await request<AgentDetail>("/swarm-agents/"+selectedAgentId);
+        if(!disposed)setAgentDetail(detail);
+      }catch(error){
+        if(!disposed)setNotice(error instanceof Error?error.message:String(error));
+      }
+    }
+    refreshAgent();
+    const timer=window.setInterval(refreshAgent,3000);
+    return()=>{disposed=true;window.clearInterval(timer);};
+  },[selectedAgentId]);
 
   async function loadBootstrap(){
     try{
@@ -441,8 +460,13 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
     </section>
     {selectedAgent&&<div className={styles.agentDrawer}>
       <div className={styles.drawerHead}><div><p className="eyebrow">Agent #{selectedAgent.id}</p><h3>{selectedAgent.title}</h3><small>{selectedAgent.agent_role} · {selectedAgent.assigned_model||"Project default"}</small></div><button onClick={()=>setSelectedAgentId(null)}>×</button></div>
-      <div className={styles.drawerMeta}><span><b>Status</b>{selectedAgent.status}</span><span><b>Branch</b>{selectedAgent.worktree_branch||"waiting"}</span><span><b>Run</b>{selectedAgent.run_id?"#"+selectedAgent.run_id:"not started"}</span></div>
-      <div className={styles.drawerEvents}>{selectedAgentEvents.length?selectedAgentEvents.slice().reverse().map(item=><article key={item.id}><time>{new Date(item.created_at).toLocaleTimeString()}</time><b>{item.kind}</b><p>{eventText(item)}</p></article>):<div className={styles.empty}>No events for this agent yet.</div>}</div>
+      <div className={styles.drawerMeta}><span><b>Status</b>{selectedAgent.status}</span><span><b>Branch</b>{selectedAgent.worktree_branch||"waiting"}</span><span><b>Run</b>{selectedAgent.run_id?"#"+selectedAgent.run_id:"not started"}</span><span><b>Progress</b>{selectedAgent.status==="completed"?100:Number(selectedAgent.progress||0)}%</span><span><b>Tools</b>{Number(selectedAgent.tool_usage||0)}{selectedAgent.tool_budget?"/"+selectedAgent.tool_budget:""}</span></div>
+      <div className={styles.drawerBody}>
+        <section><h4>Activity</h4><div className={styles.drawerEvents}>{selectedAgentEvents.length?selectedAgentEvents.slice().reverse().map(item=><article key={item.id}><time>{new Date(item.created_at).toLocaleTimeString()}</time><b>{item.kind}</b><p>{eventText(item)}</p></article>):<div className={styles.empty}>No events for this agent yet.</div>}</div></section>
+        <section><h4>Changed files</h4>{agentDetail?.changed_files?.length?<ul className={styles.fileList}>{agentDetail.changed_files.map(path=><li key={path}>{path}</li>)}</ul>:<div className={styles.empty}>No committed branch changes yet.</div>}{agentDetail?.worktree?.branch_diff&&<details className={styles.diffDetails}><summary>Branch diff</summary><pre>{agentDetail.worktree.branch_diff}</pre></details>}{agentDetail?.worktree?.working_diff&&<details className={styles.diffDetails}><summary>Uncommitted worktree diff</summary><pre>{agentDetail.worktree.working_diff}</pre></details>}</section>
+        <section><h4>Commands</h4><div className={styles.commandList}>{agentDetail?.commands?.length?agentDetail.commands.map(command=><details key={command.id}><summary><code>{command.command}</code><span>{command.status} · exit {command.exit_code}</span></summary><pre>{command.output||"No output"}</pre></details>):<div className={styles.empty}>No commands recorded for this agent.</div>}</div></section>
+        <section><h4>Findings & hand-offs</h4><div className={styles.agentFindings}>{agentDetail?.blackboard?.length?agentDetail.blackboard.slice().reverse().map(item=><article key={item.id}><b>{item.category}</b><p>{item.content}</p></article>):<div className={styles.empty}>No task-specific Blackboard entries yet.</div>}</div></section>
+      </div>
       {selectedAgent.run_id&&["running","waiting_for_input","waiting_for_approval"].includes(selectedAgent.status)&&<form className={styles.guidance} onSubmit={event=>{event.preventDefault();steerAgent(selectedAgent);}}><textarea value={guidance} onChange={event=>setGuidance(event.target.value)} placeholder="Give this agent guidance without stopping its run…"/><button className="primary" disabled={busy||!guidance.trim()}>Send guidance</button></form>}
     </div>}
     {notice&&<div className={styles.notice}>{notice}</div>}
