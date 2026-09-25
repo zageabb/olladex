@@ -206,7 +206,7 @@ def _dependency_state(conn, task: dict) -> tuple[bool, str]:
     missing = [item for item in dependency_ids if item not in states]
     if missing:
         return False, f"Missing dependency tasks: {missing}"
-    failed = [item for item, status in states.items() if status in {"failed", "cancelled"}]
+    failed = [item for item, status in states.items() if status in {"failed", "cancelled", "budget_exhausted", "interrupted"}]
     if failed:
         return False, f"Dependency task(s) did not complete successfully: {failed}"
     return all(states[item] == "completed" for item in dependency_ids), ""
