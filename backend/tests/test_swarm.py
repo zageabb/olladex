@@ -922,7 +922,7 @@ def test_swarm_preflight_checks_git_sqlite_models_and_limits(tmp_path, monkeypat
     monkeypatch.setattr(
         swarm,
         "validate_models",
-        lambda profile: {
+        lambda profile, fallback_model='': {
             "installed": ["phi4:14b", "qwen2.5-coder:7b"],
             "assignments": {"coordinator": "phi4:14b", "backend": "qwen2.5-coder:7b"},
         },
@@ -946,7 +946,7 @@ def test_swarm_preflight_reports_missing_local_models_without_creating_run(tmp_p
     with connect() as conn:
         profile_id = int(conn.execute("SELECT id FROM swarm_profiles WHERE name='Development'").fetchone()["id"])
 
-    monkeypatch.setattr(swarm, "validate_models", lambda profile: (_ for _ in ()).throw(ValueError("Required local Ollama model(s) are not installed: phi4:14b")))
+    monkeypatch.setattr(swarm, "validate_models", lambda profile, fallback_model='': (_ for _ in ()).throw(ValueError("Required local Ollama model(s) are not installed: phi4:14b")))
 
     result = swarm.preflight(project_id, profile_id)
 
@@ -1017,7 +1017,7 @@ def test_swarm_self_test_pings_each_unique_model_once(tmp_path, monkeypatch):
     monkeypatch.setattr(
         swarm,
         "validate_models",
-        lambda profile: {
+        lambda profile, fallback_model='': {
             "installed": ["phi4:14b", "qwen2.5-coder:7b"],
             "assignments": {
                 "coordinator": "phi4:14b",
@@ -1066,7 +1066,7 @@ def test_swarm_self_test_reports_bad_model_response(tmp_path, monkeypatch):
     monkeypatch.setattr(
         swarm,
         "validate_models",
-        lambda profile: {
+        lambda profile, fallback_model='': {
             "installed": ["test-model"],
             "assignments": {"coordinator": "test-model"},
         },
@@ -1093,3 +1093,26 @@ def test_swarm_self_test_reports_bad_model_response(tmp_path, monkeypatch):
     assert result["ready"] is False
     assert result["models"][0]["ok"] is False
     assert result["models"][0]["response"] == "unexpected response"
+
+
+def test_validate_models_applies_project_default_to_unassigned_roles(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        swarm.ollama,
+        "status",
+        lambda: {"connected": True, "models": ["qwen3:14b"]},
+    )
+
+    result = swarm.validate_models(
+        {
+            "coordinator_profile_id": None,
+            "default_worker_profile_id": None,
+            "role_profiles": {},
+        },
+        "qwen3:14b",
+    )
+
+    assert result["assignments"]["coordinator"] == "qwen3:14b"
+    assert result["assignments"]["backend"] == "qwen3:14b"
+    assert result["assignments"]["tester"] == "qwen3:14b"
+    assert set(result["assignments"].values()) == {"qwen3:14b"}
