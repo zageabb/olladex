@@ -17,7 +17,7 @@ type SwarmListItem = { id:number; title:string; status:string; max_agents:number
 type SwarmAgent = { id:number; title:string; status:string; agent_role:string; progress?:number; assigned_model?:string; current_activity?:string; tool_usage?:number; tool_budget?:number; latest_insight?:{category:string;content:string}|null; task_kind?:string; worktree_branch?:string };
 type SwarmAgentDetail = { task:SwarmAgent; commands:{id:number;command:string;output:string;exit_code:number;status:string}[]; blackboard:{id:number;category:string;content:string}[]; changed_files:string[]; worktree?:{branch_diff?:string;working_diff?:string}|null };
 type SwarmBoard = {
-  swarm:{ id:number; title:string; status:string; agents?:SwarmAgent[]; coordinator_activity?:{category:string;content:string}|null; coordinator_budget?:{used:number;budget:number;remaining:number}; integration_path?:string; integration_branch?:string; integration_check_status?:string; integration_check_output?:string; integration_pr_number?:number; integration_pr_url?:string; integration_pr_state?:string };
+  swarm:{ id:number; title:string; status:string; agents?:SwarmAgent[]; coordinator_activity?:{category:string;content:string}|null; coordinator_budget?:{used:number;budget:number;remaining:number}; integration_path?:string; integration_branch?:string; integration_check_status?:string; integration_check_output?:string; integration_pushed?:number; integration_pr_number?:number; integration_pr_url?:string; integration_pr_state?:string };
   summary:{ total_agents:number; active_agents:number; completed_agents:number; failed_agents:number; progress:number; max_agents:number; max_concurrency:number; integration_ready:boolean };
   coordinator_events?:{id:number;kind:string;payload:Record<string,unknown>;created_at:string}[];
   blackboard?:{id:number;task_id?:number|null;category:string;content:string;key?:string;created_at:string}[];
@@ -81,7 +81,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
             check_status:board.swarm.integration_check_status,
             check_output:board.swarm.integration_check_output
           });
-          if(board.swarm.integration_pr_number)setSwarmIntegrationPushed(true);
+          setSwarmIntegrationPushed(Boolean(board.swarm.integration_pushed||board.swarm.integration_pr_number));
         }else if(!["integrating","completed"].includes(board.swarm.status)){
           setSwarmIntegration(null);
           setSwarmIntegrationPushed(false);
