@@ -26,6 +26,8 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
   const [maxConcurrency,setMaxConcurrency]=useState(3);
   const [notice,setNotice]=useState("");
   const [busy,setBusy]=useState(false);
+  const [selectedAgentId,setSelectedAgentId]=useState<number|null>(null);
+  const [guidance,setGuidance]=useState("");
 
   useEffect(()=>{ loadBootstrap(); },[projectId]);
 
@@ -115,6 +117,16 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
     finally{setBusy(false);}
   }
 
+  async function steerAgent(agent:Agent){
+    if(!guidance.trim())return;
+    setBusy(true);
+    try{
+      await request("/swarm-agents/"+agent.id+"/input",{method:"POST",body:JSON.stringify({content:guidance.trim()})});
+      setGuidance(""); setNotice("Guidance sent to agent #"+agent.id);
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
+  }
+
   async function stopAgent(agent:Agent){
     setBusy(true);
     try{
@@ -129,6 +141,8 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
   const complete=agents.filter(agent=>agent.status==="completed").length;
   const active=agents.filter(agent=>["running","waiting_for_input","waiting_for_approval"].includes(agent.status)).length;
   const progress=agents.length?Math.round(agents.reduce((sum,agent)=>sum+(agent.status==="completed"?100:agent.status==="running"?50:agent.status==="failed"||agent.status==="cancelled"?100:0),0)/agents.length):0;
+  const selectedAgent=selectedAgentId?agents.find(agent=>agent.id===selectedAgentId)||null:null;
+  const selectedAgentEvents=selectedAgent?events.filter(item=>item.task_id===selectedAgent.id):[];
 
   return <div className={styles.panel}>
     <section className={styles.hero}>
@@ -198,7 +212,7 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
               <h4>{agent.title}</h4>
               <dl><div><dt>Model</dt><dd>{agent.assigned_model||"Project default"}</dd></div><div><dt>Branch</dt><dd>{agent.worktree_branch||"waiting"}</dd></div><div><dt>Run</dt><dd>{agent.run_id?"#"+agent.run_id:"not started"}</dd></div></dl>
               <p>{agent.current_activity||agent.result||agent.error||"Waiting for activity…"}</p>
-              <footer>{["queued","running","waiting_for_input","waiting_for_approval"].includes(agent.status)&&<button onClick={()=>stopAgent(agent)} disabled={busy}>Stop agent</button>}</footer>
+              <footer><button onClick={()=>setSelectedAgentId(agent.id)}>Open agent</button>{["queued","running","waiting_for_input","waiting_for_approval"].includes(agent.status)&&<button onClick={()=>stopAgent(agent)} disabled={busy}>Stop agent</button>}</footer>
             </article>)}
           </div>
         </section>
@@ -220,6 +234,12 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
         </>:<div className={styles.emptyLarge}><span>✦</span><h3>Select or start a swarm</h3><p>The board will show every local agent, its assigned model, task dependencies, worktree and shared findings.</p></div>}
       </div>
     </section>
+    {selectedAgent&&<div className={styles.agentDrawer}>
+      <div className={styles.drawerHead}><div><p className="eyebrow">Agent #{selectedAgent.id}</p><h3>{selectedAgent.title}</h3><small>{selectedAgent.agent_role} · {selectedAgent.assigned_model||"Project default"}</small></div><button onClick={()=>setSelectedAgentId(null)}>×</button></div>
+      <div className={styles.drawerMeta}><span><b>Status</b>{selectedAgent.status}</span><span><b>Branch</b>{selectedAgent.worktree_branch||"waiting"}</span><span><b>Run</b>{selectedAgent.run_id?"#"+selectedAgent.run_id:"not started"}</span></div>
+      <div className={styles.drawerEvents}>{selectedAgentEvents.length?selectedAgentEvents.slice().reverse().map(item=><article key={item.id}><time>{new Date(item.created_at).toLocaleTimeString()}</time><b>{item.kind}</b><p>{eventText(item)}</p></article>):<div className={styles.empty}>No events for this agent yet.</div>}</div>
+      {selectedAgent.run_id&&["running","waiting_for_input","waiting_for_approval"].includes(selectedAgent.status)&&<form className={styles.guidance} onSubmit={event=>{event.preventDefault();steerAgent(selectedAgent);}}><textarea value={guidance} onChange={event=>setGuidance(event.target.value)} placeholder="Give this agent guidance without stopping its run…"/><button className="primary" disabled={busy||!guidance.trim()}>Send guidance</button></form>}
+    </div>}
     {notice&&<div className={styles.notice}>{notice}</div>}
   </div>;
 }
