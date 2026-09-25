@@ -10,6 +10,8 @@ from .config import settings
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
+PRAGMA synchronous=NORMAL;
+PRAGMA busy_timeout=10000;
 CREATE TABLE IF NOT EXISTS projects (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -274,7 +276,7 @@ def now() -> str:
 
 def init_db() -> None:
     settings.data_root.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(settings.database_path) as conn:
+    with sqlite3.connect(settings.database_path, timeout=10) as conn:
         conn.executescript(SCHEMA)
         for table, columns in ADDITIVE_COLUMNS.items():
             existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
@@ -312,9 +314,10 @@ def init_db() -> None:
 
 @contextmanager
 def connect() -> Iterator[sqlite3.Connection]:
-    conn = sqlite3.connect(settings.database_path)
+    conn = sqlite3.connect(settings.database_path, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=10000")
     try:
         yield conn
         conn.commit()
