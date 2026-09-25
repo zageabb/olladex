@@ -314,6 +314,25 @@ def events(swarm_id: int, after: int = 0, limit: int = 200) -> list[dict]:
         item["payload"] = _json_object(item.get("payload"))
     return rows
 
+def steer_coordinator(swarm_id: int, content: str) -> dict:
+    content = content.strip()
+    if not content:
+        raise ValueError("Coordinator guidance cannot be empty")
+    with connect() as conn:
+        row = conn.execute("SELECT coordinator_instructions,status FROM swarm_runs WHERE id=?", (swarm_id,)).fetchone()
+        if not row:
+            raise ValueError("Swarm not found")
+        if row["status"] in TERMINAL_STATUSES:
+            raise ValueError("Finished swarms cannot be steered")
+        existing = str(row["coordinator_instructions"] or "").strip()
+        combined = (existing + "\n" + content).strip()
+        if len(combined) > 12000:
+            combined = combined[-12000:]
+        conn.execute("UPDATE swarm_runs SET coordinator_instructions=? WHERE id=?", (combined, swarm_id))
+    publish(swarm_id, "decision", "User guidance to Coordinator: " + content, key="")
+    return {"swarm_id": swarm_id, "status": "received", "coordinator_instructions": combined}
+
+
 def pause(swarm_id: int) -> dict:
     with connect() as conn:
         row = conn.execute("SELECT status FROM swarm_runs WHERE id=?", (swarm_id,)).fetchone()
