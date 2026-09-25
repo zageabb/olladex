@@ -829,3 +829,40 @@ def test_coordinator_budget_is_persistent_and_exhaustion_is_recorded_once(tmp_pa
     timeline = swarm.coordinator_events(swarm_id)
     assert len([item for item in timeline if item["kind"] == "model_call"]) == 2
     assert len([item for item in timeline if item["kind"] == "budget_exhausted"]) == 1
+
+
+def test_board_snapshot_returns_stable_summary_and_incremental_streams(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id, max_agents=4, max_concurrency=2)
+
+    task = task_queue.enqueue(
+        project_id, session_id, "Backend", "work",
+        swarm_id=swarm_id, source_kind="swarm_specialist",
+        agent_role="backend", task_kind="backend",
+    )
+    task_queue.set_progress(task["id"], 40, "Implementing")
+    run_id = conversation_runtime.create(session_id, task["id"])
+    conversation_runtime.emit("progress", {"progress": 40, "current_step": "Implementing"}, run_id)
+    board_item = swarm.publish(swarm_id, "finding", "Useful fact", task_id=task["id"])
+    coordinator_item = swarm.emit_coordinator_event(swarm_id, "decision", {"content": "Continue"})
+
+    snap = swarm.board_snapshot(swarm_id)
+
+    assert snap["swarm"]["id"] == swarm_id
+    assert snap["summary"]["total_agents"] == 1
+    assert snap["summary"]["max_agents"] == 4
+    assert snap["summary"]["max_concurrency"] == 2
+    assert snap["summary"]["progress"] == 40
+    assert snap["events"]
+    assert snap["blackboard"][0]["id"] == board_item["id"]
+    assert snap["coordinator_events"][-1]["id"] == coordinator_item["id"]
+
+    later = swarm.board_snapshot(
+        swarm_id,
+        after_event=snap["events"][-1]["id"],
+        after_blackboard=board_item["id"],
+        after_coordinator_event=coordinator_item["id"],
+    )
+    assert later["events"] == []
+    assert later["blackboard"] == []
+    assert later["coordinator_events"] == []
