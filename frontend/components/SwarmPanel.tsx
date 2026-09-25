@@ -233,6 +233,11 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
           </div>
         </header>
 
+        <article className={styles.coordinator}>
+          <div><i className={styles.dot+" "+(selected.status==="failed"?"failed":selected.status==="completed"?"completed":"running")}/><span><strong>Coordinator</strong><small>{selected.status==="reviewing"?"Evaluating verification and review flow":selected.status==="running"?"Monitoring specialists, Blackboard and recovery conditions":selected.status==="paused"?"Paused with swarm":"Coordinator "+selected.status}</small></span></div>
+          <b>{selected.status}</b>
+        </article>
+
         <div className={styles.metrics}>
           <span><strong>{agents.length}/{selected.max_agents}</strong>agents</span>
           <span><strong>{active}/{selected.max_concurrency}</strong>running</span>
