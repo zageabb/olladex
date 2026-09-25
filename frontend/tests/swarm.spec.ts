@@ -107,7 +107,15 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
           total_agents:2,active_agents:0,completed_agents:1,failed_agents:0,
           progress:50,max_agents:5,max_concurrency:3,integration_ready:false
         },
-        events:[],coordinator_events:[],blackboard:[],
+        events:[],
+        coordinator_events:[
+          {id:20,kind:'status',payload:{status:'reviewing'},created_at:new Date().toISOString()},
+          {id:21,kind:'decision',payload:{content:'Coordinator opened final verification.'},created_at:new Date().toISOString()}
+        ],
+        blackboard:[
+          {id:1,task_id:null,category:'decision',content:'Review gate opened.',created_at:new Date().toISOString()},
+          {id:2,task_id:11,category:'finding',content:'Auth dependency is centralized.',created_at:new Date().toISOString()}
+        ],
         cursors:{event:0,coordinator_event:0,blackboard:0}
       });
       return true;
@@ -158,4 +166,9 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
   await expect(page.getByText('backend/app/auth.py')).toBeVisible();
   await expect(page.getByText('pytest backend/tests/test_auth.py')).toBeVisible();
   await expect(page.getByText('Auth dependency is centralized.').last()).toBeVisible();
+
+  await page.getByText(/Coordinator timeline · 2/).click();
+  await expect(page.getByText('Coordinator opened final verification.').last()).toBeVisible();
+  await page.getByText(/Blackboard · 2/).click();
+  await expect(page.getByText('Review gate opened.')).toBeVisible();
 });
