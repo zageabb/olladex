@@ -79,7 +79,7 @@ test('interaction layer can enable, preflight and start a swarm', async ({ page 
   await expect.poll(() => swarmEnabled).toBe(true);
 
   await page.getByText('Model & policy settings').click();
-  await page.getByLabel('Coordinator').selectOption('2');
+  await page.getByRole('combobox', {name:'Coordinator', exact:true}).selectOption('2');
   await page.getByRole('button', {name:'Save Swarm settings'}).click();
   await expect.poll(() => savedCoordinatorProfile).toBe(2);
 
@@ -192,7 +192,7 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
   await expect(page.getByText(/Swarm #7 · reviewing · 100% complete/)).toBeVisible();
   await expect(page.getByText('Inspect auth')).toBeVisible();
   await expect(page.getByText(/backend · completed · 100%/)).toBeVisible();
-  await expect(page.getByText('Final review')).toBeVisible();
+  await expect(page.getByText('Final review', {exact:true})).toBeVisible();
   await expect(page.getByText(/reviewer · completed · 100%/)).toBeVisible();
   await expect(page.getByText(/budget 3\/20/)).toBeVisible();
   await expect(page.getByText('Coordinator opened final verification.')).toBeVisible();
