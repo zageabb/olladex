@@ -17,7 +17,7 @@ type SwarmListItem = { id:number; title:string; status:string; max_agents:number
 type SwarmAgent = { id:number; title:string; status:string; agent_role:string; progress?:number; assigned_model?:string; current_activity?:string; tool_usage?:number; tool_budget?:number; latest_insight?:{category:string;content:string}|null; task_kind?:string; worktree_branch?:string };
 type SwarmAgentDetail = { task:SwarmAgent; commands:{id:number;command:string;output:string;exit_code:number;status:string}[]; blackboard:{id:number;category:string;content:string}[]; changed_files:string[]; worktree?:{branch_diff?:string;working_diff?:string}|null };
 type SwarmBoard = {
-  swarm:{ id:number; title:string; status:string; agents?:SwarmAgent[]; coordinator_activity?:{category:string;content:string}|null; coordinator_budget?:{used:number;budget:number;remaining:number} };
+  swarm:{ id:number; title:string; status:string; agents?:SwarmAgent[]; coordinator_activity?:{category:string;content:string}|null; coordinator_budget?:{used:number;budget:number;remaining:number}; integration_path?:string; integration_branch?:string; integration_check_status?:string; integration_check_output?:string; integration_pr_number?:number; integration_pr_url?:string; integration_pr_state?:string };
   summary:{ total_agents:number; active_agents:number; completed_agents:number; failed_agents:number; progress:number; max_agents:number; max_concurrency:number; integration_ready:boolean };
   coordinator_events?:{id:number;kind:string;payload:Record<string,unknown>;created_at:string}[];
   blackboard?:{id:number;task_id?:number|null;category:string;content:string;key?:string;created_at:string}[];
@@ -70,9 +70,26 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
       setGraph(nextGraph);
       const selectedSwarm=swarmRuns.find(item=>!["completed","failed","cancelled"].includes(item.status))||swarmRuns[0];
       if(selectedSwarm){
-        setSwarmBoard(await request<SwarmBoard>(`/swarms/${selectedSwarm.id}/board?limit=40`));
+        const board=await request<SwarmBoard>(`/swarms/${selectedSwarm.id}/board?limit=40`);
+        setSwarmBoard(board);
+        if(board.swarm.integration_branch){
+          setSwarmIntegration(current=>current||{
+            branches:[],
+            overlaps:[],
+            path:board.swarm.integration_path,
+            branch:board.swarm.integration_branch,
+            check_status:board.swarm.integration_check_status,
+            check_output:board.swarm.integration_check_output
+          });
+          if(board.swarm.integration_pr_number)setSwarmIntegrationPushed(true);
+        }else if(!["integrating","completed"].includes(board.swarm.status)){
+          setSwarmIntegration(null);
+          setSwarmIntegrationPushed(false);
+        }
       }else{
         setSwarmBoard(null);
+        setSwarmIntegration(null);
+        setSwarmIntegrationPushed(false);
       }
     }catch(error){ setNotice(error instanceof Error?error.message:String(error)); }
   }
@@ -244,6 +261,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
       await request(`/swarms/${swarmBoard.swarm.id}/integration/push`,{method:"POST",body:JSON.stringify({remote:"origin"})});
       setSwarmIntegrationPushed(true);
       setNotice("Swarm integration branch pushed");
+      await load();
     }catch(error){setNotice(error instanceof Error?error.message:String(error));}
     finally{setBusy(false);}
   }
@@ -360,7 +378,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
       {swarmBoard&&(swarmBoard.summary.integration_ready||swarmIntegration)&&<section className="agent-board-integration">
         <header><div><p className="eyebrow">Swarm integration</p><h4>{swarmIntegration?.branch||"Completed specialist branches are ready"}</h4></div><div className="agent-board-control-actions"><button type="button" onClick={checkSwarmIntegration} disabled={busy}>Check overlaps</button>{swarmIntegration&&<button type="button" className="primary" onClick={buildSwarmIntegration} disabled={busy}>Build integration</button>}</div></header>
         {swarmIntegration?.overlaps?.length?<div className="integration-warning"><strong>{swarmIntegration.overlaps.length} overlap(s)</strong><span>{swarmIntegration.overlaps.map(item=>item.path).join(", ")}</span></div>:swarmIntegration&&<div className="integration-ok">No overlapping files detected.</div>}
-        {swarmIntegration?.branch&&<div className="agent-board-integration-actions"><label>Combined checks<input value={swarmCheckCommand} onChange={event=>setSwarmCheckCommand(event.target.value)}/></label><button type="button" onClick={runSwarmChecks} disabled={busy||!swarmCheckCommand.trim()}>Run checks</button><span>{swarmIntegration.check_status||"not tested"}</span>{swarmIntegration.check_status==="passed"&&<button type="button" onClick={pushSwarmIntegration} disabled={busy}>Push branch</button>}{swarmIntegrationPushed&&swarmIntegration.check_status==="passed"&&<button type="button" className="primary" onClick={createSwarmPullRequest} disabled={busy}>Create final PR</button>}</div>}
+        {swarmIntegration?.branch&&<div className="agent-board-integration-actions"><label>Combined checks<input value={swarmCheckCommand} onChange={event=>setSwarmCheckCommand(event.target.value)}/></label><button type="button" onClick={runSwarmChecks} disabled={busy||!swarmCheckCommand.trim()}>Run checks</button><span>{swarmIntegration.check_status||"not tested"}</span>{swarmIntegration.check_status==="passed"&&<button type="button" onClick={pushSwarmIntegration} disabled={busy}>Push branch</button>}{(swarmIntegrationPushed||Boolean(swarmBoard.swarm.integration_pr_number))&&swarmIntegration.check_status==="passed"&&!swarmBoard.swarm.integration_pr_number&&<button type="button" className="primary" onClick={createSwarmPullRequest} disabled={busy}>Create final PR</button>}{swarmBoard.swarm.integration_pr_number?<span>PR #{swarmBoard.swarm.integration_pr_number} {swarmBoard.swarm.integration_pr_state||""}</span>:null}</div>}
         {swarmIntegration?.check_output&&<details><summary>Combined check output</summary><pre>{swarmIntegration.check_output}</pre></details>}
       </section>}
     </section>
