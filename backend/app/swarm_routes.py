@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -7,6 +9,7 @@ from .database import connect, now
 from .services import orchestration as orchestration_service
 from .services import swarm as swarm_service
 from .services import task_queue, integration, worktrees
+from .services import github as github_service
 
 
 router = APIRouter(prefix="/api", tags=["swarm"])
@@ -59,6 +62,16 @@ class SwarmIntegrationSelectionRequest(BaseModel):
 
 class SwarmIntegrationChecksRequest(BaseModel):
     command: str = Field(min_length=1, max_length=5000)
+
+
+class SwarmIntegrationPushRequest(BaseModel):
+    remote: str = Field(default="origin", min_length=1, max_length=120)
+
+
+class SwarmIntegrationPullRequestRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=256)
+    body: str = Field(default="", max_length=100_000)
+    base: str = Field(default="main", min_length=1, max_length=200)
 
 
 def _project(project_id: int) -> dict:
@@ -418,6 +431,50 @@ def run_swarm_integration_checks(swarm_id: int, body: SwarmIntegrationChecksRequ
             (body.command, "passed" if result["passed"] else "failed", result["output"], swarm_id),
         )
     return {"swarm_id": swarm_id, **result}
+
+
+def _pull_request_number(url: str) -> int:
+    match = re.search(r"/pull/(\\d+)(?:\\b|/|$)", url or "")
+    return int(match.group(1)) if match else 0
+
+
+@router.post("/swarms/{swarm_id}/integration/push")
+def push_swarm_integration(swarm_id: int, body: SwarmIntegrationPushRequest):
+    run = swarm_service.get_run(swarm_id)
+    project = _project(int(run["project_id"]))
+    path = run.get("integration_path") or ""
+    if not path:
+        raise HTTPException(409, "Create a Swarm integration worktree first")
+    if run.get("integration_check_status") != "passed":
+        raise HTTPException(409, "Combined checks must pass before pushing the integration branch")
+    try:
+        return {"swarm_id": swarm_id, **integration.push(project, path, body.remote)}
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/swarms/{swarm_id}/integration/pull-request")
+def create_swarm_integration_pull_request(swarm_id: int, body: SwarmIntegrationPullRequestRequest):
+    run = swarm_service.get_run(swarm_id)
+    project = _project(int(run["project_id"]))
+    path = run.get("integration_path") or ""
+    if not path:
+        raise HTTPException(409, "Create a Swarm integration worktree first")
+    if run.get("integration_check_status") != "passed":
+        raise HTTPException(409, "Combined checks must pass before creating the integration pull request")
+    target_project = integration.integration_project(project, path)
+    try:
+        prepared = github_service.prepare_pull_request(target_project, body.title, body.body, body.base)
+        result = github_service.execute_pull_request(target_project, prepared)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    number = _pull_request_number(result.get("url", ""))
+    with connect() as conn:
+        conn.execute(
+            "UPDATE swarm_runs SET integration_pr_number=?,integration_pr_url=?,integration_pr_state='OPEN' WHERE id=?",
+            (number, result.get("url", ""), swarm_id),
+        )
+    return {"swarm_id": swarm_id, "pull_request_number": number, **result}
 
 
 @router.get("/swarms/{swarm_id}/blackboard")
