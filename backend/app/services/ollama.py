@@ -30,6 +30,7 @@ for tool_name, description, properties in [
     ("swarm_publish_finding", "Publish an important evidence-backed finding to the current swarm blackboard.", {"content": {"type":"string"}, "key": {"type":"string"}}),
     ("swarm_publish_decision", "Publish a meaningful engineering decision to the current swarm blackboard.", {"content": {"type":"string"}, "key": {"type":"string"}}),
     ("swarm_publish_risk", "Publish an identified risk or uncertainty to the current swarm blackboard.", {"content": {"type":"string"}, "key": {"type":"string"}}),
+    ("swarm_publish_handoff", "Publish the final concise hand-off from this specialist to the coordinator and downstream agents.", {"content": {"type":"string"}, "key": {"type":"string"}}),
 ]:
     TOOLS.append({"type":"function", "function": {"name":tool_name, "description":description,
         "parameters": {"type":"object", "properties":properties, "required":list(properties), "additionalProperties":False}}})
@@ -133,7 +134,7 @@ def _execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
             raise ValueError("This agent is not running inside a swarm")
         from . import swarm as swarm_service
         result = swarm_service.blackboard(swarm_id, category=str(args.get("category") or ""))
-    elif name in {"swarm_publish_finding", "swarm_publish_decision", "swarm_publish_risk"}:
+    elif name in {"swarm_publish_finding", "swarm_publish_decision", "swarm_publish_risk", "swarm_publish_handoff"}:
         swarm_id = task_queue.current_swarm_id()
         task_id = task_queue.current_task_id()
         if not swarm_id or not task_id:
@@ -143,6 +144,7 @@ def _execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
             "swarm_publish_finding": "finding",
             "swarm_publish_decision": "decision",
             "swarm_publish_risk": "risk",
+            "swarm_publish_handoff": "handoff",
         }[name]
         result = swarm_service.publish(
             swarm_id,
@@ -334,7 +336,8 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
         "Finish with the outcome, relevant verification and remaining limitations. Work only inside the selected repository. "
         "Use tools to inspect evidence before answering. Keep the user informed in concise language. "
         "Do not invent file contents or command results. When asked to change code, make focused edits, run appropriate checks, and summarize changes. "
-        "When running inside a swarm, publish important evidence-backed findings, engineering decisions and risks to the shared blackboard using the swarm tools. "
+        "When running inside a swarm, use update_plan before meaningful groups of work, publish important evidence-backed findings, engineering decisions and risks to the shared blackboard, "
+        "and publish one concise swarm handoff before finishing that states the outcome, changed files, checks run, remaining risks and what downstream agents should know. "
         "Read the blackboard when dependency context or another specialist's findings would materially help your task.\n\n"
         + "\n\nOriginal conversation objective:\n" + next((m["content"] for m in history if m.get("role") == "user"), request)[:4000]
         + "\n\n" + workspace.project_summary(project)
@@ -451,7 +454,8 @@ def validate_arguments(name, args):
               "swarm_read_blackboard": SwarmRead,
               "swarm_publish_finding": SwarmPublish,
               "swarm_publish_decision": SwarmPublish,
-              "swarm_publish_risk": SwarmPublish}.get(name)
+              "swarm_publish_risk": SwarmPublish,
+              "swarm_publish_handoff": SwarmPublish}.get(name)
     if schema is None:
         raise ValueError(f"Unknown tool: {name}")
     return schema.model_validate(args).model_dump()
