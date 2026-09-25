@@ -456,6 +456,10 @@ def validate_arguments(name, args):
         preference: str = Field(min_length=1, max_length=1000)
     class Plan(Strict):
         steps: list[str] = Field(min_length=1, max_length=20)
+    class Progress(Strict):
+        completed_steps: int = Field(ge=0)
+        total_steps: int = Field(ge=1)
+        current_step: str = Field(max_length=1000)
     class SwarmRead(Strict):
         category: str = Field(default="", max_length=40)
     class SwarmPublish(Strict):
@@ -463,7 +467,7 @@ def validate_arguments(name, args):
         key: str = Field(default="", max_length=200)
     schema = {"get_project_tree": Strict, "read_file": Read, "write_file": Write,
               "apply_patch": Patch, "run_command": Command, "search_code": Search,
-              "ask_user": Question, "update_plan": Plan, "remember_preference": Preference,
+              "ask_user": Question, "update_plan": Plan, "update_progress": Progress, "remember_preference": Preference,
               "swarm_read_blackboard": SwarmRead,
               "swarm_publish_finding": SwarmPublish,
               "swarm_publish_decision": SwarmPublish,
