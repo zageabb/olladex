@@ -39,6 +39,9 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
   useEffect(()=>{ loadBootstrap(); },[projectId]);
 
   useEffect(()=>{
+    setIntegrationIds([]);
+    setIntegrationPlan(null);
+    setIntegrationPushed(false);
     if(!selectedId){ setSelected(null); setBlackboard([]); setEvents([]); return; }
     let disposed=false;
     async function refresh(){
