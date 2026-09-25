@@ -522,7 +522,8 @@ def swarm_agent_detail(task_id: int):
     project = _project(int(task["project_id"]))
     with connect() as conn:
         run = conn.execute(
-            "SELECT * FROM agent_runs WHERE task_id=? ORDER BY id DESC LIMIT 1",
+            "SELECT id,session_id,task_id,status,cancel_requested,created_at,updated_at "
+            "FROM agent_runs WHERE task_id=? ORDER BY id DESC LIMIT 1",
             (task_id,),
         ).fetchone()
         commands = [dict(row) for row in conn.execute(
@@ -547,11 +548,10 @@ def swarm_agent_detail(task_id: int):
             changed_files = integration.changed_files(project, branch)
         except ValueError:
             changed_files = []
+    agents = swarm_service.list_agents(int(task["swarm_id"]))
+    detailed_task = next((item for item in agents if item["id"] == task_id), task)
     return {
-        "task": swarm_service.list_agents(int(task["swarm_id"])) and next(
-            (item for item in swarm_service.list_agents(int(task["swarm_id"])) if item["id"] == task_id),
-            task,
-        ),
+        "task": detailed_task,
         "run": dict(run) if run else None,
         "commands": commands,
         "blackboard": board,
