@@ -885,3 +885,12 @@ button.primary:hover { background: var(--blue-2); }
 .agent-board-guidance input{min-width:0;padding:7px 8px;border:1px solid #dfe7f1;border-radius:7px;background:#fff;color:var(--ink);font-size:9px}
 .agent-board-guidance button{padding:6px 8px;font-size:8px}
 @media(max-width:900px){.agent-board-guidance{grid-template-columns:1fr}.agent-board-control-actions{margin-left:0;flex-wrap:wrap}}
+
+.agent-board-observability{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+.agent-board-observability details{overflow:hidden;background:#fbfcfe;border:1px solid #e3e9f1;border-radius:8px}
+.agent-board-observability summary{padding:7px 8px;cursor:pointer;color:#52647c;font-size:8px;font-weight:750}
+.agent-board-observability details>div{padding:0 7px 7px;display:grid;gap:5px;max-height:180px;overflow:auto}
+.agent-board-observability article{padding:6px;background:#fff;border:1px solid #edf1f6;border-radius:6px;display:grid;gap:2px}
+.agent-board-observability b{color:#315f99;font-size:8px;text-transform:uppercase}
+.agent-board-observability span,.agent-board-observability small,.agent-board-observability p{margin:0;color:#5c6c80;font-size:8px;line-height:1.4}
+@media(max-width:900px){.agent-board-observability{grid-template-columns:1fr}}
