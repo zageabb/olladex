@@ -11,6 +11,7 @@ type Agent = { id:number; title:string; status:string; agent_role:string; assign
 type SwarmRun = { id:number; project_id:number; title:string; objective:string; status:string; profile_id:number; max_agents:number; max_concurrency:number; total_agents_created:number; created_at:string; started_at:string; completed_at:string; agents?:Agent[]; agent_counts?:Record<string,number>; coordinator_activity?:{category:string;key:string;content:string;created_at:string}|null; integration_path?:string; integration_branch?:string; integration_check_command?:string; integration_check_status?:string; integration_check_output?:string; integration_pr_number?:number; integration_pr_url?:string; integration_pr_state?:string };
 type BlackboardItem = { id:number; task_id?:number|null; category:string; key:string; content:string; confidence?:number|null; created_at:string };
 type SwarmEvent = { id:number; run_id:number; task_id:number; task_title:string; agent_role:string; assigned_model:string; kind:string; payload:Record<string,unknown>; created_at:string };
+type CoordinatorEvent = { id:number; swarm_id:number; kind:string; payload:Record<string,unknown>; created_at:string };
 type IntegrationPlan = { branches:string[]; overlaps:{path:string;branches:string[]}[]; files_by_branch:Record<string,string[]>; path?:string; branch?:string; check_status?:string; check_output?:string };
 
 export function SwarmPanel({ projectId }: { projectId:number }) {
@@ -22,6 +23,7 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
   const [selected,setSelected]=useState<SwarmRun|null>(null);
   const [blackboard,setBlackboard]=useState<BlackboardItem[]>([]);
   const [events,setEvents]=useState<SwarmEvent[]>([]);
+  const [coordinatorEvents,setCoordinatorEvents]=useState<CoordinatorEvent[]>([]);
   const [profileId,setProfileId]=useState("");
   const [title,setTitle]=useState("");
   const [objective,setObjective]=useState("");
@@ -43,18 +45,19 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
     setIntegrationIds([]);
     setIntegrationPlan(null);
     setIntegrationPushed(false);
-    if(!selectedId){ setSelected(null); setBlackboard([]); setEvents([]); return; }
+    if(!selectedId){ setSelected(null); setBlackboard([]); setEvents([]); setCoordinatorEvents([]); return; }
     let disposed=false;
     async function refresh(){
       try{
         const results=await Promise.all([
           request<SwarmRun>("/swarms/"+selectedId),
           request<BlackboardItem[]>("/swarms/"+selectedId+"/blackboard"),
-          request<SwarmEvent[]>("/swarms/"+selectedId+"/events?after=0&limit=200")
+          request<SwarmEvent[]>("/swarms/"+selectedId+"/events?after=0&limit=200"),
+          request<CoordinatorEvent[]>("/swarms/"+selectedId+"/coordinator/events?after=0&limit=200")
         ]);
         if(disposed)return;
-        const run=results[0]; const board=results[1]; const activity=results[2];
-        setSelected(run); setBlackboard(board); setEvents(activity);
+        const run=results[0]; const board=results[1]; const activity=results[2]; const coordinatorActivity=results[3];
+        setSelected(run); setBlackboard(board); setEvents(activity); setCoordinatorEvents(coordinatorActivity);
         setRuns(items=>items.map(item=>item.id===run.id?{...item,...run}:item));
       }catch(error){ if(!disposed)setNotice(error instanceof Error?error.message:String(error)); }
     }
@@ -335,6 +338,10 @@ export function SwarmPanel({ projectId }: { projectId:number }) {
           <div><i className={styles.dot+" "+(selected.status==="failed"?"failed":selected.status==="completed"?"completed":"running")}/><span><strong>Coordinator</strong><small>{coordinatorProfile?.chat_model||"Project default"} · {selected.coordinator_activity?.content||(selected.status==="reviewing"?"Evaluating verification and review flow":selected.status==="running"?"Monitoring specialists, Blackboard and recovery conditions":selected.status==="paused"?"Paused with swarm":"Coordinator "+selected.status)}</small></span></div>
           <b>{selected.status}</b>
         </article>
+        <details className={styles.coordinatorTimeline}>
+          <summary>Coordinator timeline · {coordinatorEvents.length} events</summary>
+          <div>{coordinatorEvents.length?coordinatorEvents.slice().reverse().map(item=><article key={item.id}><time>{new Date(item.created_at).toLocaleTimeString()}</time><b>{item.kind}</b><p>{coordinatorEventText(item)}</p></article>):<span>No Coordinator events yet.</span>}</div>
+        </details>
         {!["completed","failed","cancelled","integrating"].includes(selected.status)&&<form className={styles.coordinatorGuidance} onSubmit={event=>{event.preventDefault();steerCoordinator();}}>
           <input value={coordinatorGuidance} onChange={event=>setCoordinatorGuidance(event.target.value)} placeholder="Guide Coordinator — e.g. prioritise tests; do not change public API"/>
           <button disabled={busy||!coordinatorGuidance.trim()}>Send to Coordinator</button>
@@ -427,4 +434,12 @@ function eventText(item:SwarmEvent){
   const tool=payload["tool"];
   if(typeof tool==="string")return "Using "+tool;
   return item.task_title||item.kind.replaceAll("_"," ");
+}
+
+
+function coordinatorEventText(item:CoordinatorEvent){
+  const payload=item.payload||{};
+  const content=payload["content"]||payload["reason"]||payload["status"]||payload["title"];
+  if(typeof content==="string"&&content.trim())return content;
+  return item.kind.replaceAll("_"," ");
 }
