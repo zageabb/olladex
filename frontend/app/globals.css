@@ -878,3 +878,10 @@ button.primary:hover { background: var(--blue-2); }
 .agent-board-detail-grid ul{margin:6px 0 0;padding-left:16px;max-height:130px;overflow:auto}
 .agent-board-detail-grid code{font-size:8px}
 @media(max-width:900px){.agent-board-detail-grid{grid-template-columns:1fr}}
+
+.agent-board-control-actions{margin-left:auto;display:flex;gap:5px;align-items:center}
+.agent-board-control-actions button{padding:5px 7px;font-size:8px}
+.agent-board-guidance{grid-column:1/-1;display:grid;grid-template-columns:1fr auto auto;gap:6px}
+.agent-board-guidance input{min-width:0;padding:7px 8px;border:1px solid #dfe7f1;border-radius:7px;background:#fff;color:var(--ink);font-size:9px}
+.agent-board-guidance button{padding:6px 8px;font-size:8px}
+@media(max-width:900px){.agent-board-guidance{grid-template-columns:1fr}.agent-board-control-actions{margin-left:0;flex-wrap:wrap}}
