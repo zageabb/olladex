@@ -239,6 +239,14 @@ def get_run(swarm_id: int) -> dict:
         raise ValueError("Swarm not found")
     result = dict(row)
     result["agents"] = list_agents(swarm_id)
+    with connect() as conn:
+        activity = conn.execute(
+            "SELECT category,key,content,created_at FROM swarm_blackboard "
+            "WHERE swarm_id=? AND task_id IS NULL AND category IN ('decision','risk') "
+            "ORDER BY id DESC LIMIT 1",
+            (swarm_id,),
+        ).fetchone()
+    result["coordinator_activity"] = dict(activity) if activity else None
     return result
 
 
