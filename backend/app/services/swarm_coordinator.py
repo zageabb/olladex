@@ -198,7 +198,6 @@ def _consider_pre_review(run: dict, profile: dict, completed: list[dict]) -> boo
         swarm_id,
         "decision",
         f"Coordinator added follow-up agent #{task['id']} ({role}) before final verification.",
-        task_id=task["id"],
         key="pre-review-risk-evaluated",
     )
     _retarget_verification(swarm_id, task["id"])
@@ -313,7 +312,6 @@ def _consider_recovery(run: dict, failed: list[dict], completed: list[dict]) -> 
         swarm_id,
         "decision",
         f"Coordinator spawned recovery agent #{task['id']} ({role}) after specialist failure.",
-        task_id=task["id"],
         key=f"recovery-{prior_recovery + 1}",
     )
     _retarget_verification(swarm_id, task["id"])
