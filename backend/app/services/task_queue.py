@@ -187,6 +187,24 @@ def current_swarm_id() -> int | None:
     return int(task["swarm_id"]) if task and task.get("swarm_id") else None
 
 
+def current_model_settings() -> dict:
+    task_id = current_task_id()
+    if not task_id:
+        return {}
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT mp.chat_model,mp.embedding_model,mp.temperature,mp.max_steps,mp.context_files,mp.context_chars,mp.context_tokens,"
+            "sp.agent_tool_budget "
+            "FROM background_tasks bt "
+            "LEFT JOIN model_profiles mp ON mp.id=bt.model_profile_id "
+            "LEFT JOIN swarm_runs sr ON sr.id=bt.swarm_id "
+            "LEFT JOIN swarm_profiles sp ON sp.id=sr.profile_id "
+            "WHERE bt.id=?",
+            (task_id,),
+        ).fetchone()
+    return dict(row) if row else {}
+
+
 def _dependency_ids(task: dict) -> list[int]:
     value = task.get("depends_on") or []
     if isinstance(value, list):
