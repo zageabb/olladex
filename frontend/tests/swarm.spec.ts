@@ -16,8 +16,12 @@ function baseRoutes(page:any, extra:(route:any,url:URL)=>Promise<boolean>|boolea
     if (p === '/api/swarm-profiles') return json([{
       id:1,name:'Development',max_agents:5,max_concurrency:3,max_depth:1,dynamic_size:1,
       require_reviewer:1,require_challenger:0,role_profiles:{},agent_tool_budget:30,
-      coordinator_tool_budget:20,is_builtin:1
+      coordinator_tool_budget:20,is_builtin:1,coordinator_profile_id:null,default_worker_profile_id:null
     }]);
+    if (p === '/api/model-profiles') return json([
+      {id:1,name:'Fast coder',chat_model:'qwen2.5-coder:7b'},
+      {id:2,name:'Reasoner',chat_model:'phi4:14b'}
+    ]);
     if (p.endsWith('/tree')) return json([]);
     if (p.endsWith('/changes')) return json([]);
     if (p.endsWith('/memory')) return json({content:''});
@@ -32,6 +36,7 @@ function baseRoutes(page:any, extra:(route:any,url:URL)=>Promise<boolean>|boolea
 test('interaction layer can enable, preflight and start a swarm', async ({ page }) => {
   let swarmEnabled = false;
   let createdObjective = '';
+  let savedCoordinatorProfile: number | null = null;
 
   await baseRoutes(page, async (route,url) => {
     const p=url.pathname;
@@ -39,6 +44,12 @@ test('interaction layer can enable, preflight and start a swarm', async ({ page 
     if (p === '/api/projects/1/skills/swarm') {
       if (route.request().method() === 'PUT') swarmEnabled = Boolean(route.request().postDataJSON().enabled);
       await json({project_id:1,skill:'swarm',enabled:swarmEnabled});
+      return true;
+    }
+    if (p === '/api/swarm-profiles/1' && route.request().method() === 'PUT') {
+      const body=route.request().postDataJSON();
+      savedCoordinatorProfile=body.coordinator_profile_id;
+      await json({...body,id:1,dynamic_size:body.dynamic_size?1:0,require_reviewer:body.require_reviewer?1:0,require_challenger:body.require_challenger?1:0});
       return true;
     }
     if (p === '/api/projects/1/swarms/preflight') {
@@ -66,6 +77,11 @@ test('interaction layer can enable, preflight and start a swarm', async ({ page 
 
   await page.getByRole('button', {name:'Enable Swarm'}).click();
   await expect.poll(() => swarmEnabled).toBe(true);
+
+  await page.getByText('Model & policy settings').click();
+  await page.getByLabel('Coordinator').selectOption('2');
+  await page.getByRole('button', {name:'Save Swarm settings'}).click();
+  await expect.poll(() => savedCoordinatorProfile).toBe(2);
 
   await page.getByPlaceholder('Describe the larger outcome for the Swarm…').fill('Harden authentication');
   await page.getByRole('button', {name:'Preflight & start Swarm'}).click();
