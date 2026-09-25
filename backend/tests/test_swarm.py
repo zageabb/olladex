@@ -855,6 +855,9 @@ def test_board_snapshot_returns_stable_summary_and_incremental_streams(tmp_path,
     assert snap["summary"]["max_agents"] == 4
     assert snap["summary"]["max_concurrency"] == 2
     assert snap["summary"]["progress"] == 40
+    assert "tool_usage" in snap["summary"]
+    assert "tool_budget_capacity" in snap["summary"]
+    assert "coordinator_budget" in snap["summary"]
     assert snap["events"]
     assert snap["blackboard"][0]["id"] == board_item["id"]
     assert snap["coordinator_events"][-1]["id"] == coordinator_item["id"]
