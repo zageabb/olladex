@@ -615,3 +615,18 @@ def test_coordinator_status_timeline_is_append_only(tmp_path, monkeypatch):
 
     assert statuses == ["reviewing", "paused", "running", "completed"]
     assert [item["id"] for item in timeline] == sorted(item["id"] for item in timeline)
+
+
+def test_blackboard_supports_incremental_cursor_and_limit(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id)
+
+    first = swarm.publish(swarm_id, "fact", "one")
+    second = swarm.publish(swarm_id, "finding", "two")
+    third = swarm.publish(swarm_id, "risk", "three")
+
+    items = swarm.blackboard(swarm_id, after=first["id"], limit=1)
+    assert [item["id"] for item in items] == [second["id"]]
+
+    remaining = swarm.blackboard(swarm_id, after=second["id"], limit=10)
+    assert [item["id"] for item in remaining] == [third["id"]]
