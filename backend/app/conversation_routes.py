@@ -75,3 +75,44 @@ def save_memory(session_id: int, body: Memory):
         if not cursor.rowcount:
             raise HTTPException(404, 'Session not found')
     return {'content': body.content}
+
+
+VALID_MEMORY_SCOPES = {'personal', 'workspace', 'project'}
+
+def _memory_key(scope: str, project_id: int | None) -> str:
+    if scope == 'personal':
+        return 'default'
+    if scope == 'workspace':
+        return 'default'
+    if scope == 'project':
+        if not project_id:
+            raise HTTPException(400, 'project_id is required for project memory')
+        with connect() as conn:
+            if not conn.execute('SELECT id FROM projects WHERE id=?', (project_id,)).fetchone():
+                raise HTTPException(404, 'Project not found')
+        return str(project_id)
+    raise HTTPException(400, 'Unsupported memory scope')
+
+@router.get('/api/memory/{scope}')
+def scoped_memory(scope: str, project_id: int | None = None):
+    if scope not in VALID_MEMORY_SCOPES:
+        raise HTTPException(400, 'Unsupported memory scope')
+    key = _memory_key(scope, project_id)
+    with connect() as conn:
+        row = conn.execute('SELECT content,updated_at FROM memory_scopes WHERE scope=? AND scope_key=?', (scope, key)).fetchone()
+    return {'scope': scope, 'scope_key': key, 'content': row['content'] if row else '', 'updated_at': row['updated_at'] if row else ''}
+
+@router.put('/api/memory/{scope}')
+def save_scoped_memory(scope: str, body: Memory, project_id: int | None = None):
+    if scope not in VALID_MEMORY_SCOPES:
+        raise HTTPException(400, 'Unsupported memory scope')
+    key = _memory_key(scope, project_id)
+    from .database import now
+    stamp = now()
+    with connect() as conn:
+        existing = conn.execute('SELECT id FROM memory_scopes WHERE scope=? AND scope_key=?', (scope, key)).fetchone()
+        if existing:
+            conn.execute('UPDATE memory_scopes SET content=?,updated_at=? WHERE id=?', (body.content, stamp, existing['id']))
+        else:
+            conn.execute('INSERT INTO memory_scopes(scope,scope_key,content,created_at,updated_at) VALUES(?,?,?,?,?)', (scope, key, body.content, stamp, stamp))
+    return {'scope': scope, 'scope_key': key, 'content': body.content, 'updated_at': stamp}
