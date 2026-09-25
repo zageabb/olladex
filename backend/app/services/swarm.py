@@ -275,6 +275,13 @@ def list_agents(swarm_id: int) -> list[dict]:
             (swarm_id,),
         )]
         for item in rows:
+            insight = conn.execute(
+                "SELECT category,content,created_at FROM swarm_blackboard "
+                "WHERE swarm_id=? AND task_id=? AND category IN ('finding','risk','handoff') "
+                "ORDER BY id DESC LIMIT 1",
+                (swarm_id, item["id"]),
+            ).fetchone()
+            item["latest_insight"] = dict(insight) if insight else None
             try:
                 item["depends_on"] = json.loads(item.get("depends_on") or "[]")
             except (TypeError, json.JSONDecodeError):
