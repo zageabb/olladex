@@ -894,3 +894,13 @@ button.primary:hover { background: var(--blue-2); }
 .agent-board-observability b{color:#315f99;font-size:8px;text-transform:uppercase}
 .agent-board-observability span,.agent-board-observability small,.agent-board-observability p{margin:0;color:#5c6c80;font-size:8px;line-height:1.4}
 @media(max-width:900px){.agent-board-observability{grid-template-columns:1fr}}
+
+.swarm-profile-settings{margin-top:8px;overflow:hidden;background:#fbfcfe;border:1px solid #e3e9f1;border-radius:8px}
+.swarm-profile-settings>summary{padding:8px 9px;cursor:pointer;color:#4f627b;font-size:9px;font-weight:750}
+.swarm-profile-grid{padding:9px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
+.swarm-profile-grid label{display:grid;gap:4px;color:#6a788c;font-size:8px;font-weight:700;text-transform:capitalize}
+.swarm-profile-grid select,.swarm-profile-grid input[type="number"]{width:100%;padding:7px;border:1px solid #dfe6ef;border-radius:7px;background:#fff;color:var(--ink);font-size:8px}
+.swarm-profile-grid .swarm-check{display:flex;align-items:center;gap:6px;padding:7px;background:#fff;border:1px solid #edf1f6;border-radius:7px}
+.swarm-profile-grid .swarm-check input{margin:0}
+@media(max-width:1050px){.swarm-profile-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:760px){.swarm-profile-grid{grid-template-columns:1fr}}
