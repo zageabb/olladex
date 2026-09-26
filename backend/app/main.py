@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from ipaddress import ip_address
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -34,6 +35,18 @@ app = FastAPI(title="Olladex API", version=__version__, lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=[x.strip() for x in settings.cors_origins.split(",")], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
+def is_loopback_client(request: Request) -> bool:
+    """Trust only the socket peer, never Origin or forwarded headers."""
+    if request.client is None:
+        return False
+    try:
+        address = ip_address(request.client.host)
+    except ValueError:
+        return False
+    mapped = getattr(address, "ipv4_mapped", None)
+    return address.is_loopback or bool(mapped and mapped.is_loopback)
+
+
 @app.middleware("http")
 async def authenticate(request: Request, call_next):
     if request.url.path.startswith("/api/"):
@@ -41,7 +54,7 @@ async def authenticate(request: Request, call_next):
         allowed = [value.strip() for value in settings.cors_origins.split(",")]
         if origin and origin not in allowed:
             return JSONResponse({"detail": "Origin is not allowed"}, status_code=403)
-        if request.method != "OPTIONS" and settings.api_token and not secrets.compare_digest(
+        if request.method != "OPTIONS" and not is_loopback_client(request) and settings.api_token and not secrets.compare_digest(
             request.headers.get("authorization", ""), "Bearer " + settings.api_token
         ):
             return JSONResponse({"detail": "Connect using your Olladex API token"}, status_code=401)
