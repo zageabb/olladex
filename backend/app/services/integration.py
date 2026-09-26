@@ -45,13 +45,16 @@ def preflight(project: dict, branches: list[str], base: str = "main") -> dict:
     return {"base": base, "branches": unique, "files_by_branch": files_by_branch, "overlaps": overlaps}
 
 
-def create(project: dict, lead_task_id: int, branches: list[str], base: str = "main") -> dict:
+def create(project: dict, lead_task_id: int, branches: list[str], base: str = "main", namespace: str = "lead") -> dict:
     plan = preflight(project, branches, base)
     root = project_root(project)
     managed = _integration_root(project)
     managed.mkdir(parents=True, exist_ok=True)
-    path = managed / f"lead-{lead_task_id}"
-    branch = f"olladex/integration-{lead_task_id}"
+    namespace = (namespace or "lead").strip().lower()
+    if namespace not in {"lead", "swarm"}:
+        raise ValueError("Unsupported integration namespace")
+    path = managed / f"{namespace}-{lead_task_id}"
+    branch = f"olladex/integration-{namespace}-{lead_task_id}" if namespace != "lead" else f"olladex/integration-{lead_task_id}"
     if path.exists():
         code, current = worktrees._git(path, "branch", "--show-current")
         if code == 0 and current.strip() == branch:

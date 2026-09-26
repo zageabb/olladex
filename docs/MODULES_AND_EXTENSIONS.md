@@ -14,6 +14,7 @@ flowchart LR
     API --> Workspace[Repository workspace]
     API --> Tasks[Background tasks]
     API --> Orchestration[Multi-agent orchestration]
+    API --> Swarm[Swarm orchestration]
     API --> Git[Git services]
     API --> GH[GitHub integration]
     API --> Terminal[Terminal/PTy]
@@ -23,6 +24,8 @@ flowchart LR
     Index --> Ollama
     Tasks --> Ollama
     Orchestration --> Tasks
+    Swarm --> Tasks
+    Swarm --> Runtime
     Git --> Repo[(Repository)]
     Workspace --> Repo
     Terminal --> Repo
@@ -292,6 +295,54 @@ Integration branches:
 ```text
 olladex/integration-<lead-task-id>
 ```
+
+### 3.10a Swarm Orchestration — Feature branch
+
+The `feature/swarm-v0.7` branch adds an optional higher-level Swarm layer over the existing task queue, durable agent runtime, model profiles, worktrees and integration service.
+
+Responsibilities:
+
+- project-level Swarm enable/disable;
+- Swarm profiles and presets;
+- per-role local Ollama model assignment;
+- maximum agent and per-Swarm concurrency controls;
+- persistent Coordinator monitoring;
+- failure/interruption recovery;
+- pre-review risk gate and bounded follow-up specialists;
+- Blackboard findings, decisions, risks and hand-offs;
+- merged live agent event timeline;
+- direct worker steering and Coordinator guidance;
+- isolated task worktrees;
+- final challenger/reviewer ordering;
+- Swarm integration worktree/check/push/PR flow.
+
+Primary implementation:
+
+```text
+backend/app/swarm_routes.py
+backend/app/services/swarm.py
+backend/app/services/swarm_coordinator.py
+backend/app/services/task_queue.py
+backend/app/services/ollama.py
+frontend/components/SwarmPanel.tsx
+frontend/components/SwarmPanel.module.css
+```
+
+Reused core modules:
+
+- Background Task Queue;
+- Conversation Runtime / `agent_runs` and `agent_events`;
+- Model Profiles;
+- Worktree Isolation;
+- Integration service;
+- Git/GitHub integration;
+- SQLite persistence.
+
+Swarm execution is intentionally local-Ollama-only in this first implementation. Raw hidden model chain-of-thought is not exposed; the UI surfaces explicit plans, tool actions, findings, decisions, risks and hand-offs instead.
+
+Status:
+
+**Feature branch / draft PR #7 — not current `main` behaviour until merged.**
 
 ### 3.11 Repository Intelligence — Core
 

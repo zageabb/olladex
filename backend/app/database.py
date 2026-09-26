@@ -10,6 +10,8 @@ from .config import settings
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
+PRAGMA synchronous=NORMAL;
+PRAGMA busy_timeout=10000;
 CREATE TABLE IF NOT EXISTS projects (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -138,12 +140,85 @@ CREATE TABLE IF NOT EXISTS background_tasks (
   integration_check_command TEXT NOT NULL DEFAULT '',
   integration_check_status TEXT NOT NULL DEFAULT '',
   integration_check_output TEXT NOT NULL DEFAULT '',
+  integration_pushed INTEGER NOT NULL DEFAULT 0,
   integration_pr_number INTEGER NOT NULL DEFAULT 0,
   integration_pr_url TEXT NOT NULL DEFAULT '',
   integration_pr_state TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   started_at TEXT NOT NULL DEFAULT '',
   completed_at TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS swarm_profiles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  coordinator_profile_id INTEGER REFERENCES model_profiles(id) ON DELETE SET NULL,
+  default_worker_profile_id INTEGER REFERENCES model_profiles(id) ON DELETE SET NULL,
+  role_profiles TEXT NOT NULL DEFAULT '{}',
+  max_agents INTEGER NOT NULL DEFAULT 6,
+  max_concurrency INTEGER NOT NULL DEFAULT 3,
+  max_depth INTEGER NOT NULL DEFAULT 1,
+  dynamic_size INTEGER NOT NULL DEFAULT 1,
+  agent_tool_budget INTEGER NOT NULL DEFAULT 30,
+  coordinator_tool_budget INTEGER NOT NULL DEFAULT 20,
+  require_reviewer INTEGER NOT NULL DEFAULT 1,
+  require_challenger INTEGER NOT NULL DEFAULT 0,
+  is_builtin INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS swarm_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  objective TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'planning',
+  profile_id INTEGER REFERENCES swarm_profiles(id) ON DELETE SET NULL,
+  coordinator_task_id INTEGER REFERENCES background_tasks(id) ON DELETE SET NULL,
+  integration_task_id INTEGER REFERENCES background_tasks(id) ON DELETE SET NULL,
+  max_agents INTEGER NOT NULL DEFAULT 6,
+  max_concurrency INTEGER NOT NULL DEFAULT 3,
+  total_agents_created INTEGER NOT NULL DEFAULT 0,
+  cancel_requested INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  started_at TEXT NOT NULL DEFAULT '',
+  completed_at TEXT NOT NULL DEFAULT '',
+  integration_path TEXT NOT NULL DEFAULT '',
+  integration_branch TEXT NOT NULL DEFAULT '',
+  integration_check_command TEXT NOT NULL DEFAULT '',
+  integration_check_status TEXT NOT NULL DEFAULT '',
+  integration_check_output TEXT NOT NULL DEFAULT '',
+  integration_pr_number INTEGER NOT NULL DEFAULT 0,
+  integration_pr_url TEXT NOT NULL DEFAULT '',
+  integration_pr_state TEXT NOT NULL DEFAULT '',
+  coordinator_instructions TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS swarm_coordinator_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  swarm_id INTEGER NOT NULL REFERENCES swarm_runs(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  payload TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS swarm_coordinator_events_swarm ON swarm_coordinator_events(swarm_id,id);
+CREATE TABLE IF NOT EXISTS swarm_blackboard (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  swarm_id INTEGER NOT NULL REFERENCES swarm_runs(id) ON DELETE CASCADE,
+  task_id INTEGER REFERENCES background_tasks(id) ON DELETE SET NULL,
+  category TEXT NOT NULL,
+  key TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL,
+  confidence REAL,
+  supersedes_id INTEGER REFERENCES swarm_blackboard(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS swarm_blackboard_swarm ON swarm_blackboard(swarm_id,id);
+CREATE TABLE IF NOT EXISTS project_skills (
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  skill TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY(project_id,skill)
 );
 CREATE TABLE IF NOT EXISTS workspaces (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -199,6 +274,18 @@ ADDITIVE_COLUMNS = {
     "file_changes": {"workspace_path": "TEXT NOT NULL DEFAULT ''","hunks": "TEXT NOT NULL DEFAULT '[]'", "applied_content": "TEXT NOT NULL DEFAULT ''", "updated_at": "TEXT NOT NULL DEFAULT ''"},
     "command_runs": {"task_id": "INTEGER", "run_id": "INTEGER", "cwd": "TEXT NOT NULL DEFAULT ''","status": "TEXT NOT NULL DEFAULT 'completed'", "updated_at": "TEXT NOT NULL DEFAULT ''"},
     "git_operations": {"remote_url": "TEXT NOT NULL DEFAULT ''"},
+    "swarm_runs": {
+        "integration_path": "TEXT NOT NULL DEFAULT ''",
+        "integration_branch": "TEXT NOT NULL DEFAULT ''",
+        "integration_check_command": "TEXT NOT NULL DEFAULT ''",
+        "integration_check_status": "TEXT NOT NULL DEFAULT ''",
+        "integration_check_output": "TEXT NOT NULL DEFAULT ''",
+        "integration_pushed": "INTEGER NOT NULL DEFAULT 0",
+        "integration_pr_number": "INTEGER NOT NULL DEFAULT 0",
+        "integration_pr_url": "TEXT NOT NULL DEFAULT ''",
+        "integration_pr_state": "TEXT NOT NULL DEFAULT ''",
+        "coordinator_instructions": "TEXT NOT NULL DEFAULT ''",
+    },
     "background_tasks": {
         "worktree_path": "TEXT NOT NULL DEFAULT ''", "worktree_branch": "TEXT NOT NULL DEFAULT ''",
         "pull_request_number": "INTEGER NOT NULL DEFAULT 0", "pull_request_url": "TEXT NOT NULL DEFAULT ''", "pull_request_state": "TEXT NOT NULL DEFAULT ''",
@@ -206,6 +293,14 @@ ADDITIVE_COLUMNS = {
         "integration_path": "TEXT NOT NULL DEFAULT ''", "integration_branch": "TEXT NOT NULL DEFAULT ''",
         "integration_check_command": "TEXT NOT NULL DEFAULT ''", "integration_check_status": "TEXT NOT NULL DEFAULT ''", "integration_check_output": "TEXT NOT NULL DEFAULT ''",
         "integration_pr_number": "INTEGER NOT NULL DEFAULT 0", "integration_pr_url": "TEXT NOT NULL DEFAULT ''", "integration_pr_state": "TEXT NOT NULL DEFAULT ''",
+        "swarm_id": "INTEGER REFERENCES swarm_runs(id) ON DELETE CASCADE",
+        "model_profile_id": "INTEGER REFERENCES model_profiles(id) ON DELETE SET NULL",
+        "assigned_model": "TEXT NOT NULL DEFAULT ''",
+        "task_kind": "TEXT NOT NULL DEFAULT 'specialist'",
+        "priority": "INTEGER NOT NULL DEFAULT 100",
+        "depth": "INTEGER NOT NULL DEFAULT 0",
+        "progress": "INTEGER NOT NULL DEFAULT 0",
+        "current_activity": "TEXT NOT NULL DEFAULT ''",
     },
 }
 
@@ -216,7 +311,7 @@ def now() -> str:
 
 def init_db() -> None:
     settings.data_root.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(settings.database_path) as conn:
+    with sqlite3.connect(settings.database_path, timeout=10) as conn:
         conn.executescript(SCHEMA)
         for table, columns in ADDITIVE_COLUMNS.items():
             existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
@@ -232,13 +327,32 @@ def init_db() -> None:
         for profile in defaults:
             conn.execute("INSERT OR IGNORE INTO model_profiles(name,chat_model,embedding_model,temperature,max_steps,context_files,context_chars,is_builtin,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)", (*profile, stamp, stamp))
         conn.execute("UPDATE model_profiles SET is_builtin=1 WHERE name IN ('Balanced local','Fast review','Deep implementation')")
+        balanced = conn.execute("SELECT id FROM model_profiles WHERE name='Balanced local'").fetchone()
+        fast = conn.execute("SELECT id FROM model_profiles WHERE name='Fast review'").fetchone()
+        deep = conn.execute("SELECT id FROM model_profiles WHERE name='Deep implementation'").fetchone()
+        balanced_id = balanced[0] if balanced else None
+        fast_id = fast[0] if fast else balanced_id
+        deep_id = deep[0] if deep else balanced_id
+        swarm_defaults = [
+            ("Quick Review", balanced_id, fast_id, 3, 2, 1, 1, 0),
+            ("Development", balanced_id, deep_id, 5, 3, 1, 1, 0),
+            ("Bug Hunt", balanced_id, deep_id, 4, 3, 1, 1, 0),
+            ("Deep Development", deep_id, deep_id, 8, 3, 1, 1, 1),
+        ]
+        for name, coordinator_id, worker_id, max_agents, max_concurrency, max_depth, reviewer, challenger in swarm_defaults:
+            conn.execute(
+                "INSERT OR IGNORE INTO swarm_profiles(name,coordinator_profile_id,default_worker_profile_id,max_agents,max_concurrency,max_depth,require_reviewer,require_challenger,is_builtin,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,1,?,?)",
+                (name, coordinator_id, worker_id, max_agents, max_concurrency, max_depth, reviewer, challenger, stamp, stamp),
+            )
+        conn.execute("UPDATE swarm_profiles SET is_builtin=1 WHERE name IN ('Quick Review','Development','Bug Hunt','Deep Development')")
 
 
 @contextmanager
 def connect() -> Iterator[sqlite3.Connection]:
-    conn = sqlite3.connect(settings.database_path)
+    conn = sqlite3.connect(settings.database_path, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=10000")
     try:
         yield conn
         conn.commit()

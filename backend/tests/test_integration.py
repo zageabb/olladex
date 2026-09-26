@@ -81,3 +81,19 @@ def test_create_integration_aborts_on_cherry_pick_conflict(tmp_path, monkeypatch
     integration_root = settings.data_root / "integrations" / str(project["id"]) / "lead-100"
     assert integration_root.exists()
     assert _git(integration_root, "status", "--porcelain") == ""
+
+
+def test_swarm_integration_uses_distinct_namespace(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    monkeypatch.setattr(settings, "data_root", tmp_path / "data")
+    project = {"id": 24, "path": str(repo), "git_author_name": "Olladex Test", "git_author_email": "olladex-test@example.invalid"}
+    first = _task_branch(project, 7, "swarm.txt", "swarm\n")
+
+    result = integration.create(project, 7, [first["branch"]], "main", namespace="swarm")
+    root = Path(result["path"])
+
+    assert result["branch"] == "olladex/integration-swarm-7"
+    assert root.name == "swarm-7"
+    assert (root / "swarm.txt").read_text(encoding="utf-8") == "swarm\n"
+
+    integration.remove(project, result["path"], result["branch"], force=True)

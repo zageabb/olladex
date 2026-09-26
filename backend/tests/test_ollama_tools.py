@@ -1,4 +1,4 @@
-from backend.app.services import task_queue
+from backend.app.services import ollama, task_queue
 from backend.app.services.ollama import execute_tool
 
 
@@ -63,3 +63,58 @@ def test_background_task_write_is_blocked_without_an_isolated_worktree(tmp_path,
     assert result["recoverable"] is True
     assert "isolated Git worktree" in result["error"]
     assert activity["tool"] == "write_file"
+
+
+def test_swarm_blackboard_tools_are_strictly_validated():
+    finding = ollama.validate_arguments("swarm_publish_finding", {"content": "Evidence", "key": "auth"})
+    assert finding == {"content": "Evidence", "key": "auth"}
+
+    read = ollama.validate_arguments("swarm_read_blackboard", {"category": "risk"})
+    assert read == {"category": "risk"}
+
+    handoff = ollama.validate_arguments("swarm_publish_handoff", {"content": "Done", "key": "final"})
+    assert handoff == {"content": "Done", "key": "final"}
+
+    help_request = ollama.validate_arguments("swarm_request_help", {"content": "Need an independent tester", "key": "tests"})
+    assert help_request == {"content": "Need an independent tester", "key": "tests"}
+
+
+def test_update_progress_persists_step_based_percentage(tmp_path, monkeypatch):
+    project = {"id": 1, "name": "Tools", "path": str(tmp_path), "model": "test"}
+    persisted = {}
+    emitted = []
+
+    monkeypatch.setattr(task_queue, "cancel_requested", lambda: False)
+    monkeypatch.setattr(task_queue, "current_task_id", lambda: 42)
+    monkeypatch.setattr(task_queue, "set_progress", lambda task_id, progress, activity="": persisted.update({
+        "task_id": task_id, "progress": progress, "activity": activity
+    }))
+    monkeypatch.setattr(ollama.runtime, "cancelled", lambda: False)
+    monkeypatch.setattr(ollama.runtime, "emit", lambda kind, payload: emitted.append((kind, payload)))
+
+    result, activity = execute_tool(project, "update_progress", {
+        "completed_steps": 2,
+        "total_steps": 4,
+        "current_step": "Run regression tests",
+    })
+
+    assert result["progress"] == 50
+    assert persisted == {"task_id": 42, "progress": 50, "activity": "Run regression tests"}
+    assert ("progress", result) in emitted
+    assert activity["tool"] == "update_progress"
+
+
+def test_update_progress_rejects_invalid_step_counts(tmp_path, monkeypatch):
+    project = {"id": 1, "name": "Tools", "path": str(tmp_path), "model": "test"}
+    monkeypatch.setattr(task_queue, "cancel_requested", lambda: False)
+    monkeypatch.setattr(ollama.runtime, "cancelled", lambda: False)
+
+    result, activity = execute_tool(project, "update_progress", {
+        "completed_steps": 5,
+        "total_steps": 4,
+        "current_step": "Impossible",
+    })
+
+    assert result["recoverable"] is True
+    assert "completed_steps" in result["error"]
+    assert activity["tool"] == "update_progress"

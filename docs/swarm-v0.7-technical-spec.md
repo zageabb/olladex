@@ -1,5 +1,11 @@
 # Olladex v0.7 — Swarm Technical Specification
 
+> Implementation status: active development on `feature/swarm-v0.7` / PR #7.
+>
+> Implemented in the current branch: persistent Swarm schema/profiles, per-project skill toggle, per-role local Ollama model profiles, concurrency-aware scheduling, isolated worktrees, Blackboard tools, merged live activity, agent steering, structured hand-offs, persistent reactive Coordinator with recovery and pre-review gates, Agent Board UI, SQLite concurrency hardening, Swarm integration preflight/worktree/checks/push/PR flow, backend regression tests, and Playwright coverage.
+>
+> Remaining polish: richer graph visualisation, deeper integration UX/status presentation, and any issues found during real local-Ollama dogfooding.
+
 ## 1. Purpose
 
 Introduce an optional **Swarm skill** to Olladex that allows a user to give one substantial objective to a coordinating local LLM, which decomposes the objective into tasks and manages multiple specialised local LLM agents.
@@ -1151,3 +1157,113 @@ Defer:
 **Swarm should orchestrate existing Olladex agents, event streams, task queues and worktrees rather than create a second execution architecture.**
 
 That keeps the feature understandable, recoverable and maintainable while turning Olladex into a visible, controllable local multi-agent software-engineering environment.
+
+
+## 43. Interaction Layer Integration Contract
+
+The parallel Interaction Layer branch should treat Swarm execution as a backend capability and consume stable Swarm APIs rather than reimplement orchestration logic in the UI.
+
+Preferred board endpoint:
+
+```text
+GET /api/swarms/{swarm_id}/board
+```
+
+Cursor parameters:
+
+```text
+after_event
+after_coordinator_event
+after_blackboard
+limit
+```
+
+The response contains:
+
+- `swarm`: durable Swarm state and agent list;
+- `summary`: total/active/completed/failed counts, concurrency, overall progress and integration readiness;
+- `events`: incremental agent events;
+- `coordinator_events`: incremental Coordinator decisions/status/budget events;
+- `blackboard`: incremental shared knowledge entries;
+- `cursors`: the next `event`, `coordinator_event` and `blackboard` cursor values to send on the next poll.
+
+The Interaction Layer should own presentation of this data. The Swarm backend remains responsible for:
+
+- model/profile resolution;
+- agent spawning and concurrency;
+- dependency handling;
+- worktree isolation;
+- Blackboard persistence;
+- Coordinator decisions and budgets;
+- recovery/follow-up/helper agents;
+- review gating;
+- integration readiness and integration execution.
+
+This separation is intentional so the Interaction Layer can evolve independently without creating a second orchestration implementation.
+
+
+## 44. Coordinator Runtime Decision
+
+The original concept described the Coordinator as another `AgentRun`. v0.7 intentionally uses a dedicated persistent Coordinator control loop and `swarm_coordinator_events` timeline instead.
+
+Reasons:
+
+- the Coordinator does not own a coding worktree;
+- it does not execute the normal specialist tool loop;
+- `agent_runs` enforces one active run per session, which is useful for conversation/specialist execution but is an unnecessary coupling for the long-lived Swarm controller;
+- Coordinator model calls are bounded decision calls for decomposition, recovery, help delegation and pre-review risk handling;
+- Coordinator state, guidance, status changes, model-call budget and decisions are already durably replayable through the dedicated event stream.
+
+Specialists continue to use the normal `agent_runs` / `agent_events` runtime.
+
+This preserves the important user requirement—full visible/replayable Coordinator activity—without pretending the Coordinator is a worktree-owning coding agent.
+
+
+## 45. Swarm Readiness Preflight
+
+Before presenting a swarm as launchable, clients may call:
+
+```text
+GET /api/projects/{project_id}/swarms/preflight
+```
+
+Query parameters:
+
+```text
+profile_id
+max_agents
+max_concurrency
+```
+
+The preflight is non-destructive. It does not create a swarm, worktree, task or run.
+
+It validates:
+
+- project exists;
+- selected Swarm profile exists;
+- requested agent/concurrency limits are valid;
+- project path is a Git repository;
+- SQLite is using WAL mode;
+- SQLite busy timeout is suitable for parallel local writes;
+- all local Ollama models required by the profile/role mapping are installed.
+
+The response contains:
+
+```json
+{
+  "ready": true,
+  "project_id": 1,
+  "profile_id": 2,
+  "max_agents": 6,
+  "max_concurrency": 3,
+  "checks": [
+    {"name":"sqlite_wal","ok":true,"detail":"journal_mode=wal"},
+    {"name":"sqlite_busy_timeout","ok":true,"detail":"busy_timeout=10000ms"},
+    {"name":"git_repository","ok":true,"detail":"true"},
+    {"name":"ollama_models","ok":true,"detail":"phi4:14b, qwen2.5-coder:7b"},
+    {"name":"swarm_limits","ok":true,"detail":"max_agents=6, max_concurrency=3"}
+  ]
+}
+```
+
+The Interaction Layer may use this endpoint to provide a readiness indicator or explain why a Swarm cannot start without duplicating validation logic in the UI.

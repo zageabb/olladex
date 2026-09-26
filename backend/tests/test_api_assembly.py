@@ -23,3 +23,18 @@ def test_task_and_pr_review_routes_are_mounted():
     assert "/api/tasks/{lead_task_id}/integration/checks" in paths
     assert "/api/tasks/{lead_task_id}/integration/push" in paths
     assert "/api/tasks/{lead_task_id}/integration/pull-request" in paths
+    assert "/api/projects/{project_id}/skills/swarm" in paths
+    assert "/api/swarm-profiles" in paths
+    assert "/api/projects/{project_id}/swarms" in paths
+    assert "/api/projects/{project_id}/swarms/preflight" in paths
+    assert "/api/projects/{project_id}/swarms/self-test" in paths
+    assert "/api/swarms/{swarm_id}" in paths
+    assert "/api/swarms/{swarm_id}/agents" in paths
+    assert "/api/swarms/{swarm_id}/blackboard" in paths
+    assert "/api/swarms/{swarm_id}/events" in paths
+    assert "/api/swarms/{swarm_id}/coordinator/events" in paths
+    assert "/api/swarms/{swarm_id}/board" in paths
+    assert "/api/swarms/{swarm_id}/pause" in paths
+    assert "/api/swarms/{swarm_id}/resume" in paths
+    assert "/api/swarm-agents/{task_id}" in paths
+    assert "/api/swarm-agents/{task_id}/input" in paths

@@ -26,6 +26,13 @@ for tool_name, description, properties in [
     ("ask_user", "Ask a necessary clarification and wait for the answer before continuing.", {"question": {"type":"string"}}),
     ("remember_preference", "Save an explicit user request to remember a preference or decision. Do not infer personal facts or save secrets.", {"preference": {"type":"string"}}),
     ("update_plan", "Show or revise a short plan for a multi-step task.", {"steps": {"type":"array", "items": {"type":"string"}}}),
+    ("update_progress", "Report objective progress through the current plan using completed and total step counts plus the current step.", {"completed_steps": {"type":"integer", "minimum":0}, "total_steps": {"type":"integer", "minimum":1}, "current_step": {"type":"string"}}),
+    ("swarm_read_blackboard", "Read shared structured findings for the current swarm.", {"category": {"type":"string"}}),
+    ("swarm_publish_finding", "Publish an important evidence-backed finding to the current swarm blackboard.", {"content": {"type":"string"}, "key": {"type":"string"}}),
+    ("swarm_publish_decision", "Publish a meaningful engineering decision to the current swarm blackboard.", {"content": {"type":"string"}, "key": {"type":"string"}}),
+    ("swarm_publish_risk", "Publish an identified risk or uncertainty to the current swarm blackboard.", {"content": {"type":"string"}, "key": {"type":"string"}}),
+    ("swarm_publish_handoff", "Publish the final concise hand-off from this specialist to the coordinator and downstream agents.", {"content": {"type":"string"}, "key": {"type":"string"}}),
+    ("swarm_request_help", "Request one additional bounded specialist from the Swarm Coordinator when another role would materially help. The Coordinator decides whether to spawn it.", {"content": {"type":"string"}, "key": {"type":"string"}}),
 ]:
     TOOLS.append({"type":"function", "function": {"name":tool_name, "description":description,
         "parameters": {"type":"object", "properties":properties, "required":list(properties), "additionalProperties":False}}})
@@ -123,6 +130,45 @@ def _execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
     elif name == "update_plan":
         result = {"steps": args["steps"]}
         runtime.emit("plan", result)
+    elif name == "update_progress":
+        completed = int(args["completed_steps"])
+        total = int(args["total_steps"])
+        if completed < 0 or total < 1 or completed > total:
+            raise ValueError("Progress requires 0 <= completed_steps <= total_steps")
+        current_step = str(args.get("current_step") or "").strip()
+        percent = round((completed / total) * 100)
+        result = {"completed_steps": completed, "total_steps": total, "progress": percent, "current_step": current_step}
+        task_id = task_queue.current_task_id()
+        if task_id:
+            task_queue.set_progress(task_id, percent, current_step)
+        runtime.emit("progress", result)
+    elif name == "swarm_read_blackboard":
+        swarm_id = task_queue.current_swarm_id()
+        if not swarm_id:
+            raise ValueError("This agent is not running inside a swarm")
+        from . import swarm as swarm_service
+        result = swarm_service.blackboard(swarm_id, category=str(args.get("category") or ""))
+    elif name in {"swarm_publish_finding", "swarm_publish_decision", "swarm_publish_risk", "swarm_publish_handoff", "swarm_request_help"}:
+        swarm_id = task_queue.current_swarm_id()
+        task_id = task_queue.current_task_id()
+        if not swarm_id or not task_id:
+            raise ValueError("This agent is not running inside a swarm")
+        from . import swarm as swarm_service
+        category = {
+            "swarm_publish_finding": "finding",
+            "swarm_publish_decision": "decision",
+            "swarm_publish_risk": "risk",
+            "swarm_publish_handoff": "handoff",
+            "swarm_request_help": "question",
+        }[name]
+        result = swarm_service.publish(
+            swarm_id,
+            category,
+            str(args.get("content") or ""),
+            task_id=task_id,
+            key=str(args.get("key") or ""),
+        )
+        runtime.emit(category, {"task_id": task_id, "blackboard_id": result["id"], "content": result["content"], "key": result.get("key", "")})
     elif name == "apply_patch":
         before = workspace.read_text(project, args["path"])
         old = args["old_text"]
@@ -277,8 +323,16 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
     runtime.emit("progress", {"message": "Preparing repository context"})
     intelligence = workspace.repository_intelligence(project)
     intelligence["symbols"] = intelligence.get("symbols", [])[:40]
-    embedding_model = project.get("profile_embedding_model") or settings.ollama_embedding_model
-    selected_context = ranked_context(project, request, embedder=lambda texts: embed_texts(texts, embedding_model), embedding_model=embedding_model, max_files=project.get("profile_context_files") or 8, max_chars=project.get("profile_context_chars") or 32000)
+    task_profile = task_queue.current_model_settings()
+    embedding_model = task_profile.get("embedding_model") or project.get("profile_embedding_model") or settings.ollama_embedding_model
+    selected_context = ranked_context(
+        project,
+        request,
+        embedder=lambda texts: embed_texts(texts, embedding_model),
+        embedding_model=embedding_model,
+        max_files=task_profile.get("context_files") or project.get("profile_context_files") or 8,
+        max_chars=task_profile.get("context_chars") or project.get("profile_context_chars") or 32000,
+    )
     task_context = ""
     if task_queue.current_task_id():
         task_context = (
@@ -296,7 +350,11 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
         "Incorporate steering messages while preserving the original objective. Never claim success if checks failed or approval is pending. "
         "Finish with the outcome, relevant verification and remaining limitations. Work only inside the selected repository. "
         "Use tools to inspect evidence before answering. Keep the user informed in concise language. "
-        "Do not invent file contents or command results. When asked to change code, make focused edits, run appropriate checks, and summarize changes.\n\n"
+        "Do not invent file contents or command results. When asked to change code, make focused edits, run appropriate checks, and summarize changes. "
+        "When running inside a swarm, use update_plan before meaningful groups of work, use update_progress after completing meaningful plan steps, publish important evidence-backed findings, engineering decisions and risks to the shared blackboard, "
+        "Use swarm_request_help only when one additional bounded specialist would materially improve the outcome; you cannot spawn agents yourself. "
+        "Publish one concise swarm handoff before finishing that states the outcome, changed files, checks run, remaining risks and what downstream agents should know. "
+        "Read the blackboard when dependency context or another specialist's findings would materially help your task.\n\n"
         + "\n\nOriginal conversation objective:\n" + next((m["content"] for m in history if m.get("role") == "user"), request)[:4000]
         + "\n\n" + workspace.project_summary(project)
         + ("\n\nProject instructions:\n" + project.get("instructions", "") if project.get("instructions", "").strip() else "")
@@ -305,25 +363,28 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
         + "\n\nAutomatically ranked repository context:\n" + format_context(selected_context)
         + task_context
     )
-    context_tokens = project.get("profile_context_tokens") or settings.context_tokens
+    context_tokens = task_profile.get("context_tokens") or project.get("profile_context_tokens") or settings.context_tokens
     resumed = runtime.resume_messages()
     messages: list[dict] = resumed or [{"role": "system", "content": system}, *history]
     if resumed:
         messages.append({"role": "user", "content": request})
     activities: list[dict] = []
     tool_attempts: dict[str, int] = {}
+    tool_budget = int(task_profile.get("agent_tool_budget") or 0)
+    profile_steps = int(task_profile.get("max_steps") or project.get("profile_max_steps") or 8)
+    effective_steps = min(profile_steps, tool_budget) if tool_budget else profile_steps
     with client() as http:
-        for _ in range(max_steps or project.get("profile_max_steps") or 8):
+        for _ in range(max_steps or effective_steps):
             _check_cancelled()
             messages.extend(runtime.consume_inputs())
             messages = fit_context(messages, context_tokens)
             runtime.checkpoint(messages)
             runtime.emit("assistant_start", {})
             message = _stream_chat(http, {
-                "model": model or project.get("profile_chat_model") or project.get("model") or settings.ollama_model,
+                "model": model or task_queue.current_assigned_model() or task_profile.get("chat_model") or project.get("profile_chat_model") or project.get("model") or settings.ollama_model,
                 "messages": messages,
                 "tools": TOOLS,
-                "options": {"num_ctx": context_tokens, "temperature": project.get("profile_temperature") if project.get("profile_temperature") is not None else 0.2},
+                "options": {"num_ctx": context_tokens, "temperature": task_profile.get("temperature") if task_profile.get("temperature") is not None else project.get("profile_temperature") if project.get("profile_temperature") is not None else 0.2},
             })
             messages.append(message)
             runtime.checkpoint(messages)
@@ -337,6 +398,8 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
                 return message.get("content", ""), activities
             for call in tool_calls:
                 _check_cancelled()
+                if tool_budget and len(activities) >= tool_budget:
+                    raise BudgetExhausted("Swarm agent tool budget exhausted")
                 function = call.get("function", {})
                 name = function.get("name", "")
                 args = function.get("arguments") or {}
@@ -396,9 +459,24 @@ def validate_arguments(name, args):
         preference: str = Field(min_length=1, max_length=1000)
     class Plan(Strict):
         steps: list[str] = Field(min_length=1, max_length=20)
+    class Progress(Strict):
+        completed_steps: int = Field(ge=0)
+        total_steps: int = Field(ge=1)
+        current_step: str = Field(max_length=1000)
+    class SwarmRead(Strict):
+        category: str = Field(default="", max_length=40)
+    class SwarmPublish(Strict):
+        content: str = Field(min_length=1, max_length=50000)
+        key: str = Field(default="", max_length=200)
     schema = {"get_project_tree": Strict, "read_file": Read, "write_file": Write,
               "apply_patch": Patch, "run_command": Command, "search_code": Search,
-              "ask_user": Question, "update_plan": Plan, "remember_preference": Preference}.get(name)
+              "ask_user": Question, "update_plan": Plan, "update_progress": Progress, "remember_preference": Preference,
+              "swarm_read_blackboard": SwarmRead,
+              "swarm_publish_finding": SwarmPublish,
+              "swarm_publish_decision": SwarmPublish,
+              "swarm_publish_risk": SwarmPublish,
+              "swarm_publish_handoff": SwarmPublish,
+              "swarm_request_help": SwarmPublish}.get(name)
     if schema is None:
         raise ValueError(f"Unknown tool: {name}")
     return schema.model_validate(args).model_dump()
