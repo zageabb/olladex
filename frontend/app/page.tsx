@@ -54,7 +54,10 @@ export default function Home() {
   selectedProject.current = project?.id;
 
   useEffect(() => {
-    const handler = () => setAuthRequired(true);
+    const handler = () => {
+      setShowOpen(false);
+      setAuthRequired(true);
+    };
     window.addEventListener("olladex-auth-required", handler);
     return () => window.removeEventListener("olladex-auth-required", handler);
   }, []);
@@ -236,7 +239,7 @@ export default function Home() {
     </div>
 
     {authRequired && <div className="modal-backdrop"><form className="modal" onSubmit={async e => { e.preventDefault(); sessionStorage.setItem("olladex-token", token); try { await request("/projects"); window.location.reload(); } catch { setNotice("Token was not accepted"); } }}><h2>Connect to Olladex</h2><p>Paste the connection token printed by start-local.sh.</p><input aria-label="Connection token" type="password" value={token} onChange={e => setToken(e.target.value)} /><button className="primary">Connect</button></form></div>}
-    {showOpen && <div className="modal-backdrop" onMouseDown={() => setShowOpen(false)}><div className="modal" onMouseDown={(e) => e.stopPropagation()}><div className="modal-head"><div><p className="eyebrow">Local repository</p><h2>Open in Olladex</h2></div><button onClick={() => setShowOpen(false)}>×</button></div><form onSubmit={openProject}><label>Absolute directory path<input autoFocus value={openPath} onChange={(e) => setOpenPath(e.target.value)} placeholder="/home/gez/projects/my-app" /></label><p>File tools are restricted to this repository. Approved shell commands run with your operating-system permissions.</p><div><button type="button" onClick={() => setShowOpen(false)}>Cancel</button><button className="primary">Open repository</button></div></form></div></div>}
+    {showOpen && !authRequired && <div className="modal-backdrop" onMouseDown={() => setShowOpen(false)}><div className="modal" onMouseDown={(e) => e.stopPropagation()}><div className="modal-head"><div><p className="eyebrow">Local repository</p><h2>Open in Olladex</h2></div><button onClick={() => setShowOpen(false)}>×</button></div><form onSubmit={openProject}><label>Absolute directory path<input autoFocus value={openPath} onChange={(e) => setOpenPath(e.target.value)} placeholder="/home/gez/projects/my-app" /></label><p>File tools are restricted to this repository. Approved shell commands run with your operating-system permissions.</p><div><button type="button" onClick={() => setShowOpen(false)}>Cancel</button><button className="primary">Open repository</button></div></form></div></div>}
     {notice && <button className="toast" onClick={() => setNotice("")}>{notice}</button>}
   </main>;
 }
