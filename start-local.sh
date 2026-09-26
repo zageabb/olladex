@@ -20,5 +20,5 @@ OLLADEX_DATA_ROOT="${OLLADEX_DATA_ROOT:-$project_root/data}" \
 backend_pid=$!
 trap 'kill "$backend_pid" 2>/dev/null || true' EXIT
 
-NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-http://localhost:${OLLADEX_API_PORT:-8001}/api}" \
+NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-http://127.0.0.1:${OLLADEX_API_PORT:-8001}/api}" \
   npm --prefix frontend run dev -- --hostname 127.0.0.1 --port "${OLLADEX_PORT:-5081}"
