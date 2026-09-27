@@ -65,9 +65,10 @@ test('interaction layer can enable, preflight and start a swarm', async ({ page 
     if (p === '/api/projects/1/swarms/preflight') {
       await json({ready:true,project_id:1,profile_id:1,max_agents:5,max_concurrency:3,checks:[
         {name:'sqlite_wal',ok:true,detail:'journal_mode=wal'},
-        {name:'git_repository',ok:true,detail:'true'},
+        {name:'git_repository',ok:true,detail:'Git repository ready'},
+        {name:'git_head',ok:true,detail:'Baseline commit available'},
         {name:'ollama_models',ok:true,detail:'test'}
-      ]});
+      ],git:{repository:true,has_head:true,remotes:[],has_remote:false,github_remote:'',can_push:false,can_create_pull_request:false}});
       return true;
     }
     if (p === '/api/projects/1/swarms' && route.request().method() === 'POST') {
@@ -159,7 +160,8 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
           {id:1,task_id:null,category:'decision',content:'Review gate opened.',created_at:new Date().toISOString()},
           {id:2,task_id:11,category:'finding',content:'Auth dependency is centralized.',created_at:new Date().toISOString()}
         ]:[],
-        cursors:{event:0,coordinator_event:21,blackboard:2}
+        cursors:{event:0,coordinator_event:21,blackboard:2},
+        repository:{repository:true,has_head:true,remotes:[{name:'origin',url:'git@github.com:zageabb/olladex.git'}],has_remote:true,github_remote:'origin',can_push:true,can_create_pull_request:true}
       });
       return true;
     }
@@ -314,4 +316,114 @@ test('interaction agent board can steer an active agent and switch between swarm
   await expect(page.getByRole('heading', {name:'Previous swarm'})).toBeVisible();
   await expect(page.getByText('Historical task')).toBeVisible();
   await expect(page.getByText(/Swarm #8 · completed · 100% complete/)).toBeVisible();
+});
+
+
+test('swarm preflight can initialize local git and continue without a remote', async ({ page }) => {
+  let initialized = false;
+  let createdObjective = '';
+
+  await baseRoutes(page, async (route,url) => {
+    const p=url.pathname;
+    const json=(data:unknown)=>route.fulfill({json:data});
+    if (p === '/api/projects/1/skills/swarm') {
+      await json({project_id:1,skill:'swarm',enabled:true});
+      return true;
+    }
+    if (p === '/api/projects/1/swarms/git/init') {
+      initialized = true;
+      await json({
+        summary:{repository:true,branch:'main',remotes:[]},
+        capabilities:{repository:true,has_head:true,remotes:[],has_remote:false,github_remote:'',can_push:false,can_create_pull_request:false}
+      });
+      return true;
+    }
+    if (p === '/api/projects/1/swarms/preflight') {
+      if (!initialized) {
+        await json({
+          ready:false,project_id:1,profile_id:1,max_agents:5,max_concurrency:3,
+          checks:[
+            {name:'sqlite_wal',ok:true,detail:'journal_mode=wal'},
+            {name:'git_repository',ok:false,detail:'Project is not a Git repository'},
+            {name:'git_head',ok:false,detail:'Create a local baseline commit before starting Swarm'},
+            {name:'ollama_models',ok:true,detail:'test'}
+          ],
+          git:{repository:false,has_head:false,remotes:[],has_remote:false,github_remote:'',can_push:false,can_create_pull_request:false}
+        });
+      } else {
+        await json({
+          ready:true,project_id:1,profile_id:1,max_agents:5,max_concurrency:3,
+          checks:[
+            {name:'sqlite_wal',ok:true,detail:'journal_mode=wal'},
+            {name:'git_repository',ok:true,detail:'Git repository ready'},
+            {name:'git_head',ok:true,detail:'Baseline commit available'},
+            {name:'ollama_models',ok:true,detail:'test'}
+          ],
+          git:{repository:true,has_head:true,remotes:[],has_remote:false,github_remote:'',can_push:false,can_create_pull_request:false}
+        });
+      }
+      return true;
+    }
+    if (p === '/api/projects/1/swarms' && route.request().method() === 'POST') {
+      createdObjective=String(route.request().postDataJSON().objective||'');
+      await json({swarm:{id:9}});
+      return true;
+    }
+    return false;
+  });
+
+  await page.goto('/');
+  await page.locator('.rail').getByRole('button', {name:'Tasks'}).click();
+  await page.getByText(/Swarm controls/).click();
+
+  await page.getByPlaceholder('Describe the larger outcome for the Swarm…').fill('Improve local app');
+  await page.getByRole('button', {name:'Preflight & start Swarm'}).click();
+
+  await expect(page.getByRole('button', {name:'Initialize local Git'})).toBeVisible();
+  await page.getByRole('button', {name:'Initialize local Git'}).click();
+  await expect.poll(()=>initialized).toBe(true);
+  await expect(page.getByText(/Local-only Git repository/)).toBeVisible();
+
+  await page.getByRole('button', {name:'Preflight & start Swarm'}).click();
+  await expect.poll(()=>createdObjective).toBe('Improve local app');
+});
+
+test('verified local swarm integration does not require push or github', async ({ page }) => {
+  await baseRoutes(page, async (route,url) => {
+    const p=url.pathname;
+    const json=(data:unknown)=>route.fulfill({json:data});
+    if (p === '/api/projects/1/skills/swarm') {
+      await json({project_id:1,skill:'swarm',enabled:true});
+      return true;
+    }
+    if (p === '/api/projects/1/swarms') {
+      await json([{id:10,title:'Local only',status:'completed',max_agents:4,max_concurrency:2,total_agents_created:1}]);
+      return true;
+    }
+    if (p === '/api/swarms/10/board') {
+      await json({
+        swarm:{
+          id:10,title:'Local only',status:'completed',
+          integration_path:'/tmp/local-integration',
+          integration_branch:'olladex/swarm-10-integration',
+          integration_check_status:'passed',
+          integration_check_output:'all good',
+          agents:[{id:101,title:'Local change',status:'completed',agent_role:'backend',task_kind:'backend',worktree_branch:'olladex/task-101',progress:100}]
+        },
+        summary:{total_agents:1,active_agents:0,completed_agents:1,failed_agents:0,progress:100,max_agents:4,max_concurrency:2,integration_ready:true},
+        events:[],coordinator_events:[],blackboard:[],cursors:{event:0,coordinator_event:0,blackboard:0},
+        repository:{repository:true,has_head:true,remotes:[],has_remote:false,github_remote:'',can_push:false,can_create_pull_request:false}
+      });
+      return true;
+    }
+    return false;
+  });
+
+  await page.goto('/');
+  await page.locator('.rail').getByRole('button', {name:'Tasks'}).click();
+
+  await expect(page.getByRole('heading', {name:'Local only'})).toBeVisible();
+  await expect(page.getByText('Verified local integration branch ready')).toBeVisible();
+  await expect(page.getByRole('button', {name:'Push branch'})).toHaveCount(0);
+  await expect(page.getByRole('button', {name:'Create final PR'})).toHaveCount(0);
 });
