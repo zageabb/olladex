@@ -363,6 +363,15 @@ def create_run(
         raise ValueError("Swarm skill is disabled for this project")
     profile = get_profile(profile_id)
     validate_models(profile, project_default_model(project_id))
+    with connect() as conn:
+        project_row = conn.execute("SELECT path FROM projects WHERE id=?", (project_id,)).fetchone()
+    if not project_row:
+        raise ValueError("Project not found")
+    git_state = git.capabilities({"path": str(project_row["path"] or "")})
+    if not git_state["repository"]:
+        raise ValueError("Initialize local Git before starting Swarm")
+    if not git_state["has_head"]:
+        raise ValueError("Create a local Git baseline commit before starting Swarm")
     max_agents_value = max(2, min(int(max_agents or profile["max_agents"]), 20))
     concurrency_value = max(1, min(int(max_concurrency or profile["max_concurrency"]), max_agents_value, 8))
     stamp = now()
