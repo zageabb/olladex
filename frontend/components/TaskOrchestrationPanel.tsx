@@ -331,7 +331,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
     if(!swarmBoard)return;
     setBusy(true);
     try{
-      const remote=swarmBoard.repository?.remotes?.[0]?.name;
+      const remote=swarmBoard.repository?.github_remote||swarmBoard.repository?.remotes?.[0]?.name;
       if(!remote){setNotice("No Git remote is configured; the verified integration branch remains local");return;}
       await request(`/swarms/${swarmBoard.swarm.id}/integration/push`,{method:"POST",body:JSON.stringify({remote})});
       setSwarmIntegrationPushed(true);
