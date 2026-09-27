@@ -633,6 +633,18 @@ Swarm is integrated into **Tasks → Agent Board** rather than using a separate 
 
 Use Swarm for larger objectives that benefit from several local Ollama specialists working in parallel with explicit roles, dependencies, worktree isolation and a persistent Coordinator.
 
+### 15.0 Repository modes
+
+Swarm requires Git worktrees, but it does **not** require GitHub.
+
+Olladex supports three repository modes:
+
+- **Plain local folder** — preflight explains that Git is required and offers **Initialize local Git**. This creates a local Git repository and a baseline commit of all non-ignored files.
+- **Local Git repository with no remote** — the full Swarm can run, review and integrate. After combined checks pass, Olladex reports **Verified local integration branch ready** and does not require push or a pull request.
+- **Git repository with a remote** — Olladex can push the verified integration branch. If a GitHub remote is detected, the final **Create final PR** action is also available.
+
+The local Git initializer does not create a GitHub repository or upload files anywhere.
+
 ### 15.1 Enable and start a Swarm
 
 1. open **Tasks**;
