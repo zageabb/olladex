@@ -5,7 +5,7 @@ import subprocess
 import time
 
 from ..database import connect, now
-from . import ollama, task_queue
+from . import git, ollama, task_queue
 
 
 TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
@@ -248,24 +248,17 @@ def preflight(
         "detail": f"busy_timeout={busy_timeout}ms",
     })
 
-    path = str(project["path"] or "")
-    git_ok = False
-    git_detail = "Project path is not a Git repository"
-    try:
-        completed = subprocess.run(
-            ["git", "rev-parse", "--is-inside-work-tree"],
-            cwd=path,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=10,
-            check=False,
-        )
-        git_ok = completed.returncode == 0 and completed.stdout.strip() == "true"
-        git_detail = completed.stdout.strip() or git_detail
-    except (OSError, subprocess.SubprocessError) as exc:
-        git_detail = str(exc)
-    checks.append({"name": "git_repository", "ok": git_ok, "detail": git_detail})
+    git_state = git.capabilities({"path": str(project["path"] or "")})
+    checks.append({
+        "name": "git_repository",
+        "ok": bool(git_state["repository"]),
+        "detail": "Git repository ready" if git_state["repository"] else "Project is not a Git repository",
+    })
+    checks.append({
+        "name": "git_head",
+        "ok": bool(git_state["has_head"]),
+        "detail": "Baseline commit available" if git_state["has_head"] else "Create a local baseline commit before starting Swarm",
+    })
 
     try:
         model_status = validate_models(profile, fallback_model)
@@ -292,6 +285,7 @@ def preflight(
         "max_concurrency": requested_concurrency,
         "checks": checks,
         "models": model_status,
+        "git": git_state,
     }
 
 
