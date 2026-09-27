@@ -934,3 +934,9 @@ button.primary:hover { background: var(--blue-2); }
 .swarm-model-test-results article.failed{border-color:#efd1ce;background:#fff5f4}
 .swarm-model-test-results strong{font-size:8px}
 .swarm-model-test-results span,.swarm-model-test-results small{color:#68788e;font-size:8px;line-height:1.35}
+
+.swarm-local-git{grid-column:1/-1;padding:9px;display:grid;grid-template-columns:1fr auto;gap:4px 10px;align-items:center;background:#f6f9fd;border:1px solid #d8e3f1;border-radius:8px}
+.swarm-local-git strong{font-size:9px}
+.swarm-local-git span{color:#63758d;font-size:8px;line-height:1.4}
+.swarm-local-git button{grid-column:2;grid-row:1/3;padding:6px 8px;font-size:8px}
+@media(max-width:760px){.swarm-local-git{grid-template-columns:1fr}.swarm-local-git button{grid-column:1;grid-row:auto}}
