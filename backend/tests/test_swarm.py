@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from backend.app import swarm_routes
 from backend.app.config import settings
 from backend.app.database import connect, init_db, now
-from backend.app.services import conversation_runtime, swarm, swarm_coordinator, task_queue
+from backend.app.services import conversation_runtime, git, swarm, swarm_coordinator, task_queue
 
 
 def _seed(tmp_path, monkeypatch):
@@ -918,7 +918,7 @@ def test_swarm_preflight_checks_git_sqlite_models_and_limits(tmp_path, monkeypat
         project_path = conn.execute("SELECT path FROM projects WHERE id=?", (project_id,)).fetchone()["path"]
         profile_id = int(conn.execute("SELECT id FROM swarm_profiles WHERE name='Development'").fetchone()["id"])
 
-    subprocess.run(["git", "init"], cwd=project_path, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    git.initialize_local_repository({"path": str(project_path), "git_author_name": "Test", "git_author_email": "test@example.com"})
     monkeypatch.setattr(
         swarm,
         "validate_models",
@@ -1116,3 +1116,93 @@ def test_validate_models_applies_project_default_to_unassigned_roles(tmp_path, m
     assert result["assignments"]["backend"] == "qwen3:14b"
     assert result["assignments"]["tester"] == "qwen3:14b"
     assert set(result["assignments"].values()) == {"qwen3:14b"}
+
+
+def test_swarm_preflight_plain_folder_offers_local_git_initialization(tmp_path, monkeypatch):
+    project_id, _ = _seed(tmp_path, monkeypatch)
+    with connect() as conn:
+        profile_id = int(conn.execute("SELECT id FROM swarm_profiles WHERE name='Development'").fetchone()["id"])
+
+    monkeypatch.setattr(
+        swarm,
+        "validate_models",
+        lambda profile, fallback_model='': {
+            "installed": ["qwen3:14b"],
+            "assignments": {"coordinator": "qwen3:14b", "backend": "qwen3:14b"},
+        },
+    )
+
+    before = swarm.preflight(project_id, profile_id)
+    assert before["ready"] is False
+    assert before["git"]["repository"] is False
+    assert before["git"]["has_remote"] is False
+
+    project = swarm_routes._project(project_id)
+    initialized = git.initialize_local_repository(project)
+    assert initialized["capabilities"]["repository"] is True
+    assert initialized["capabilities"]["has_head"] is True
+    assert initialized["capabilities"]["has_remote"] is False
+
+    after = swarm.preflight(project_id, profile_id)
+    assert after["ready"] is True
+    assert after["git"]["repository"] is True
+    assert after["git"]["has_head"] is True
+    assert after["git"]["can_push"] is False
+    assert after["git"]["can_create_pull_request"] is False
+
+
+def test_git_capabilities_detect_generic_and_github_remotes(tmp_path, monkeypatch):
+    project_id, _ = _seed(tmp_path, monkeypatch)
+    project = swarm_routes._project(project_id)
+    git.initialize_local_repository(project)
+
+    local_only = git.capabilities(project)
+    assert local_only["has_remote"] is False
+    assert local_only["can_push"] is False
+    assert local_only["can_create_pull_request"] is False
+
+    subprocess.run(
+        ["git", "remote", "add", "backup", "ssh://git@example.test/team/repo.git"],
+        cwd=project["path"],
+        check=True,
+    )
+    generic = git.capabilities(project)
+    assert generic["has_remote"] is True
+    assert generic["can_push"] is True
+    assert generic["can_create_pull_request"] is False
+
+    subprocess.run(
+        ["git", "remote", "add", "origin", "git@github.com:zageabb/example.git"],
+        cwd=project["path"],
+        check=True,
+    )
+    github = git.capabilities(project)
+    assert github["github_remote"] == "origin"
+    assert github["can_create_pull_request"] is True
+
+
+def test_create_run_requires_git_repository_with_head(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm.set_skill(project_id, True)
+    with connect() as conn:
+        profile_id = int(conn.execute("SELECT id FROM swarm_profiles WHERE name='Development'").fetchone()["id"])
+
+    monkeypatch.setattr(
+        swarm,
+        "validate_models",
+        lambda profile, fallback_model='': {
+            "installed": ["qwen3:14b"],
+            "assignments": {"coordinator": "qwen3:14b", "backend": "qwen3:14b"},
+        },
+    )
+
+    try:
+        swarm.create_run(project_id, session_id, "Local", "Test local swarm", profile_id)
+    except ValueError as exc:
+        assert "Initialize local Git" in str(exc)
+    else:
+        raise AssertionError("Swarm should not start without a Git repository")
+
+    git.initialize_local_repository(swarm_routes._project(project_id))
+    created = swarm.create_run(project_id, session_id, "Local", "Test local swarm", profile_id)
+    assert created["id"]
