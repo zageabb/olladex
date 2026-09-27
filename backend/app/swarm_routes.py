@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from .database import connect, now
 from .services import orchestration as orchestration_service
 from .services import swarm as swarm_service
-from .services import task_queue, integration, worktrees
+from .services import task_queue, integration, worktrees, git
 from .services import github as github_service
 
 
@@ -139,6 +139,15 @@ def update_swarm_profile(profile_id: int, body: SwarmProfileRequest):
 def delete_swarm_profile(profile_id: int):
     try:
         return swarm_service.delete_profile(profile_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/projects/{project_id}/swarms/git/init")
+def initialize_swarm_git(project_id: int):
+    project = _project(project_id)
+    try:
+        return git.initialize_local_repository(project)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 
@@ -364,13 +373,16 @@ def swarm_board(
     limit: int = 200,
 ):
     try:
-        return swarm_service.board_snapshot(
+        board = swarm_service.board_snapshot(
             swarm_id,
             after_event=after_event,
             after_coordinator_event=after_coordinator_event,
             after_blackboard=after_blackboard,
             limit=limit,
         )
+        project = _project(int(board["swarm"]["project_id"]))
+        board["repository"] = git.capabilities(project)
+        return board
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
 
