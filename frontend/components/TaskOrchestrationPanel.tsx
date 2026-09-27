@@ -16,6 +16,7 @@ type IntegrationPreflight = { lead_task_id:number; task_ids:number[]; base:strin
 type SwarmListItem = { id:number; title:string; status:string; max_agents:number; max_concurrency:number; total_agents_created:number };
 type SwarmAgent = { id:number; title:string; status:string; agent_role:string; progress?:number; assigned_model?:string; current_activity?:string; tool_usage?:number; tool_budget?:number; latest_insight?:{category:string;content:string}|null; task_kind?:string; worktree_branch?:string };
 type SwarmAgentDetail = { task:SwarmAgent; commands:{id:number;command:string;output:string;exit_code:number;status:string}[]; blackboard:{id:number;category:string;content:string}[]; changed_files:string[]; worktree?:{branch_diff?:string;working_diff?:string}|null };
+type GitCapabilities = { repository:boolean; has_head:boolean; remotes:{name:string;url:string}[]; has_remote:boolean; github_remote:string; can_push:boolean; can_create_pull_request:boolean };
 type SwarmBoard = {
   swarm:{ id:number; title:string; status:string; agents?:SwarmAgent[]; coordinator_activity?:{category:string;content:string}|null; coordinator_budget?:{used:number;budget:number;remaining:number}; integration_path?:string; integration_branch?:string; integration_check_status?:string; integration_check_output?:string; integration_pushed?:number; integration_pr_number?:number; integration_pr_url?:string; integration_pr_state?:string };
   summary:{ total_agents:number; active_agents:number; completed_agents:number; failed_agents:number; progress:number; max_agents:number; max_concurrency:number; integration_ready:boolean };
@@ -23,11 +24,12 @@ type SwarmBoard = {
   coordinator_events?:{id:number;kind:string;payload:Record<string,unknown>;created_at:string}[];
   blackboard?:{id:number;task_id?:number|null;category:string;content:string;key?:string;created_at:string}[];
   cursors?:{event:number;coordinator_event:number;blackboard:number};
+  repository?:GitCapabilities;
 };
 type SwarmSkill = { project_id:number; skill:"swarm"; enabled:boolean };
 type SwarmProfile = { id:number; name:string; max_agents:number; max_concurrency:number; max_depth:number; dynamic_size:number; agent_tool_budget:number; coordinator_tool_budget:number; require_reviewer:number; require_challenger:number; coordinator_profile_id?:number|null; default_worker_profile_id?:number|null; role_profiles?:Record<string,number> };
 type ModelProfile = { id:number; name:string; chat_model:string };
-type SwarmPreflight = { ready:boolean; checks:{name:string;ok:boolean;detail:string}[]; max_agents:number; max_concurrency:number };
+type SwarmPreflight = { ready:boolean; checks:{name:string;ok:boolean;detail:string}[]; max_agents:number; max_concurrency:number; git:GitCapabilities };
 type SwarmModelSelfTest = { ready:boolean; models:{model:string;roles:string[];ok:boolean;latency_ms:number;response:string;error?:string}[] };
 type SwarmIntegrationPlan = { task_ids?:number[]; branches:string[]; overlaps:{path:string;branches:string[]}[]; files_by_branch?:Record<string,string[]>; path?:string; branch?:string; check_status?:string; check_output?:string };
 
@@ -208,6 +210,23 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
     finally{setBusy(false);}
   }
 
+  async function initializeSwarmGit(){
+    if(!swarmProfileId)return;
+    setBusy(true);
+    try{
+      await request(`/projects/${projectId}/swarms/git/init`,{method:"POST"});
+      const query=new URLSearchParams({
+        profile_id:swarmProfileId,
+        max_agents:String(swarmMaxAgents),
+        max_concurrency:String(swarmConcurrency)
+      });
+      const readiness=await request<SwarmPreflight>(`/projects/${projectId}/swarms/preflight?${query.toString()}`);
+      setSwarmPreflight(readiness);
+      setNotice(readiness.ready?"Local Git baseline created; Swarm is ready":"Local Git baseline created; review the remaining preflight checks");
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
+  }
+
   async function testSwarmModels(){
     if(!swarmProfileId)return;
     setBusy(true);setSwarmSelfTest(null);
@@ -312,9 +331,11 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
     if(!swarmBoard)return;
     setBusy(true);
     try{
-      await request(`/swarms/${swarmBoard.swarm.id}/integration/push`,{method:"POST",body:JSON.stringify({remote:"origin"})});
+      const remote=swarmBoard.repository?.remotes?.[0]?.name;
+      if(!remote){setNotice("No Git remote is configured; the verified integration branch remains local");return;}
+      await request(`/swarms/${swarmBoard.swarm.id}/integration/push`,{method:"POST",body:JSON.stringify({remote})});
       setSwarmIntegrationPushed(true);
-      setNotice("Swarm integration branch pushed");
+      setNotice(`Swarm integration branch pushed to ${remote}`);
       await load();
     }catch(error){setNotice(error instanceof Error?error.message:String(error));}
     finally{setBusy(false);}
@@ -438,7 +459,13 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
       {swarmBoard&&(swarmBoard.summary.integration_ready||swarmIntegration)&&<section className="agent-board-integration">
         <header><div><p className="eyebrow">Swarm integration</p><h4>{swarmIntegration?.branch||"Completed specialist branches are ready"}</h4></div><div className="agent-board-control-actions"><button type="button" onClick={checkSwarmIntegration} disabled={busy}>Check overlaps</button>{swarmIntegration&&<button type="button" className="primary" onClick={buildSwarmIntegration} disabled={busy}>Build integration</button>}</div></header>
         {swarmIntegration?.overlaps?.length?<div className="integration-warning"><strong>{swarmIntegration.overlaps.length} overlap(s)</strong><span>{swarmIntegration.overlaps.map(item=>item.path).join(", ")}</span></div>:swarmIntegration&&<div className="integration-ok">No overlapping files detected.</div>}
-        {swarmIntegration?.branch&&<div className="agent-board-integration-actions"><label>Combined checks<input value={swarmCheckCommand} onChange={event=>setSwarmCheckCommand(event.target.value)}/></label><button type="button" onClick={runSwarmChecks} disabled={busy||!swarmCheckCommand.trim()}>Run checks</button><span>{swarmIntegration.check_status||"not tested"}</span>{swarmIntegration.check_status==="passed"&&<button type="button" onClick={pushSwarmIntegration} disabled={busy}>Push branch</button>}{(swarmIntegrationPushed||Boolean(swarmBoard.swarm.integration_pr_number))&&swarmIntegration.check_status==="passed"&&!swarmBoard.swarm.integration_pr_number&&<button type="button" className="primary" onClick={createSwarmPullRequest} disabled={busy}>Create final PR</button>}{swarmBoard.swarm.integration_pr_number?<span>PR #{swarmBoard.swarm.integration_pr_number} {swarmBoard.swarm.integration_pr_state||""}</span>:null}</div>}
+        {swarmIntegration?.branch&&<div className="agent-board-integration-actions"><label>Combined checks<input value={swarmCheckCommand} onChange={event=>setSwarmCheckCommand(event.target.value)}/></label><button type="button" onClick={runSwarmChecks} disabled={busy||!swarmCheckCommand.trim()}>Run checks</button><span>{swarmIntegration.check_status||"not tested"}</span>
+          {swarmIntegration.check_status==="passed"&&!swarmBoard.repository?.has_remote&&<span>Verified local integration branch ready</span>}
+          {swarmIntegration.check_status==="passed"&&swarmBoard.repository?.has_remote&&!swarmIntegrationPushed&&<button type="button" onClick={pushSwarmIntegration} disabled={busy}>Push branch</button>}
+          {swarmIntegration.check_status==="passed"&&swarmIntegrationPushed&&swarmBoard.repository?.can_create_pull_request&&!swarmBoard.swarm.integration_pr_number&&<button type="button" className="primary" onClick={createSwarmPullRequest} disabled={busy}>Create final PR</button>}
+          {swarmIntegration.check_status==="passed"&&swarmIntegrationPushed&&!swarmBoard.repository?.can_create_pull_request&&<span>Remote branch pushed · GitHub PR not available</span>}
+          {swarmBoard.swarm.integration_pr_number?<span>PR #{swarmBoard.swarm.integration_pr_number} {swarmBoard.swarm.integration_pr_state||""}</span>:null}
+        </div>}
         {swarmIntegration?.check_output&&<details><summary>Combined check output</summary><pre>{swarmIntegration.check_output}</pre></details>}
       </section>}
     </section>
@@ -454,7 +481,11 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
             <label>Title<input value={swarmTitle} onChange={event=>setSwarmTitle(event.target.value)} placeholder="Optional swarm title"/></label>
             <label className={styles.advancedPrompt}>Objective<textarea value={swarmObjective} onChange={event=>setSwarmObjective(event.target.value)} placeholder="Describe the larger outcome for the Swarm…"/></label>
             <button className="primary" disabled={busy||!swarmProfileId||!swarmObjective.trim()}>{busy?"Checking…":"Preflight & start Swarm"}</button>
-            {swarmPreflight&&<small>{swarmPreflight.ready?"Readiness checks passed":swarmPreflight.checks.filter(item=>!item.ok).map(item=>item.detail).join(" · ")}</small>}
+            {swarmPreflight&&<>
+              <small>{swarmPreflight.ready?"Readiness checks passed":swarmPreflight.checks.filter(item=>!item.ok).map(item=>item.detail).join(" · ")}</small>
+              {(!swarmPreflight.git.repository||!swarmPreflight.git.has_head)&&<div className="swarm-local-git"><strong>Local Git required for Swarm worktrees</strong><span>Olladex can initialise Git locally and create a baseline commit of non-ignored files. No GitHub account or remote is required.</span><button type="button" onClick={initializeSwarmGit} disabled={busy}>Initialize local Git</button></div>}
+              {swarmPreflight.git.repository&&swarmPreflight.git.has_head&&!swarmPreflight.git.has_remote&&<small>Local-only Git repository · Swarm can run normally; final results will remain on a verified local integration branch.</small>}
+            </>}
           </form>
           {swarmProfiles.find(item=>String(item.id)===swarmProfileId)&&(()=>{const profile=swarmProfiles.find(item=>String(item.id)===swarmProfileId)!;const roles=["backend","frontend","coder","tester","researcher","reviewer","challenger"];return <details className="swarm-profile-settings"><summary>Model & policy settings</summary><div className="swarm-profile-grid">
             <label>Coordinator<select value={profile.coordinator_profile_id||""} onChange={event=>updateSwarmProfile(profile.id,{coordinator_profile_id:event.target.value?Number(event.target.value):null})}><option value="">Project default</option>{modelProfiles.map(model=><option key={model.id} value={model.id}>{model.name} · {model.chat_model}</option>)}</select></label>
