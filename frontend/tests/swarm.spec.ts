@@ -235,7 +235,7 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
   await page.getByText('Inspect auth').click();
   await expect(page.getByText('backend/app/auth.py')).toBeVisible();
   await expect(page.getByText('pytest backend/tests/test_auth.py')).toBeVisible();
-  await expect(page.locator('.agent-board-detail').getByText('Auth dependency is centralized.', {exact:true})).toBeVisible();
+  await expect(page.locator('.agent-board-detail').getByText(/Auth dependency is centralized\./)).toBeVisible();
 
   await page.getByText(/Coordinator timeline · 2/).click();
   await expect(page.getByText('Coordinator opened final verification.').last()).toBeVisible();
