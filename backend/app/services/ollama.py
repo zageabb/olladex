@@ -15,7 +15,7 @@ from .terminal import requires_approval, run as run_command
 
 TOOLS = [
     {"type": "function", "function": {"name": "get_project_tree", "description": "List the repository tree", "parameters": {"type": "object", "properties": {}}}},
-    {"type": "function", "function": {"name": "read_file", "description": "Read a UTF-8 repository file", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
+    {"type": "function", "function": {"name": "read_file", "description": "Read a UTF-8 repository file. Read at most 1,000 lines per call; use start_line for additional chunks.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
     {"type": "function", "function": {"name": "search_code", "description": "Search filenames and text", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
     {"type": "function", "function": {"name": "write_file", "description": "Write or propose a complete UTF-8 file change. In a background task, write directly to the isolated task worktree. In interactive chat, propose the change for user review. Use only when the user asks for changes.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
     {"type": "function", "function": {"name": "run_command", "description": "Run a bash command in the project", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
@@ -222,13 +222,38 @@ def _execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
 
 def execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
     try:
+        warnings = []
+        args = dict(args) if isinstance(args, dict) else args
+        if name == "read_file" and isinstance(args, dict):
+            requested_line_count = args.get("line_count")
+            if isinstance(requested_line_count, int) and not isinstance(requested_line_count, bool) and requested_line_count > 1000:
+                args["line_count"] = 1000
+                warnings.append(f"Requested {requested_line_count:,} lines; capped at the 1,000-line maximum")
         args = validate_arguments(name, args)
-        return _execute_tool(project, name, args)
+        result, activity = _execute_tool(project, name, args)
+        if warnings:
+            activity["warnings"] = warnings
+            activity["summary"] += " · " + " · ".join(warnings)
+        return result, activity
     except AgentCancelled:
         raise
     except Exception as exc:
-        result = {"error": str(exc), "recoverable": True}
-        return result, {"tool": name, "arguments": args, "summary": f"Tool failed: {exc}", "result": result}
+        message = _tool_error_message(name, exc)
+        result = {"error": message, "recoverable": True}
+        return result, {"tool": name, "arguments": args, "summary": f"Tool failed: {message}", "result": result}
+
+
+def _tool_error_message(name: str, exc: Exception) -> str:
+    """Keep model-generated validation mistakes useful without leaking framework diagnostics."""
+    errors = getattr(exc, "errors", None)
+    if not callable(errors):
+        return str(exc)
+    details = []
+    for error in errors():
+        location = ".".join(str(part) for part in error.get("loc", ())) or "arguments"
+        message = str(error.get("msg") or "is invalid")
+        details.append(f"{location}: {message}")
+    return f"Invalid {name} arguments — " + "; ".join(details)
 
 
 def summarize(name: str, result: Any) -> str:

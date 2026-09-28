@@ -10,6 +10,38 @@ def test_tool_failures_are_recoverable_observations(tmp_path):
     assert activity["tool"] == "read_file"
 
 
+def test_oversized_read_is_capped_without_a_failed_tool_call(tmp_path):
+    target = tmp_path / "large.txt"
+    target.write_text("".join(f"line {number}\n" for number in range(1, 1201)), encoding="utf-8")
+    project = {"id": 1, "name": "Tools", "path": str(tmp_path), "model": "test"}
+
+    result, activity = execute_tool(project, "read_file", {"path": "large.txt", "line_count": 2000})
+
+    assert len(result.splitlines()) == 1000
+    assert result.splitlines()[-1] == "line 1000"
+    assert activity["arguments"]["line_count"] == 1000
+    assert activity["warnings"] == ["Requested 2,000 lines; capped at the 1,000-line maximum"]
+    assert "Tool failed" not in activity["summary"]
+
+
+def test_validation_errors_are_concise_and_do_not_expose_pydantic_urls(tmp_path):
+    project = {"id": 1, "name": "Tools", "path": str(tmp_path), "model": "test"}
+
+    result, activity = execute_tool(project, "read_file", {"path": "app.py", "start_line": -5})
+
+    assert result["recoverable"] is True
+    assert result["error"].startswith("Invalid read_file arguments")
+    assert "start_line" in result["error"]
+    assert "pydantic.dev" not in result["error"]
+    assert "pydantic.dev" not in activity["summary"]
+
+
+def test_read_tool_description_states_the_line_limit():
+    read_tool = next(tool for tool in ollama.TOOLS if tool["function"]["name"] == "read_file")
+
+    assert "1,000 lines" in read_tool["function"]["description"]
+
+
 def test_interactive_write_file_remains_a_reviewable_proposal(tmp_path):
     target = tmp_path / "app.txt"
     target.write_text("before\n", encoding="utf-8")
