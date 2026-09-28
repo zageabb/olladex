@@ -1,6 +1,7 @@
 "use client";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { request, streamEvents } from "../lib/api";
+import { MarkdownBody } from "./MarkdownBody";
 
 type Run = { id: number; status: string };
 type Event = { id: number; run_id: number; kind: string; payload: any };
@@ -116,15 +117,15 @@ export function Conversation({ sessionId, onChanged }: { sessionId: number; onCh
     <div className="messages live-messages" role="log" aria-label="Conversation" onScroll={e => {
       const el = e.currentTarget; following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
     }}>
-      {legacy.map(item => <article key={item.id} className={`message ${item.role}`}><div className="bubble">{item.content}</div></article>)}
+      {legacy.map(item => <article key={item.id} className={`message ${item.role}`}><div className="bubble"><MarkdownBody value={item.content} /></div></article>)}
       {!legacy.length && !timeline.length && <div className="conversation-welcome"><h2>What would you like to work on?</h2><p>Discuss an idea, ask a question, or describe a change. You can add guidance while I work.</p></div>}
       {timeline.map(event => {
         const p = event.payload;
         if (event.kind === "final") {
           if (events.some(e => e.run_id === event.run_id && e.kind === "assistant_end" && e.payload.content === p.content)) return null;
-          return <article key={event.id} className="message assistant"><div className="bubble">{p.content}</div></article>;
+          return <article key={event.id} className="message assistant"><div className="bubble"><MarkdownBody value={p.content} /></div></article>;
         }
-        if (event.kind === "text_delta" || event.kind === "user_message") return <article key={event.id} className={`message ${event.kind === "user_message" ? "user" : "assistant"}`}><div className="message-avatar">{event.kind === "user_message" ? "You" : "O"}</div><div className="bubble">{p.text || p.content}</div></article>;
+        if (event.kind === "text_delta" || event.kind === "user_message") return <article key={event.id} className={`message ${event.kind === "user_message" ? "user" : "assistant"}`}><div className="message-avatar">{event.kind === "user_message" ? "You" : "O"}</div><div className="bubble"><MarkdownBody value={p.text || p.content || ""} /></div></article>;
         if (event.kind === "change_approval") return <section key={event.id} className="interaction-card"><strong>Review {p.path}</strong><pre>{p.diff}</pre>{current?.id === event.run_id && active && !events.some(e => e.kind === "tool_result" && e.payload.result?.change_id === p.change_id) && <div><button onClick={() => act(`/projects/${p.project_id}/changes/${p.change_id}/apply`, {})}>Apply change</button><button onClick={() => act(`/projects/${p.project_id}/changes/${p.change_id}/reject`)}>Reject</button></div>}</section>;
         if (event.kind === "approval") return <section key={event.id} className="interaction-card"><strong>Command approval</strong><pre>{p.command}</pre><small>Working directory: {p.cwd}</small>{!decided.has(p.command_run_id) && current?.id === event.run_id && active ? <div><button onClick={() => act(`/commands/${p.command_run_id}/decision`, { accepted: true })}>Approve once</button><button onClick={() => act(`/commands/${p.command_run_id}/decision`, { accepted: false })}>Decline</button></div> : <p>Approval closed</p>}</section>;
         if (event.kind === "question") return <section key={event.id} className="interaction-card"><strong>{p.question}</strong>{current?.id === event.run_id && current.status === "waiting_for_input" && <p>Reply below to continue.</p>}</section>;
