@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { request } from "../lib/api";
+import { MarkdownBody } from "./MarkdownBody";
 
 type BackgroundTask = {
   id: number; session_id: number; title: string; prompt: string; source_kind: string; source_ref: string;
@@ -200,7 +201,7 @@ export function BackgroundTasksPanel({ projectId, onOpenSession }: { projectId: 
         const expanded = expandedTask === task.id;
         return <article key={task.id} className={`queue-task ${task.status} ${expanded ? "expanded" : ""}`}>
           <header><div><strong>{task.title}</strong><small>{task.source_kind === "github_issue" ? "GitHub issue" : "Background task"} · {new Date(task.created_at).toLocaleString()}</small>{task.worktree_branch && <small>Branch · {task.worktree_branch}</small>}{task.pull_request_number ? <small>PR #{task.pull_request_number} · {prState || "OPEN"}{checkState !== "none" ? ` · checks ${checkState}` : ""}</small> : null}</div><span>{task.cancel_requested && task.status === "running" ? "Stopping" : taskPhase(task.status)}</span></header>
-          <p>{task.prompt}</p>{task.result && <pre>{task.result}</pre>}{task.error && <pre className="queue-error">{task.error}</pre>}
+          <MarkdownBody value={task.prompt} compact />{task.result && <MarkdownBody value={task.result} />}{task.error && <pre className="queue-error">{task.error}</pre>}
           {task.pull_request_number ? <div className="task-pr-status"><div><strong>PR #{task.pull_request_number}</strong><span className={`pr-state ${prState.toLowerCase()}`}>{prState || "OPEN"}</span><span className={`check-state ${checkState}`}>checks {checkState}</span>{lifecycle?.review_decision ? <span>{lifecycle.review_decision}</span> : null}</div><div><button disabled={busyTask === task.id} onClick={() => syncLifecycle(task)}>Refresh PR</button>{task.pull_request_url ? <button onClick={() => window.open(task.pull_request_url, "_blank", "noopener,noreferrer")}>Open GitHub</button> : null}</div>{lifecycle?.checks.checks.length ? <ul>{lifecycle.checks.checks.slice(0, 8).map((check) => <li key={`${check.name}-${check.state}`}><span>{check.name}</span><b>{check.state}</b></li>)}</ul> : null}{lifecycle?.cleanup_blocked ? <small>{lifecycle.cleanup_blocked}</small> : null}</div> : null}
           {worktree && <details className="activity-card" open><summary><span>⑂</span><div><strong>{worktree.branch}</strong><small>{worktree.changes.length} working changes · base {worktree.base}</small></div><b>⌄</b></summary>
             <div className="task-promotion-form">
