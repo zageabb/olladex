@@ -111,3 +111,34 @@ test('renders GFM tables in chat and markdown file preview', async ({ page }) =>
   await page.getByRole('button', {name:'Edit'}).click();
   await expect(page.locator('.code-editor')).toHaveValue('# Overview\n\n'+table);
 });
+
+test('keeps long fenced code readable inside the conversation column', async ({ page }) => {
+  const project = { id:1,name:'Demo',path:'/demo',model:'test',approval_mode:'assisted' };
+  const longLine = `const result = "${'readable-content-'.repeat(80)}";`;
+
+  await page.route('**/api/**', async route => {
+    const p = new URL(route.request().url()).pathname;
+    const json = (data: unknown) => route.fulfill({ json: data });
+    if (p === '/api/projects') return json([project]);
+    if (p === '/api/status') return json({ version:'test',ollama:{connected:true,models:['test']} });
+    if (p === '/api/projects/1/sessions') return json([{id:1,project_id:1,title:'Chat'}]);
+    if (p === '/api/sessions/1/messages') return json([{id:1,role:'assistant',content:`\`\`\`ts\n${longLine}\n\`\`\``}]);
+    if (p === '/api/sessions/1/runs') return json([]);
+    if (p === '/api/sessions/1/memory') return json({content:''});
+    if (p === '/api/projects/1/tree') return json([]);
+    if (p.endsWith('/git/diff')) return json({diff:''});
+    if (p.endsWith('/git')) return json({changes:[],branches:[],remotes:[]});
+    if (p.endsWith('/changes')) return json([]);
+    return json([]);
+  });
+
+  await page.goto('/');
+
+  const messages = page.locator('.messages');
+  const bubble = page.locator('.message.assistant .bubble');
+  const code = bubble.locator('pre');
+  await expect(code).toContainText('readable-content');
+  await expect.poll(() => messages.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect.poll(() => code.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect.poll(() => bubble.evaluate(element => element.getBoundingClientRect().right <= (element.parentElement?.getBoundingClientRect().right || 0))).toBe(true);
+});
