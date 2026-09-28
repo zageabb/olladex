@@ -69,3 +69,45 @@ test('late file reads cannot overwrite the selected project', async ({page}) => 
   release();
   await expect(page.locator('.code-editor')).toHaveValue('CURRENT SECOND PROJECT');
 });
+
+
+test('renders GFM tables in chat and markdown file preview', async ({ page }) => {
+  const project = { id:1,name:'Demo',path:'/demo',model:'test',approval_mode:'assisted' };
+  const table = '| Name | Status |\n| --- | --- |\n| Search | Ready |';
+
+  await page.route('**/api/**', async route => {
+    const url = new URL(route.request().url());
+    const p = url.pathname;
+    const json = (data: unknown) => route.fulfill({ json: data });
+    if (p === '/api/projects') return json([project]);
+    if (p === '/api/status') return json({ version:'test',ollama:{connected:true,models:['test']} });
+    if (p === '/api/projects/1/sessions') return json([{id:1,project_id:1,title:'Chat'}]);
+    if (p === '/api/sessions/1/messages') return json([{id:1,role:'assistant',content:table}]);
+    if (p === '/api/sessions/1/runs') return json([]);
+    if (p === '/api/sessions/1/memory') return json({content:''});
+    if (p === '/api/projects/1/tree') return json([{name:'README.md',path:'README.md',type:'file'}]);
+    if (p === '/api/projects/1/files') return json({content:'# Overview\n\n'+table});
+    if (p.endsWith('/git/diff')) return json({diff:''});
+    if (p.endsWith('/git')) return json({changes:[],branches:[],remotes:[]});
+    if (p.endsWith('/changes')) return json([]);
+    return json([]);
+  });
+
+  await page.goto('/');
+
+  const chatTable = page.locator('.message.assistant table');
+  await expect(chatTable).toBeVisible();
+  await expect(chatTable.getByRole('columnheader', {name:'Name'})).toBeVisible();
+  await expect(chatTable.getByRole('cell', {name:'Ready'})).toBeVisible();
+
+  await page.getByTitle('README.md', {exact:true}).click();
+  await expect(page.getByRole('button', {name:'Preview'})).toHaveClass(/active/);
+
+  const previewTable = page.locator('.markdown-document table');
+  await expect(previewTable).toBeVisible();
+  await expect(previewTable.getByRole('columnheader', {name:'Status'})).toBeVisible();
+  await expect(previewTable.getByRole('cell', {name:'Search'})).toBeVisible();
+
+  await page.getByRole('button', {name:'Edit'}).click();
+  await expect(page.locator('.code-editor')).toHaveValue('# Overview\n\n'+table);
+});
