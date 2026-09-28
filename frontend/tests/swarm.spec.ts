@@ -158,9 +158,10 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
         ]:[],
         blackboard:initial?[
           {id:1,task_id:null,category:'decision',content:'Review gate opened.',created_at:new Date().toISOString()},
-          {id:2,task_id:11,category:'finding',content:'Auth dependency is centralized.',created_at:new Date().toISOString()}
+          {id:2,task_id:11,category:'finding',content:'Auth dependency is centralized.',created_at:new Date().toISOString()},
+          {id:3,task_id:11,category:'finding',content:'| Check | Status |\n| --- | --- |\n| Auth | Ready |',created_at:new Date().toISOString()}
         ]:[],
-        cursors:{event:0,coordinator_event:21,blackboard:2},
+        cursors:{event:0,coordinator_event:21,blackboard:3},
         repository:{repository:true,has_head:true,remotes:[{name:'origin',url:'git@github.com:zageabb/olladex.git'}],has_remote:true,github_remote:'origin',can_push:true,can_create_pull_request:true}
       });
       return true;
@@ -202,7 +203,10 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
       await json({
         task:{id:11,title:'Inspect auth',status:'completed',agent_role:'backend',progress:100,tool_usage:6,tool_budget:30,current_activity:'Done'},
         commands:[{id:1,command:'pytest backend/tests/test_auth.py',output:'12 passed',exit_code:0,status:'completed'}],
-        blackboard:[{id:2,category:'finding',content:'Auth dependency is centralized.'}],
+        blackboard:[
+          {id:2,category:'finding',content:'Auth dependency is centralized.'},
+          {id:3,category:'finding',content:'| Check | Status |\n| --- | --- |\n| Auth | Ready |'}
+        ],
         changed_files:['backend/app/auth.py'],
         worktree:{branch_diff:'diff --git a/backend/app/auth.py b/backend/app/auth.py',working_diff:''}
       });
@@ -223,7 +227,7 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
   await expect(page.getByText(/budget 3\/20/)).toBeVisible();
   await expect(page.getByText(/budget 3\/20 · Coordinator opened final verification\./)).toBeVisible();
   await expect.poll(()=>coordinatorAfter.includes('21'),{timeout:5000}).toBe(true);
-  await expect.poll(()=>blackboardAfter.includes('2'),{timeout:5000}).toBe(true);
+  await expect.poll(()=>blackboardAfter.includes('3'),{timeout:5000}).toBe(true);
 
   await page.getByPlaceholder('Guide the Swarm…').fill('Prioritise regression tests.');
   await page.getByRole('button', {name:'Coordinator'}).click();
@@ -236,10 +240,13 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
   await expect(page.getByText('backend/app/auth.py')).toBeVisible();
   await expect(page.getByText('pytest backend/tests/test_auth.py')).toBeVisible();
   await expect(page.locator('.agent-board-detail').getByText(/Auth dependency is centralized\./)).toBeVisible();
+  const findingTable=page.locator('.agent-board-detail table');
+  await expect(findingTable).toBeVisible();
+  await expect(findingTable.getByRole('cell', {name:'Ready'})).toBeVisible();
 
   await page.getByText(/Coordinator timeline · 2/).click();
   await expect(page.getByText('Coordinator opened final verification.').last()).toBeVisible();
-  await page.getByText(/Blackboard · 2/).click();
+  await page.getByText(/Blackboard · 3/).click();
   await expect(page.getByText('Review gate opened.')).toBeVisible();
 
   await page.getByRole('button', {name:'Check overlaps'}).click();
