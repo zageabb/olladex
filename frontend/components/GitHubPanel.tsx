@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { request } from "../lib/api";
+import { MarkdownBody } from "./MarkdownBody";
 
 type GitHubStatus = { available: boolean; authenticated: boolean; repository: string; error: string };
 type Issue = { number: number; title: string; body: string; url: string; labels: { name: string }[]; updatedAt: string };
@@ -109,7 +110,7 @@ export function GitHubPanel({ projectId, branch, onTaskQueued }: { projectId: nu
       {selectedPr && <details className="github-pr" open><summary>Review PR #{selectedPr.number} · {selectedPr.title}</summary>
         <div className="git-remote-controls"><div><span>{selectedPr.headRefName} → {selectedPr.baseRefName} · {selectedPr.mergeable || "mergeability unknown"}</span><small>Checks · {checkSummary.label}</small></div></div>
         {checks.length > 0 && <div className="pr-checks">{checks.map((check, index) => <span key={`${check.name || check.context || index}`} className={`check-${checkState(check)}`}>{check.name || check.context || check.workflowName || `Check ${index + 1}`} · {checkState(check)}</span>)}</div>}
-        {selectedPr.body && <p>{selectedPr.body}</p>}
+        {selectedPr.body && <MarkdownBody value={selectedPr.body} />}
         <div className="pr-review-compose"><label>Conversation comment<textarea value={commentDraft} onChange={(event) => setCommentDraft(event.target.value)} placeholder="Add a comment to this pull request…" /></label><button disabled={busy || !commentDraft.trim()} onClick={() => commentOnPullRequest(selectedPr)}>Post comment</button></div>
         <div className="pr-review-compose"><label>Review note<textarea value={reviewDraft} onChange={(event) => setReviewDraft(event.target.value)} placeholder="Optional approval note, or explain the changes required…" /></label><div className="activity-actions"><button disabled={busy || !reviewDraft.trim()} onClick={() => reviewPullRequest(selectedPr, "request-changes")}>Request changes</button><button className="primary" disabled={busy} onClick={() => reviewPullRequest(selectedPr, "approve")}>Approve</button></div></div>
         <pre>{prDiff || "No diff returned."}</pre>
