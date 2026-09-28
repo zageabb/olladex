@@ -14,6 +14,7 @@ import { Conversation } from "../components/Conversation";
 import { ConversationTaskSummary } from "../components/ConversationTaskSummary";
 import { MemoryPanel } from "../components/MemoryPanel";
 import { WorkspacePanel } from "../components/WorkspacePanel";
+import { MarkdownBody } from "../components/MarkdownBody";
 import { request } from "../lib/api";
 
 type Project = { id: number; name: string; path: string; model: string; approval_mode: "review" | "assisted" | "autonomous"; instructions: string; git_author_name: string; git_author_email: string; model_profile_id?: number; profile_name?: string; profile_chat_model?: string; profile_embedding_model?: string; profile_temperature?: number; profile_max_steps?: number; profile_context_files?: number; profile_context_chars?: number };
@@ -39,6 +40,7 @@ export default function Home() {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [selected, setSelected] = useState<TreeNode | null>(null);
   const [fileContent, setFileContent] = useState("");
+  const [markdownPreview, setMarkdownPreview] = useState(false);
   const [fileDraft, setFileDraft] = useState("");
   const [changes, setChanges] = useState<Change[]>([]);
   const [selectedHunks, setSelectedHunks] = useState<Record<number, number[]>>({});
@@ -147,6 +149,7 @@ export default function Home() {
   async function selectFile(item: TreeNode) {
     setSelected(item); selectedFile.current = item.path;
     setFileContent(""); setFileDraft("");
+    setMarkdownPreview(item.type === "file" && /\.(md|markdown)$/i.test(item.path));
     if (item.type !== "file" || !project) return;
     if (/\.(docx|xlsx|pptx|pdf)$/i.test(item.path)) { setTab("office"); return; }
     if (/\.(mmd|mermaid)$/i.test(item.path)) setTab("diagrams");
@@ -232,7 +235,7 @@ export default function Home() {
       <section className="inspector-panel">
         <div className="inspector-tabs"><span className="context-label">Context</span>{(["files", "changes", "terminal", "diagrams", "office", "tasks", "memory", "workspace", "project"] as Tab[]).map((item) => <button key={item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item}{item === "changes" && changes.filter((change) => change.status === "proposed").length ? <span>{changes.filter((change) => change.status === "proposed").length}</span> : null}</button>)}</div>
         {project ? <>
-          {tab === "files" && <div className="file-workspace"><aside className="file-sidebar"><div className="file-search"><span>⌕</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter files" /></div><FileTree items={filteredTree} selected={selected?.path} onSelect={selectFile} /></aside><div className="editor-pane">{selected?.type === "file" ? <><div className="editor-head"><div><span className="file-icon">□</span><strong>{selected.path}</strong>{fileDraft !== fileContent && <i>Modified</i>}</div><button className="primary" onClick={() => saveFile().catch(error => setNotice(error.message))} disabled={fileDraft === fileContent}>Save</button></div><textarea className="code-editor" value={fileDraft} onChange={(e) => setFileDraft(e.target.value)} spellCheck={false} /></> : <EmptyWorkspace onOpen={() => setShowOpen(true)} />}</div></div>}
+          {tab === "files" && <div className="file-workspace"><aside className="file-sidebar"><div className="file-search"><span>⌕</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter files" /></div><FileTree items={filteredTree} selected={selected?.path} onSelect={selectFile} /></aside><div className="editor-pane">{selected?.type === "file" ? <><div className="editor-head"><div><span className="file-icon">□</span><strong>{selected.path}</strong>{fileDraft !== fileContent && <i>Modified</i>}</div><div className="markdown-file-toolbar">{/\.(md|markdown)$/i.test(selected.path)&&<><button className={!markdownPreview?"active":""} onClick={()=>setMarkdownPreview(false)}>Edit</button><button className={markdownPreview?"active":""} onClick={()=>setMarkdownPreview(true)}>Preview</button></>}<button className="primary" onClick={() => saveFile().catch(error => setNotice(error.message))} disabled={fileDraft === fileContent}>Save</button></div></div>{markdownPreview&&/\.(md|markdown)$/i.test(selected.path)?<div className="markdown-document"><MarkdownBody value={fileDraft}/></div>:<textarea className="code-editor" value={fileDraft} onChange={(e) => setFileDraft(e.target.value)} spellCheck={false} />}</> : <EmptyWorkspace onOpen={() => setShowOpen(true)} />}</div></div>}
           {tab === "changes" && <div className="changes-panel">
             <GitControls projectId={project.id} git={git} onRefresh={() => refreshGit(project.id)} onTaskQueued={() => setTab("tasks")} />
             {gitDiff && <article><header><div><strong>Current Git diff</strong><small>Working tree and staged changes</small></div><span>git</span></header><pre>{gitDiff}</pre></article>}
