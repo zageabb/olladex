@@ -8,7 +8,7 @@ type RecoveryInfo = { task_id:number; status:string; session_id:number; active_r
 
 type BackgroundTask = {
   id: number; session_id: number; title: string; prompt: string; source_kind: string; source_ref: string;
-  status: "queued" | "running" | "completed" | "cancelled" | "failed" | "interrupted" | "budget_exhausted" | "waiting_for_approval" | "waiting_for_input"; result: string; error: string;
+  status: "queued" | "running" | "completed" | "cancelled" | "failed" | "interrupted" | "budget_exhausted" | "dependency_failed" | "no_progress" | "incomplete" | "waiting_for_approval" | "waiting_for_input"; result: string; error: string;
   cancel_requested: number; created_at: string; started_at: string; completed_at: string;
   worktree_path?: string; worktree_branch?: string;
   pull_request_number?: number; pull_request_url?: string; pull_request_state?: string;
