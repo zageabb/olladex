@@ -340,6 +340,10 @@ def resume_task(
         "budget_override": int(task.get("budget_override") or 0),
         "recovery_attempt": current_attempt,
         "retry_lineage": task.get("retry_lineage") if isinstance(task.get("retry_lineage"), str) else json.dumps(task.get("retry_lineage") or []),
+        "error": str(task.get("error") or ""),
+        "completed_at": str(task.get("completed_at") or ""),
+        "current_activity": str(task.get("current_activity") or ""),
+        "no_progress_reason": str(task.get("no_progress_reason") or ""),
     }
     with connect() as conn:
         conn.execute(
@@ -363,8 +367,17 @@ def resume_task(
     except Exception:
         with connect() as conn:
             conn.execute(
-                "UPDATE background_tasks SET budget_override=?,recovery_attempt=?,retry_lineage=? WHERE id=?",
-                (previous["budget_override"], previous["recovery_attempt"], previous["retry_lineage"], task_id),
+                "UPDATE background_tasks SET budget_override=?,recovery_attempt=?,retry_lineage=?,error=?,completed_at=?,current_activity=?,no_progress_reason=? WHERE id=?",
+                (
+                    previous["budget_override"],
+                    previous["recovery_attempt"],
+                    previous["retry_lineage"],
+                    previous["error"],
+                    previous["completed_at"],
+                    previous["current_activity"],
+                    previous["no_progress_reason"],
+                    task_id,
+                ),
             )
         raise
 
