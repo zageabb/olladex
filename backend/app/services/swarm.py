@@ -713,6 +713,16 @@ def decide_budget_request(request_id: int, *, accepted: bool, amount: int | None
                 "UPDATE swarm_budget_requests SET status='declined',granted_amount=0,decided_by=?,updated_at=? WHERE id=? AND status='pending'",
                 (decided_by, stamp, request_id),
             )
+            if request["scope"] == "agent" and request.get("task_id"):
+                conn.execute(
+                    "UPDATE background_tasks SET status='failed',error=?,completed_at=? WHERE id=? AND status='budget_exhausted'",
+                    ("Additional budget was declined; Coordinator may choose a recovery path.", stamp, request["task_id"]),
+                )
+            elif request["scope"] == "coordinator":
+                conn.execute(
+                    "UPDATE swarm_runs SET status='failed',completed_at=? WHERE id=? AND status NOT IN ('completed','cancelled')",
+                    (stamp, request["swarm_id"]),
+                )
         emit_coordinator_event(
             int(request["swarm_id"]),
             "budget_declined",
