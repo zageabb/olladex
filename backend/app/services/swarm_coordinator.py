@@ -5,7 +5,7 @@ import threading
 import time
 
 from ..database import connect, now
-from . import ollama, swarm, task_queue
+from . import integration, ollama, swarm, swarm_finalization, task_queue
 
 _lock = threading.Lock()
 _threads: dict[int, threading.Thread] = {}
@@ -16,7 +16,7 @@ def start_active() -> None:
     _stop.clear()
     with connect() as conn:
         ids = [int(row["id"]) for row in conn.execute(
-            "SELECT id FROM swarm_runs WHERE status IN ('running','waiting','reviewing','paused') AND cancel_requested=0"
+            "SELECT id FROM swarm_runs WHERE status IN ('running','waiting','reviewing','paused','ready_for_integration','integrating','checks_failed','ready_to_promote') AND cancel_requested=0"
         )]
     for swarm_id in ids:
         start(swarm_id)
@@ -127,15 +127,70 @@ def _reconcile(swarm_id: int) -> None:
             swarm.set_status(swarm_id, "failed")
             return
         if reviewer and reviewer.get("status") == "completed":
-            # Normal reviewer completion is also finalized by task_queue, but keep
-            # the coordinator idempotently correct when recovering after restart.
-            swarm.set_status(swarm_id, "completed")
+            _prepare_finalization(run)
             return
         if challenger and not reviewer and challenger.get("status") == "completed":
-            swarm.set_status(swarm_id, "completed")
+            _prepare_finalization(run)
             return
         if not reviewer and not challenger:
-            swarm.set_status(swarm_id, "completed")
+            _prepare_finalization(run)
+
+
+def _prepare_finalization(run: dict) -> None:
+    swarm_id = int(run["id"])
+    current = swarm.get_run(swarm_id)
+    if current.get("status") in {"ready_for_integration", "integrating", "checks_failed", "ready_to_promote", "completed"}:
+        return
+    project = _project(int(run["project_id"]))
+    try:
+        evidence = swarm_finalization.review_gate(swarm_id, project, "main")
+    except ValueError as exc:
+        _publish_once(
+            swarm_id,
+            "risk",
+            "finalization-evidence-failed",
+            f"Finalization blocked by missing evidence: {exc}",
+        )
+        swarm.set_status(swarm_id, "failed")
+        return
+
+    swarm.set_status(swarm_id, "ready_for_integration")
+    try:
+        result = integration.create(
+            project,
+            swarm_id,
+            evidence["specialists"]["branches"],
+            "main",
+            namespace="swarm",
+        )
+    except ValueError as exc:
+        _publish_once(
+            swarm_id,
+            "risk",
+            "integration-preparation-failed",
+            f"Deterministic integration could not be prepared: {exc}. Managed worktrees were preserved for recovery.",
+        )
+        return
+
+    with connect() as conn:
+        conn.execute(
+            "UPDATE swarm_runs SET status='integrating',integration_path=?,integration_branch=?,"
+            "integration_check_command='',integration_check_status='',integration_check_output='',"
+            "integration_pushed=0,integration_pr_number=0,integration_pr_url='',integration_pr_state='',"
+            "promotion_status='',promoted_commit='',promotion_output='' WHERE id=?",
+            (result["path"], result["branch"], swarm_id),
+        )
+    swarm.emit_coordinator_event(
+        swarm_id,
+        "integration_prepared",
+        {
+            "path": result["path"],
+            "branch": result["branch"],
+            "head": result.get("head") or "",
+            "specialist_branches": evidence["specialists"]["branches"],
+            "reviewer_task_id": evidence["reviewer"].get("task_id"),
+        },
+    )
 
 
 def _consider_help_request(run: dict, completed: list[dict]) -> bool:
