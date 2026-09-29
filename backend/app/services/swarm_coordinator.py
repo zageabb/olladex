@@ -16,7 +16,7 @@ def start_active() -> None:
     _stop.clear()
     with connect() as conn:
         ids = [int(row["id"]) for row in conn.execute(
-            "SELECT id FROM swarm_runs WHERE status IN ('running','waiting','reviewing','paused') AND cancel_requested=0"
+            "SELECT id FROM swarm_runs WHERE status IN ('running','waiting','reviewing','paused','recovery_available','recovering') AND cancel_requested=0"
         )]
     for swarm_id in ids:
         start(swarm_id)
@@ -92,21 +92,36 @@ def _reconcile(swarm_id: int) -> None:
     challenger = next((item for item in agents if item.get("task_kind") == "challenger"), None)
 
     budget_exhausted = [item for item in specialists if item.get("status") == "budget_exhausted"]
-    failed = [item for item in specialists if item.get("status") in {"failed", "interrupted"}]
+    failed = [item for item in specialists if item.get("status") in {"failed", "interrupted", "no_progress", "incomplete"}]
+    dependency_blocked = [item for item in specialists if item.get("status") == "dependency_failed"]
     active = [item for item in specialists if item.get("status") in {"queued", "running", "waiting_for_input", "waiting_for_approval"}]
     completed = [item for item in specialists if item.get("status") == "completed"]
     recovered_ids = _recovered_failure_ids(completed)
     unresolved_failed = [item for item in failed if int(item["id"]) not in recovered_ids]
 
     if budget_exhausted:
+        if run.get("status") != "recovery_available":
+            swarm.set_status(swarm_id, "recovery_available")
         if _consider_budget_exhaustion(run, budget_exhausted, completed):
             return
+
+    if dependency_blocked and not active:
+        if run.get("status") != "recovery_available":
+            swarm.set_status(swarm_id, "recovery_available")
+        _publish_once(
+            swarm_id,
+            "risk",
+            "dependency-recovery-blocked",
+            "Advanced orchestration is waiting for recovery of dependency-blocked tasks: "
+            + ", ".join(f"#{item['id']}" for item in dependency_blocked),
+        )
+        return
 
     if unresolved_failed and not active:
         _consider_recovery(run, unresolved_failed, completed)
         return
 
-    if run["status"] == "running" and _consider_help_request(run, completed):
+    if run["status"] in {"running", "recovering"} and _consider_help_request(run, completed):
         return
 
     effective_specialists = [item for item in specialists if item not in failed or int(item["id"]) in recovered_ids]
@@ -114,6 +129,9 @@ def _reconcile(swarm_id: int) -> None:
         item.get("status") == "completed" or int(item["id"]) in recovered_ids
         for item in effective_specialists
     ):
+        if run["status"] == "recovering":
+            swarm.set_status(swarm_id, "running")
+            run["status"] = "running"
         if run["status"] == "running":
             if _consider_pre_review(run, profile=swarm.get_profile(int(run["profile_id"])), completed=completed):
                 return
