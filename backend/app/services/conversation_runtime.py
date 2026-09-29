@@ -277,10 +277,14 @@ def launch(session_id, content, resume_id=None):
                 if get(run_id)['status'] == 'running':
                     state('completed')
             except Exception as exc:
-                from .ollama import AgentCancelled
+                from .ollama import AgentCancelled, BudgetExhausted
                 error = str(exc)
                 emit('error', {'message': error})
-                state('cancelled' if isinstance(exc, AgentCancelled) else 'failed')
+                state(
+                    'cancelled' if isinstance(exc, AgentCancelled)
+                    else 'budget_exhausted' if isinstance(exc, BudgetExhausted)
+                    else 'failed'
+                )
             finally:
                 if task_id:
                     final_status = get(run_id)["status"]
