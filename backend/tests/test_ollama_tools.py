@@ -150,3 +150,58 @@ def test_update_progress_rejects_invalid_step_counts(tmp_path, monkeypatch):
     assert result["recoverable"] is True
     assert "completed_steps" in result["error"]
     assert activity["tool"] == "update_progress"
+
+
+def test_swarm_reviewer_cannot_mutate_git_for_integration(tmp_path, monkeypatch):
+    project = {"id": 1, "name": "Tools", "path": str(tmp_path), "model": "test"}
+    monkeypatch.setattr(task_queue, "cancel_requested", lambda: False)
+    monkeypatch.setattr(
+        task_queue,
+        "current_task",
+        lambda: {
+            "id": 77,
+            "task_kind": "reviewer",
+            "source_kind": "swarm_reviewer",
+        },
+    )
+    monkeypatch.setattr(task_queue, "current_task_id", lambda: 77)
+    monkeypatch.setattr(task_queue, "current_worktree_path", lambda: str(tmp_path))
+    monkeypatch.setattr(ollama.runtime, "current_id", lambda: None)
+    monkeypatch.setattr(ollama.runtime, "cancelled", lambda: False)
+
+    for command in [
+        "git checkout main",
+        "git switch main",
+        "git merge olladex/task-1",
+        "git cherry-pick deadbeef",
+        "git reset --hard HEAD~1",
+        "git worktree remove /tmp/other",
+    ]:
+        result, activity = execute_tool(project, "run_command", {"command": command})
+        assert result["recoverable"] is True
+        assert "may inspect Git but may not mutate" in result["error"]
+        assert activity["tool"] == "run_command"
+
+
+def test_swarm_reviewer_can_inspect_git(tmp_path, monkeypatch):
+    project = {"id": 1, "name": "Tools", "path": str(tmp_path), "model": "test"}
+    monkeypatch.setattr(task_queue, "cancel_requested", lambda: False)
+    monkeypatch.setattr(
+        task_queue,
+        "current_task",
+        lambda: {
+            "id": 78,
+            "task_kind": "reviewer",
+            "source_kind": "swarm_reviewer",
+        },
+    )
+    monkeypatch.setattr(task_queue, "current_task_id", lambda: 78)
+    monkeypatch.setattr(task_queue, "current_worktree_path", lambda: str(tmp_path))
+    monkeypatch.setattr(ollama.runtime, "current_id", lambda: None)
+    monkeypatch.setattr(ollama.runtime, "cancelled", lambda: False)
+    monkeypatch.setattr(ollama, "run_command", lambda project, command: {"command": command, "output": "clean", "exit_code": 0})
+
+    result, _ = execute_tool(project, "run_command", {"command": "git status --short"})
+
+    assert result["exit_code"] == 0
+    assert result["output"] == "clean"
