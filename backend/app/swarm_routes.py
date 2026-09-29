@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from .database import connect, now
 from .services import orchestration as orchestration_service
 from .services import swarm as swarm_service
-from .services import task_queue, integration, worktrees, git
+from .services import task_queue, integration, swarm_finalization, worktrees, git
 from .services import github as github_service
 
 
@@ -66,6 +66,10 @@ class SwarmIntegrationChecksRequest(BaseModel):
 
 class SwarmIntegrationPushRequest(BaseModel):
     remote: str = Field(default="origin", min_length=1, max_length=120)
+
+
+class SwarmPromotionRequest(BaseModel):
+    target_branch: str = Field(default="main", min_length=1, max_length=200)
 
 
 class SwarmIntegrationPullRequestRequest(BaseModel):
@@ -441,30 +445,40 @@ def _swarm_integration_branches(swarm_id: int, task_ids: list[int]) -> tuple[dic
 
 @router.post("/swarms/{swarm_id}/integration/preflight")
 def swarm_integration_preflight(swarm_id: int, body: SwarmIntegrationSelectionRequest):
-    _, project, branches = _swarm_integration_branches(swarm_id, body.task_ids)
+    run = swarm_service.get_run(swarm_id)
+    project = _project(int(run["project_id"]))
     try:
-        return {"swarm_id": swarm_id, "task_ids": body.task_ids, **integration.preflight(project, branches, body.base)}
+        evidence = swarm_finalization.review_gate(swarm_id, project, body.base)
+        plan = integration.preflight(project, evidence["specialists"]["branches"], body.base)
+        return {"swarm_id": swarm_id, "task_ids": [item["task_id"] for item in evidence["specialists"]["tasks"]], "evidence": evidence, **plan}
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 
 
 @router.post("/swarms/{swarm_id}/integration")
 def create_swarm_integration(swarm_id: int, body: SwarmIntegrationSelectionRequest):
-    run, project, branches = _swarm_integration_branches(swarm_id, body.task_ids)
-    if run["status"] != "completed":
-        raise HTTPException(409, "Swarm final verification must complete before integration")
+    run = swarm_service.get_run(swarm_id)
+    project = _project(int(run["project_id"]))
+    if run["status"] not in {"ready_for_integration", "integrating", "checks_failed"}:
+        raise HTTPException(409, "Swarm must pass review evidence before integration can be prepared")
     try:
-        result = integration.create(project, swarm_id, branches, body.base, namespace="swarm")
+        result = swarm_finalization.prepare_integration(swarm_id, project, body.base)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
     with connect() as conn:
         conn.execute(
             "UPDATE swarm_runs SET status='integrating',integration_path=?,integration_branch=?,"
             "integration_check_command='',integration_check_status='',integration_check_output='',"
-            "integration_pushed=0,integration_pr_number=0,integration_pr_url='',integration_pr_state='' WHERE id=?",
+            "integration_pushed=0,integration_pr_number=0,integration_pr_url='',integration_pr_state='',"
+            "promotion_status='',promoted_commit='',promotion_output='' WHERE id=?",
             (result["path"], result["branch"], swarm_id),
         )
-    return {"swarm_id": swarm_id, "task_ids": body.task_ids, **result}
+    swarm_service.emit_coordinator_event(
+        swarm_id,
+        "integration_prepared",
+        {"path": result["path"], "branch": result["branch"], "head": result.get("head") or ""},
+    )
+    return {"swarm_id": swarm_id, **result}
 
 
 @router.get("/swarms/{swarm_id}/integration")
@@ -498,16 +512,41 @@ def run_swarm_integration_checks(swarm_id: int, body: SwarmIntegrationChecksRequ
     path = run.get("integration_path") or ""
     if not path:
         raise HTTPException(409, "Create a Swarm integration worktree first")
+    if run.get("status") not in {"integrating", "checks_failed", "ready_to_promote"}:
+        raise HTTPException(409, "Swarm is not in an integration state")
     try:
+        before = integration.summary(project, path)
+        if before.get("changes"):
+            raise ValueError("Integration worktree has uncommitted changes")
         result = integration.run_checks(project, path, body.command)
     except (ValueError, TimeoutError) as exc:
         raise HTTPException(409, str(exc)) from exc
+    status = "passed" if result["passed"] else "failed"
     with connect() as conn:
         conn.execute(
-            "UPDATE swarm_runs SET integration_check_command=?,integration_check_status=?,integration_check_output=? WHERE id=?",
-            (body.command, "passed" if result["passed"] else "failed", result["output"], swarm_id),
+            "UPDATE swarm_runs SET status=?,integration_check_command=?,integration_check_status=?,integration_check_output=? WHERE id=?",
+            ("integrating" if result["passed"] else "checks_failed", body.command, status, result["output"], swarm_id),
         )
-    return {"swarm_id": swarm_id, **result}
+    if not result["passed"]:
+        swarm_service.emit_coordinator_event(swarm_id, "checks_failed", {"command": body.command, "output": result["output"][-4000:]})
+        return {"swarm_id": swarm_id, **result, "status": "checks_failed"}
+    try:
+        gate = swarm_finalization.promotion_gate(swarm_id, project)
+    except ValueError as exc:
+        with connect() as conn:
+            conn.execute(
+                "UPDATE swarm_runs SET status='checks_failed',integration_check_status='failed',integration_check_output=? WHERE id=?",
+                ((result["output"] + "\n\nFinalization evidence failed: " + str(exc))[-300000:], swarm_id),
+            )
+        swarm_service.emit_coordinator_event(swarm_id, "checks_failed", {"reason": str(exc)})
+        raise HTTPException(409, str(exc)) from exc
+    swarm_service.set_status(swarm_id, "ready_to_promote")
+    swarm_service.emit_coordinator_event(
+        swarm_id,
+        "ready_to_promote",
+        {"integration_head": gate["integration"]["summary"].get("head") or "", "deliverables": gate["integration"]["deliverables"]},
+    )
+    return {"swarm_id": swarm_id, **result, "status": "ready_to_promote", "evidence": gate}
 
 
 def _pull_request_number(url: str) -> int:
@@ -522,14 +561,14 @@ def push_swarm_integration(swarm_id: int, body: SwarmIntegrationPushRequest):
     path = run.get("integration_path") or ""
     if not path:
         raise HTTPException(409, "Create a Swarm integration worktree first")
-    if run.get("integration_check_status") != "passed":
-        raise HTTPException(409, "Combined checks must pass before pushing the integration branch")
+    if run.get("status") != "ready_to_promote" or run.get("integration_check_status") != "passed":
+        raise HTTPException(409, "Integration must pass evidence-backed combined checks before push")
     try:
         result = integration.push(project, path, body.remote)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
     with connect() as conn:
-        conn.execute("UPDATE swarm_runs SET integration_pushed=1 WHERE id=?", (swarm_id,))
+        conn.execute("UPDATE swarm_runs SET integration_pushed=1,promotion_status='remote_branch_pushed' WHERE id=?", (swarm_id,))
     return {"swarm_id": swarm_id, **result}
 
 
@@ -540,8 +579,8 @@ def create_swarm_integration_pull_request(swarm_id: int, body: SwarmIntegrationP
     path = run.get("integration_path") or ""
     if not path:
         raise HTTPException(409, "Create a Swarm integration worktree first")
-    if run.get("integration_check_status") != "passed":
-        raise HTTPException(409, "Combined checks must pass before creating the integration pull request")
+    if run.get("status") != "ready_to_promote" or run.get("integration_check_status") != "passed":
+        raise HTTPException(409, "Integration must be ready to promote before creating the integration pull request")
     if not run.get("integration_pushed"):
         raise HTTPException(409, "Push the integration branch before creating the integration pull request")
     target_project = integration.integration_project(project, path)
@@ -553,10 +592,53 @@ def create_swarm_integration_pull_request(swarm_id: int, body: SwarmIntegrationP
     number = _pull_request_number(result.get("url", ""))
     with connect() as conn:
         conn.execute(
-            "UPDATE swarm_runs SET integration_pr_number=?,integration_pr_url=?,integration_pr_state='OPEN' WHERE id=?",
+            "UPDATE swarm_runs SET integration_pr_number=?,integration_pr_url=?,integration_pr_state='OPEN',promotion_status='pr_open' WHERE id=?",
             (number, result.get("url", ""), swarm_id),
         )
     return {"swarm_id": swarm_id, "pull_request_number": number, **result}
+
+
+@router.post("/swarms/{swarm_id}/integration/promote")
+def promote_swarm_integration(swarm_id: int, body: SwarmPromotionRequest):
+    run = swarm_service.get_run(swarm_id)
+    project = _project(int(run["project_id"]))
+    if run.get("status") != "ready_to_promote":
+        raise HTTPException(409, "Swarm integration is not ready to promote")
+    path = str(run.get("integration_path") or "")
+    if not path:
+        raise HTTPException(409, "Integration worktree has not been prepared")
+    try:
+        gate = swarm_finalization.promotion_gate(swarm_id, project, body.target_branch)
+        result = integration.promote_to_main(project, path, body.target_branch)
+        delivered = swarm_finalization.promoted_deliverables(swarm_id, project)
+        if not delivered["ok"]:
+            raise ValueError("Promoted main is missing expected deliverables: " + ", ".join(delivered["missing"]))
+    except ValueError as exc:
+        with connect() as conn:
+            conn.execute(
+                "UPDATE swarm_runs SET promotion_status='blocked',promotion_output=? WHERE id=?",
+                (str(exc)[:300000], swarm_id),
+            )
+        swarm_service.emit_coordinator_event(swarm_id, "promotion_blocked", {"reason": str(exc)})
+        raise HTTPException(409, str(exc)) from exc
+    with connect() as conn:
+        conn.execute(
+            "UPDATE swarm_runs SET status='completed',completed_at=?,promotion_status='promoted',"
+            "promoted_commit=?,promotion_output=? WHERE id=?",
+            (now(), result["main_commit"], result.get("output") or "", swarm_id),
+        )
+    swarm_service.emit_coordinator_event(
+        swarm_id,
+        "promoted",
+        {
+            "target_branch": body.target_branch,
+            "main_path": result["main_path"],
+            "integration_commit": result["integration_commit"],
+            "main_commit": result["main_commit"],
+            "deliverables": delivered,
+        },
+    )
+    return {"swarm_id": swarm_id, "status": "completed", "promotion": result, "evidence": gate, "deliverables": delivered}
 
 
 @router.get("/swarms/{swarm_id}/blackboard")
