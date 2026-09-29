@@ -681,7 +681,7 @@ def _resume_budget_exhausted_agent(task_id: int, run_id: int, amount: int) -> di
         raise ValueError("Agent worktree is unavailable")
     with connect() as conn:
         conn.execute(
-            "UPDATE background_tasks SET budget_extra=budget_extra+?,status='queued',error='',completed_at='',cancel_requested=0,current_activity=? WHERE id=?",
+            "UPDATE background_tasks SET budget_extra=budget_extra+?,error='',completed_at='',cancel_requested=0,current_activity=? WHERE id=?",
             (amount, f"Budget extended by {amount}; resuming from checkpoint", task_id),
         )
     resumed = conversation_runtime.launch(
