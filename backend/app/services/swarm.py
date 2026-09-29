@@ -538,13 +538,13 @@ def emit_coordinator_event(swarm_id: int, kind: str, payload: dict) -> dict:
 def consume_coordinator_budget(swarm_id: int, purpose: str) -> dict:
     with connect() as conn:
         row = conn.execute(
-            "SELECT sp.coordinator_tool_budget FROM swarm_runs sr "
+            "SELECT sp.coordinator_tool_budget,sr.coordinator_budget_extra FROM swarm_runs sr "
             "LEFT JOIN swarm_profiles sp ON sp.id=sr.profile_id WHERE sr.id=?",
             (swarm_id,),
         ).fetchone()
         if not row:
             raise ValueError("Swarm not found")
-        budget = max(1, int(row["coordinator_tool_budget"] or 1))
+        budget = max(1, int(row["coordinator_tool_budget"] or 1) + int(row["coordinator_budget_extra"] or 0))
         used = int(conn.execute(
             "SELECT COUNT(*) FROM swarm_coordinator_events WHERE swarm_id=? AND kind='model_call'",
             (swarm_id,),
@@ -578,13 +578,13 @@ def consume_coordinator_budget(swarm_id: int, purpose: str) -> dict:
 def coordinator_budget(swarm_id: int) -> dict:
     with connect() as conn:
         row = conn.execute(
-            "SELECT sp.coordinator_tool_budget FROM swarm_runs sr "
+            "SELECT sp.coordinator_tool_budget,sr.coordinator_budget_extra FROM swarm_runs sr "
             "LEFT JOIN swarm_profiles sp ON sp.id=sr.profile_id WHERE sr.id=?",
             (swarm_id,),
         ).fetchone()
         if not row:
             raise ValueError("Swarm not found")
-        budget = max(1, int(row["coordinator_tool_budget"] or 1))
+        budget = max(1, int(row["coordinator_tool_budget"] or 1) + int(row["coordinator_budget_extra"] or 0))
         used = int(conn.execute(
             "SELECT COUNT(*) FROM swarm_coordinator_events WHERE swarm_id=? AND kind='model_call'",
             (swarm_id,),
@@ -602,6 +602,150 @@ def coordinator_events(swarm_id: int, after: int = 0, limit: int = 200) -> list[
     for item in rows:
         item["payload"] = _json_object(item.get("payload"))
     return rows
+
+
+def budget_requests(swarm_id: int, *, pending_only: bool = False) -> list[dict]:
+    query = "SELECT * FROM swarm_budget_requests WHERE swarm_id=?"
+    params: list[object] = [swarm_id]
+    if pending_only:
+        query += " AND status='pending'"
+    query += " ORDER BY id DESC"
+    with connect() as conn:
+        return [dict(row) for row in conn.execute(query, params)]
+
+
+def ensure_budget_request(
+    swarm_id: int,
+    *,
+    scope: str,
+    task_id: int | None = None,
+    run_id: int | None = None,
+    requested_amount: int = 10,
+    reason: str = "",
+) -> dict:
+    scope = str(scope or "").strip().lower()
+    if scope not in {"agent", "coordinator"}:
+        raise ValueError("Budget request scope must be agent or coordinator")
+    requested_amount = max(1, min(int(requested_amount or 10), 200))
+    with connect() as conn:
+        existing = conn.execute(
+            "SELECT * FROM swarm_budget_requests WHERE swarm_id=? AND scope=? "
+            "AND COALESCE(task_id,0)=COALESCE(?,0) AND status='pending' ORDER BY id DESC LIMIT 1",
+            (swarm_id, scope, task_id),
+        ).fetchone()
+        if existing:
+            return dict(existing)
+        stamp = now()
+        cursor = conn.execute(
+            "INSERT INTO swarm_budget_requests("
+            "swarm_id,task_id,run_id,scope,status,requested_amount,granted_amount,reason,decided_by,created_at,updated_at"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (swarm_id, task_id, run_id, scope, "pending", requested_amount, 0, reason[:4000], "", stamp, stamp),
+        )
+        row = conn.execute("SELECT * FROM swarm_budget_requests WHERE id=?", (cursor.lastrowid,)).fetchone()
+    emit_coordinator_event(
+        swarm_id,
+        "budget_request",
+        {
+            "request_id": int(row["id"]),
+            "scope": scope,
+            "task_id": task_id,
+            "run_id": run_id,
+            "requested_amount": requested_amount,
+            "reason": reason[:1000],
+        },
+    )
+    return dict(row)
+
+
+def _resume_budget_exhausted_agent(task_id: int, run_id: int, amount: int) -> dict:
+    from . import conversation_runtime
+    with connect() as conn:
+        task = conn.execute(
+            "SELECT id,session_id,status,worktree_path,swarm_id FROM background_tasks WHERE id=?",
+            (task_id,),
+        ).fetchone()
+        prior = conn.execute(
+            "SELECT id,status,session_id,task_id,checkpoint FROM agent_runs WHERE id=?",
+            (run_id,),
+        ).fetchone()
+    if not task or not prior:
+        raise ValueError("Budget-exhausted agent could not be found")
+    if int(prior["task_id"] or 0) != int(task_id):
+        raise ValueError("Budget request no longer belongs to this agent")
+    if prior["status"] != "budget_exhausted":
+        raise ValueError("Only a budget-exhausted agent can be resumed")
+    if task["status"] != "budget_exhausted":
+        raise ValueError("Agent task is no longer waiting for budget")
+    if not str(task["worktree_path"] or "").strip():
+        raise ValueError("Agent worktree is unavailable")
+    with connect() as conn:
+        conn.execute(
+            "UPDATE background_tasks SET budget_extra=budget_extra+?,status='queued',error='',completed_at='',cancel_requested=0,current_activity=? WHERE id=?",
+            (amount, f"Budget extended by {amount}; resuming from checkpoint", task_id),
+        )
+    resumed = conversation_runtime.launch(
+        int(task["session_id"]),
+        f"Budget extended by {amount}. Continue the same task from the saved checkpoint and existing worktree.",
+        resume_id=run_id,
+    )
+    emit_coordinator_event(
+        int(task["swarm_id"]),
+        "budget_granted",
+        {"scope": "agent", "task_id": task_id, "prior_run_id": run_id, "new_run_id": resumed["id"], "amount": amount},
+    )
+    return {"task_id": task_id, "prior_run_id": run_id, "run_id": resumed["id"], "amount": amount}
+
+
+def decide_budget_request(request_id: int, *, accepted: bool, amount: int | None = None, decided_by: str = "user") -> dict:
+    with connect() as conn:
+        request = conn.execute("SELECT * FROM swarm_budget_requests WHERE id=?", (request_id,)).fetchone()
+    if not request:
+        raise ValueError("Budget request not found")
+    request = dict(request)
+    if request["status"] != "pending":
+        raise ValueError("Budget request has already been decided")
+    grant = max(1, min(int(amount or request["requested_amount"] or 10), 200))
+    stamp = now()
+    if not accepted:
+        with connect() as conn:
+            conn.execute(
+                "UPDATE swarm_budget_requests SET status='declined',granted_amount=0,decided_by=?,updated_at=? WHERE id=? AND status='pending'",
+                (decided_by, stamp, request_id),
+            )
+        emit_coordinator_event(
+            int(request["swarm_id"]),
+            "budget_declined",
+            {"request_id": request_id, "scope": request["scope"], "task_id": request.get("task_id"), "decided_by": decided_by},
+        )
+        return {**request, "status": "declined", "granted_amount": 0, "decided_by": decided_by}
+
+    if request["scope"] == "coordinator":
+        with connect() as conn:
+            conn.execute(
+                "UPDATE swarm_runs SET coordinator_budget_extra=coordinator_budget_extra+? WHERE id=?",
+                (grant, request["swarm_id"]),
+            )
+            conn.execute(
+                "UPDATE swarm_budget_requests SET status='granted',granted_amount=?,decided_by=?,updated_at=? WHERE id=? AND status='pending'",
+                (grant, decided_by, stamp, request_id),
+            )
+        emit_coordinator_event(
+            int(request["swarm_id"]),
+            "budget_granted",
+            {"request_id": request_id, "scope": "coordinator", "amount": grant, "decided_by": decided_by},
+        )
+        return {**request, "status": "granted", "granted_amount": grant, "decided_by": decided_by}
+
+    task_id = int(request.get("task_id") or 0)
+    run_id = int(request.get("run_id") or 0)
+    resumed = _resume_budget_exhausted_agent(task_id, run_id, grant)
+    with connect() as conn:
+        conn.execute(
+            "UPDATE swarm_budget_requests SET status='granted',granted_amount=?,decided_by=?,updated_at=? WHERE id=? AND status='pending'",
+            (grant, decided_by, stamp, request_id),
+        )
+    return {**request, "status": "granted", "granted_amount": grant, "decided_by": decided_by, "resume": resumed}
 
 
 def steer_coordinator(swarm_id: int, content: str) -> dict:
@@ -738,6 +882,7 @@ def board_snapshot(
 
     return {
         "swarm": run,
+        "budget_requests": budget_requests(swarm_id, pending_only=True),
         "summary": {
             "total_agents": len(agent_items),
             "max_agents": int(run.get("max_agents") or 0),
