@@ -200,6 +200,7 @@ def test_swarm_reviewer_can_inspect_git(tmp_path, monkeypatch):
     monkeypatch.setattr(ollama.runtime, "current_id", lambda: None)
     monkeypatch.setattr(ollama.runtime, "cancelled", lambda: False)
     monkeypatch.setattr(ollama, "run_command", lambda project, command: {"command": command, "output": "clean", "exit_code": 0})
+    monkeypatch.setattr(ollama, "requires_approval", lambda project, command: False)
 
     result, _ = execute_tool(project, "run_command", {"command": "git status --short"})
 
