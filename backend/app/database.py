@@ -324,6 +324,16 @@ def init_db() -> None:
             for name, definition in columns.items():
                 if name not in existing:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+        # Repair legacy Swarm runs that were marked completed when reviewer tasks ended
+        # before deterministic integration/promotion existed. Preserve every worktree/branch.
+        conn.execute(
+            "UPDATE swarm_runs SET status=CASE "
+            "WHEN integration_path='' THEN 'ready_for_integration' "
+            "WHEN integration_check_status='passed' THEN 'ready_to_promote' "
+            "WHEN integration_check_status='failed' THEN 'checks_failed' "
+            "ELSE 'integrating' END, completed_at='' "
+            "WHERE status='completed' AND COALESCE(promoted_commit,'')=''"
+        )
         stamp = now()
         defaults = [
             ("Balanced local", settings.ollama_model, settings.ollama_embedding_model, 0.2, 8, 8, 32000, 1),
