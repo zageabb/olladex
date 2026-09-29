@@ -167,7 +167,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
     try{
       if(kind==="stop") await request(`/swarms/${swarmBoard.swarm.id}`,{method:"DELETE"});
       else await request(`/swarms/${swarmBoard.swarm.id}/${kind}`,{method:"POST"});
-      setNotice(kind==="stop"?"Swarm stopped":`Swarm ${kind}d`);
+      setNotice(kind==="stop"?"Advanced orchestration stopped":`Advanced orchestration ${kind}d`);
       await load();
     }catch(error){setNotice(error instanceof Error?error.message:String(error));}
     finally{setBusy(false);}
@@ -181,7 +181,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
         ? `/swarms/${swarmBoard.swarm.id}/broadcast`
         : `/swarms/${swarmBoard.swarm.id}/coordinator/input`;
       await request(endpoint,{method:"POST",body:JSON.stringify({content:swarmGuidance.trim()})});
-      setNotice(all?"Guidance applied across the Swarm":"Guidance sent to Coordinator");
+      setNotice(all?"Guidance applied across Advanced orchestration":"Guidance sent to Coordinator");
       setSwarmGuidance("");
       await load();
     }catch(error){setNotice(error instanceof Error?error.message:String(error));}
@@ -225,7 +225,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
       });
       const readiness=await request<SwarmPreflight>(`/projects/${projectId}/swarms/preflight?${query.toString()}`);
       setSwarmPreflight(readiness);
-      setNotice(readiness.ready?"Local Git baseline created; Swarm is ready":"Local Git baseline created; review the remaining preflight checks");
+      setNotice(readiness.ready?"Local Git baseline created; Advanced orchestration is ready":"Local Git baseline created; review the remaining preflight checks");
     }catch(error){setNotice(error instanceof Error?error.message:String(error));}
     finally{setBusy(false);}
   }
@@ -324,7 +324,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
         method:"POST",body:JSON.stringify({command:swarmCheckCommand.trim()})
       });
       setSwarmIntegration(current=>current?{...current,check_status:result.passed?"passed":"failed",check_output:result.output}:current);
-      setNotice(result.passed?"Combined Swarm checks passed":"Combined Swarm checks failed");
+      setNotice(result.passed?"Combined Advanced orchestration checks passed":"Combined Advanced orchestration checks failed");
       await load();
     }catch(error){setNotice(error instanceof Error?error.message:String(error));}
     finally{setBusy(false);}
@@ -370,7 +370,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
           base:"main"
         })
       });
-      setNotice(`Final Swarm PR #${result.pull_request_number} created`);
+      setNotice(`Final Advanced orchestration PR #${result.pull_request_number} created`);
       await load();
     }catch(error){setNotice(error instanceof Error?error.message:String(error));}
     finally{setBusy(false);}
@@ -480,7 +480,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
         <article className="agent-board-coordinator"><span className={`agent-dot ${swarmBoard.swarm.status}`}>●</span><div><strong>Coordinator</strong><small>budget {swarmBoard.swarm.coordinator_budget?.used||0}/{swarmBoard.swarm.coordinator_budget?.budget||0} · {swarmBoard.swarm.coordinator_activity?.content||"Monitoring specialist progress and dependencies"}</small></div><div className="agent-board-control-actions">{swarmBoard.swarm.status==="paused"?<button type="button" onClick={()=>swarmAction("resume")} disabled={busy}>Resume</button>:["running","reviewing","waiting"].includes(swarmBoard.swarm.status)&&<button type="button" onClick={()=>swarmAction("pause")} disabled={busy}>Pause</button>}{!["completed","failed","cancelled"].includes(swarmBoard.swarm.status)&&<button type="button" onClick={()=>swarmAction("stop")} disabled={busy}>Stop</button>}</div></article>
         {!["completed","failed","cancelled"].includes(swarmBoard.swarm.status)&&<form className="agent-board-guidance" onSubmit={event=>{event.preventDefault();sendSwarmGuidance(false);}}><input value={swarmGuidance} onChange={event=>setSwarmGuidance(event.target.value)} placeholder="Guide Advanced orchestration…"/><button disabled={busy||!swarmGuidance.trim()}>Coordinator</button><button type="button" onClick={()=>sendSwarmGuidance(true)} disabled={busy||!swarmGuidance.trim()}>Apply to all</button></form>}
       </>}
-      <div className="agent-board-preview">{swarmBoard&&boardAgents.length?boardAgents.slice(0,8).map(agent=><article key={agent.id} role="button" tabIndex={0} onClick={()=>setSelectedSwarmAgentId(agent.id)} onKeyDown={event=>{if(event.key==="Enter")setSelectedSwarmAgentId(agent.id);}}><span className={`agent-dot ${agent.status}`}>●</span><div><strong>{agent.title}</strong><small>{agent.agent_role} · {agent.status.replaceAll("_"," ")}{typeof agent.progress==="number"?` · ${agent.progress}%`:""}{agent.tool_budget?` · tools ${agent.tool_usage||0}/${agent.tool_budget}`:""}</small>{agent.pending_approval&&<button type="button" className="agent-approval-link" onClick={event=>{event.stopPropagation();setSelectedSwarmAgentId(agent.id);}}>Agent #{agent.id} needs command approval</button>}{agent.current_activity&&<small>{agent.current_activity}</small>}{agent.latest_insight&&<div className="agent-card-markdown"><b>{agent.latest_insight.category}</b><MarkdownBody value={agent.latest_insight.content} compact /></div>}</div></article>):graph.nodes.length?graph.nodes.slice(0,8).map(node=><article key={node.id}><span className={`agent-dot ${node.status}`}>●</span><div><strong>{node.title}</strong><small>{node.agent_role} · {node.status.replaceAll("_"," ")}</small></div></article>):<p>No specialist agents yet. Swarm-backed tasks will appear here through the same board.</p>}</div>
+      <div className="agent-board-preview">{swarmBoard&&boardAgents.length?boardAgents.slice(0,8).map(agent=><article key={agent.id} role="button" tabIndex={0} onClick={()=>setSelectedSwarmAgentId(agent.id)} onKeyDown={event=>{if(event.key==="Enter")setSelectedSwarmAgentId(agent.id);}}><span className={`agent-dot ${agent.status}`}>●</span><div><strong>{agent.title}</strong><small>{agent.agent_role} · {agent.status.replaceAll("_"," ")}{typeof agent.progress==="number"?` · ${agent.progress}%`:""}{agent.tool_budget?` · tools ${agent.tool_usage||0}/${agent.tool_budget}`:""}</small>{agent.pending_approval&&<button type="button" className="agent-approval-link" onClick={event=>{event.stopPropagation();setSelectedSwarmAgentId(agent.id);}}>Agent #{agent.id} needs command approval</button>}{agent.current_activity&&<small>{agent.current_activity}</small>}{agent.latest_insight&&<div className="agent-card-markdown"><b>{agent.latest_insight.category}</b><MarkdownBody value={agent.latest_insight.content} compact /></div>}</div></article>):graph.nodes.length?graph.nodes.slice(0,8).map(node=><article key={node.id}><span className={`agent-dot ${node.status}`}>●</span><div><strong>{node.title}</strong><small>{node.agent_role} · {node.status.replaceAll("_"," ")}</small></div></article>):<p>No specialist agents yet. Advanced orchestration tasks will appear here through the same board.</p>}</div>
       {selectedSwarmAgent&&<section className="agent-board-detail">
         <header><div><p className="eyebrow">Advanced orchestration agent #{selectedSwarmAgent.task.id}</p><h4>{selectedSwarmAgent.task.title}</h4><small>{selectedSwarmAgent.task.agent_role} · {(selectedSwarmAgent.run?.status||selectedSwarmAgent.task.status).replaceAll("_"," ")}</small></div><div className="agent-board-control-actions">{selectedSwarmAgent.run?.session_id&&onOpenConversation&&<button type="button" onClick={()=>onOpenConversation(selectedSwarmAgent.run!.session_id)}>Open conversation</button>}{["queued","running","waiting_for_input","waiting_for_approval"].includes(selectedSwarmAgent.task.status)&&<button type="button" onClick={stopSwarmAgent} disabled={busy}>Stop agent</button>}<button type="button" onClick={()=>setSelectedSwarmAgentId(null)}>Close</button></div></header>
         {selectedSwarmAgent.active_pending_commands.length>0&&selectedSwarmAgent.run?.status==="waiting_for_approval"&&<section className="agent-pending-approvals"><strong>Command approval required</strong>{selectedSwarmAgent.active_pending_commands.map(command=><article key={command.id}><code>{command.command}</code><small>Working directory: {command.cwd}</small><div><button type="button" className="primary" onClick={()=>decideAgentCommand(command.id,true)} disabled={busy}>Approve once</button><button type="button" onClick={()=>decideAgentCommand(command.id,false)} disabled={busy}>Decline</button></div></article>)}</section>}
@@ -518,21 +518,21 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
       </section>}
     </section>
     <details className={styles.advanced}>
-      <summary>Swarm controls · {swarmSkill?.enabled?"enabled":"disabled"}</summary>
+      <summary>Advanced orchestration controls · {swarmSkill?.enabled?"enabled":"disabled"}</summary>
       <div className={styles.advancedForm}>
-        <div className={styles.actions}><button type="button" onClick={toggleSwarmSkill} disabled={busy||!swarmSkill}>{swarmSkill?.enabled?"Disable Swarm":"Enable Swarm"}</button></div>
+        <div className={styles.actions}><button type="button" onClick={toggleSwarmSkill} disabled={busy||!swarmSkill}>{swarmSkill?.enabled?"Disable Advanced orchestration":"Enable Advanced orchestration"}</button></div>
         {swarmSkill?.enabled&&<>
           <form onSubmit={startSwarm} className={styles.advancedForm}>
             <label>Preset<select value={swarmProfileId} onChange={event=>{const id=event.target.value;setSwarmProfileId(id);const profile=swarmProfiles.find(item=>String(item.id)===id);if(profile){setSwarmMaxAgents(profile.max_agents);setSwarmConcurrency(profile.max_concurrency);}}}>{swarmProfiles.map(profile=><option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>
             <label>Maximum agents<input type="number" min="2" max="20" value={swarmMaxAgents} onChange={event=>setSwarmMaxAgents(Number(event.target.value))}/></label>
             <label>Concurrency<input type="number" min="1" max="8" value={swarmConcurrency} onChange={event=>setSwarmConcurrency(Number(event.target.value))}/></label>
-            <label>Title<input value={swarmTitle} onChange={event=>setSwarmTitle(event.target.value)} placeholder="Optional swarm title"/></label>
-            <label className={styles.advancedPrompt}>Objective<textarea value={swarmObjective} onChange={event=>setSwarmObjective(event.target.value)} placeholder="Describe the larger outcome for the Swarm…"/></label>
-            <button className="primary" disabled={busy||!swarmProfileId||!swarmObjective.trim()}>{busy?"Checking…":"Preflight & start Swarm"}</button>
+            <label>Title<input value={swarmTitle} onChange={event=>setSwarmTitle(event.target.value)} placeholder="Optional orchestration title"/></label>
+            <label className={styles.advancedPrompt}>Objective<textarea value={swarmObjective} onChange={event=>setSwarmObjective(event.target.value)} placeholder="Describe the larger outcome for Advanced orchestration…"/></label>
+            <button className="primary" disabled={busy||!swarmProfileId||!swarmObjective.trim()}>{busy?"Checking…":"Preflight & start Advanced orchestration"}</button>
             {swarmPreflight&&<>
               <small>{swarmPreflight.ready?"Readiness checks passed":swarmPreflight.checks.filter(item=>!item.ok).map(item=>item.detail).join(" · ")}</small>
-              {(!swarmPreflight.git.repository||!swarmPreflight.git.has_head)&&<div className="swarm-local-git"><strong>Local Git required for Swarm worktrees</strong><span>Olladex can initialise Git locally and create a baseline commit of non-ignored files. No GitHub account or remote is required.</span><button type="button" onClick={initializeSwarmGit} disabled={busy}>Initialize local Git</button></div>}
-              {swarmPreflight.git.repository&&swarmPreflight.git.has_head&&!swarmPreflight.git.has_remote&&<small>Local-only Git repository · Swarm can run normally; final results will remain on a verified local integration branch.</small>}
+              {(!swarmPreflight.git.repository||!swarmPreflight.git.has_head)&&<div className="swarm-local-git"><strong>Local Git required for Advanced orchestration worktrees</strong><span>Olladex can initialise Git locally and create a baseline commit of non-ignored files. No GitHub account or remote is required.</span><button type="button" onClick={initializeSwarmGit} disabled={busy}>Initialize local Git</button></div>}
+              {swarmPreflight.git.repository&&swarmPreflight.git.has_head&&!swarmPreflight.git.has_remote&&<small>Local-only Git repository · Advanced orchestration can run normally; final results will remain on a verified local integration branch.</small>}
             </>}
           </form>
           {swarmProfiles.find(item=>String(item.id)===swarmProfileId)&&(()=>{const profile=swarmProfiles.find(item=>String(item.id)===swarmProfileId)!;const roles=["backend","frontend","coder","tester","researcher","reviewer","challenger"];return <details className="swarm-profile-settings"><summary>Model & policy settings</summary><div className="swarm-profile-grid">
