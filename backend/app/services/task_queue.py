@@ -306,7 +306,7 @@ def _claim_next() -> dict | None:
                         ("Swarm already finished", now(), task["id"]),
                     )
                     continue
-                if swarm["status"] in {"paused", "planning"}:
+                if swarm["status"] in {"paused", "planning", "ready_for_integration", "integrating", "checks_failed", "ready_to_promote"}:
                     continue
                 if task.get("task_kind") in {"reviewer", "challenger"} and swarm["status"] != "reviewing":
                     continue
