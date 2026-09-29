@@ -19,6 +19,13 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS agent_runs (
  id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL REFERENCES sessions(id), task_id INTEGER,
  status TEXT NOT NULL, checkpoint TEXT NOT NULL DEFAULT '[]', cancel_requested INTEGER NOT NULL DEFAULT 0,
+ resumed_from_run_id INTEGER REFERENCES agent_runs(id) ON DELETE SET NULL,
+ recovery_attempt INTEGER NOT NULL DEFAULT 0,
+ checkpoint_restored INTEGER NOT NULL DEFAULT 0,
+ starting_head TEXT NOT NULL DEFAULT '',
+ starting_diff TEXT NOT NULL DEFAULT '',
+ completion_evidence TEXT NOT NULL DEFAULT '{}',
+ no_progress_reason TEXT NOT NULL DEFAULT '',
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_session ON agent_runs(session_id)
@@ -39,6 +46,18 @@ def init():
     _stopping.clear()
     with connect() as conn:
         conn.executescript(SCHEMA)
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(agent_runs)")}
+        for name, definition in {
+            "resumed_from_run_id": "INTEGER REFERENCES agent_runs(id) ON DELETE SET NULL",
+            "recovery_attempt": "INTEGER NOT NULL DEFAULT 0",
+            "checkpoint_restored": "INTEGER NOT NULL DEFAULT 0",
+            "starting_head": "TEXT NOT NULL DEFAULT ''",
+            "starting_diff": "TEXT NOT NULL DEFAULT ''",
+            "completion_evidence": "TEXT NOT NULL DEFAULT '{}'",
+            "no_progress_reason": "TEXT NOT NULL DEFAULT ''",
+        }.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE agent_runs ADD COLUMN {name} {definition}")
         conn.execute("UPDATE agent_runs SET status='interrupted' WHERE status IN ('running','waiting_for_approval','waiting_for_input')")
         conn.execute("UPDATE command_runs SET status='interrupted' WHERE status='running'")
 
@@ -65,14 +84,16 @@ def get(run_id):
     return dict(row)
 
 
-def create(session_id, task_id=None):
+def create(session_id, task_id=None, *, resumed_from_run_id=None, recovery_attempt=0, checkpoint_restored=False, starting_head="", starting_diff=""):
     import sqlite3
     with connect() as conn:
         if not conn.execute('SELECT id FROM sessions WHERE id=?', (session_id,)).fetchone():
             raise HTTPException(404, 'Session not found')
         try:
-            cursor = conn.execute('INSERT INTO agent_runs(session_id,task_id,status,created_at,updated_at) VALUES(?,?,?,?,?)',
-                                  (session_id, task_id, 'running', now(), now()))
+            cursor = conn.execute(
+                'INSERT INTO agent_runs(session_id,task_id,status,resumed_from_run_id,recovery_attempt,checkpoint_restored,starting_head,starting_diff,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                (session_id, task_id, 'running', resumed_from_run_id, int(recovery_attempt or 0), 1 if checkpoint_restored else 0, starting_head, starting_diff, now(), now())
+            )
         except sqlite3.IntegrityError:
             raise HTTPException(409, 'This conversation already has an active turn')
     return cursor.lastrowid
