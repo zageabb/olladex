@@ -1,0 +1,271 @@
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from backend.app import swarm_routes
+from backend.app.config import settings
+from backend.app.database import connect, init_db, now
+from backend.app.services import conversation_runtime, git, swarm, task_queue, worktrees
+
+
+def _git(root: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", *args],
+        cwd=root,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
+def _seed_repo(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "data_root", tmp_path / "data")
+    init_db()
+    conversation_runtime.init()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    stamp = now()
+    with connect() as conn:
+        project_id = int(conn.execute(
+            "INSERT INTO projects(name,path,model,git_author_name,git_author_email,created_at,last_opened_at) VALUES(?,?,?,?,?,?,?)",
+            ("Recovery Test", str(repo), "qwen3:14b", "Olladex Test", "olladex-test@example.invalid", stamp, stamp),
+        ).lastrowid)
+        session_id = int(conn.execute(
+            "INSERT INTO sessions(project_id,title,created_at,updated_at) VALUES(?,?,?,?)",
+            (project_id, "Recovery", stamp, stamp),
+        ).lastrowid)
+        profile_id = int(conn.execute("SELECT id FROM swarm_profiles WHERE name='Development'").fetchone()["id"])
+        swarm_id = int(conn.execute(
+            "INSERT INTO swarm_runs(project_id,session_id,title,objective,status,profile_id,max_agents,max_concurrency,created_at,started_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (project_id, session_id, "Recovery", "Recover safely", "running", profile_id, 8, 3, stamp, stamp),
+        ).lastrowid)
+    project = swarm_routes._project(project_id)
+    git.initialize_local_repository(project)
+    return project, session_id, swarm_id, repo
+
+
+def _exhausted_task(project, session_id, swarm_id):
+    task = task_queue.enqueue(
+        int(project["id"]),
+        session_id,
+        "Recover me",
+        "Implement recovery.py and validate it.",
+        swarm_id=swarm_id,
+        source_kind="swarm_specialist",
+        agent_role="backend",
+        task_kind="backend",
+    )
+    isolated = worktrees.create_for_task(project, task["id"])
+    task_queue.set_worktree(task["id"], isolated["path"], isolated["branch"])
+    stamp = now()
+    with connect() as conn:
+        conn.execute(
+            "UPDATE background_tasks SET status='budget_exhausted',error='tool budget exhausted',completed_at=? WHERE id=?",
+            (stamp, task["id"]),
+        )
+        run_id = int(conn.execute(
+            "INSERT INTO agent_runs(session_id,task_id,status,checkpoint,cancel_requested,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+            (
+                session_id,
+                task["id"],
+                "budget_exhausted",
+                '[{"role":"user","content":"Implement recovery.py"},{"role":"assistant","content":"Working"}]',
+                0,
+                stamp,
+                stamp,
+            ),
+        ).lastrowid)
+    return task_queue.get(task["id"]), run_id
+
+
+def test_resume_budget_exhausted_task_reuses_identity_checkpoint_worktree_and_branch(tmp_path, monkeypatch):
+    project, session_id, swarm_id, _ = _seed_repo(tmp_path, monkeypatch)
+    task, prior_run_id = _exhausted_task(project, session_id, swarm_id)
+    worktree = Path(task["worktree_path"])
+    dirty = worktree / "recovery.py"
+    dirty.write_text("value = 1\n", encoding="utf-8")
+
+    launched = {}
+    monkeypatch.setattr(
+        conversation_runtime,
+        "launch",
+        lambda session_id, content, resume_id=None, recovery_metadata=None: launched.update(
+            {
+                "session_id": session_id,
+                "content": content,
+                "resume_id": resume_id,
+                "metadata": recovery_metadata,
+            }
+        ) or {"id": 8001, "session_id": session_id, "task_id": task["id"], "status": "running"},
+    )
+
+    result = task_queue.resume_task(task["id"], fresh_budget=37)
+
+    assert result["task_id"] == task["id"]
+    assert result["session_id"] == session_id
+    assert result["prior_run_id"] == prior_run_id
+    assert result["run_id"] == 8001
+    assert result["checkpoint_restored"] is True
+    assert result["fresh_budget"] == 37
+    assert result["worktree_path"] == task["worktree_path"]
+    assert result["worktree_branch"] == task["worktree_branch"]
+    assert result["dirty_work_preserved"] is True
+    assert dirty.read_text(encoding="utf-8") == "value = 1\n"
+    assert launched["resume_id"] == prior_run_id
+    assert launched["session_id"] == session_id
+    assert launched["metadata"]["starting_head"] == _git(worktree, "rev-parse", "HEAD")
+    assert "Continue the existing task from its saved checkpoint and worktree" in launched["content"]
+    assert "Implement recovery.py and validate it." in launched["content"]
+
+    resumed_task = task_queue.get(task["id"])
+    assert resumed_task["budget_override"] == 37
+    assert resumed_task["recovery_attempt"] == 1
+    assert resumed_task["worktree_path"] == task["worktree_path"]
+    assert resumed_task["worktree_branch"] == task["worktree_branch"]
+    assert swarm.get_run(swarm_id)["status"] == "recovering"
+
+
+def test_resume_rejects_duplicate_when_task_has_active_run(tmp_path, monkeypatch):
+    project, session_id, swarm_id, _ = _seed_repo(tmp_path, monkeypatch)
+    task, _ = _exhausted_task(project, session_id, swarm_id)
+    stamp = now()
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO agent_runs(session_id,task_id,status,checkpoint,cancel_requested,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+            (session_id, task["id"], "running", "[]", 0, stamp, stamp),
+        )
+
+    with pytest.raises(ValueError, match="active run"):
+        task_queue.resume_task(task["id"], fresh_budget=20)
+
+
+def test_missing_worktree_existing_branch_requires_explicit_recreation(tmp_path, monkeypatch):
+    project, session_id, swarm_id, _ = _seed_repo(tmp_path, monkeypatch)
+    task, prior_run_id = _exhausted_task(project, session_id, swarm_id)
+    original_path = Path(task["worktree_path"])
+    original_branch = task["worktree_branch"]
+    root = Path(project["path"])
+    _git(root, "worktree", "remove", str(original_path))
+    assert not original_path.exists()
+    assert _git(root, "show-ref", "--verify", f"refs/heads/{original_branch}")
+
+    with pytest.raises(ValueError, match="branch still exists"):
+        task_queue.resume_task(task["id"], fresh_budget=20)
+
+    monkeypatch.setattr(
+        conversation_runtime,
+        "launch",
+        lambda session_id, content, resume_id=None, recovery_metadata=None: {
+            "id": 8100,
+            "session_id": session_id,
+            "task_id": task["id"],
+            "status": "running",
+        },
+    )
+    result = task_queue.resume_task(
+        task["id"],
+        fresh_budget=20,
+        recreate_missing_worktree=True,
+    )
+
+    assert result["prior_run_id"] == prior_run_id
+    assert result["worktree_branch"] == original_branch
+    assert Path(result["worktree_path"]).is_dir()
+    assert _git(Path(result["worktree_path"]), "branch", "--show-current") == original_branch
+
+
+def test_dependency_failure_is_structured_and_chain_can_be_retried_topologically(tmp_path, monkeypatch):
+    project, session_id, swarm_id, _ = _seed_repo(tmp_path, monkeypatch)
+    root, _ = _exhausted_task(project, session_id, swarm_id)
+    child = task_queue.enqueue(
+        int(project["id"]),
+        session_id,
+        "Reviewer",
+        "Review root",
+        swarm_id=swarm_id,
+        source_kind="swarm_specialist",
+        agent_role="tester",
+        task_kind="tester",
+        depends_on=[root["id"]],
+        priority=120,
+    )
+    grandchild = task_queue.enqueue(
+        int(project["id"]),
+        session_id,
+        "Consolidate",
+        "Consolidate after review",
+        swarm_id=swarm_id,
+        source_kind="swarm_specialist",
+        agent_role="documentation",
+        task_kind="documentation",
+        depends_on=[child["id"]],
+        priority=140,
+    )
+
+    # Claiming scans queued tasks and converts blocked descendants into structured dependency failures.
+    assert task_queue._claim_next() is None
+    child_state = task_queue.get(child["id"])
+    grandchild_state = task_queue.get(grandchild["id"])
+    assert child_state["status"] == "dependency_failed"
+    assert child_state["blocking_dependency_ids"] == [root["id"]]
+    assert grandchild_state["status"] == "dependency_failed"
+    assert grandchild_state["blocking_dependency_ids"] == [child["id"]]
+
+    with connect() as conn:
+        conn.execute(
+            "UPDATE background_tasks SET status='completed',result='Recovered with evidence',error='',completed_at=? WHERE id=?",
+            (now(), root["id"]),
+        )
+
+    retry = task_queue.retry_blocked_dependants(root["id"], full_chain=True)
+
+    assert retry["retried_task_ids"] == [child["id"], grandchild["id"]]
+    assert task_queue.get(child["id"])["status"] == "queued"
+    assert task_queue.get(grandchild["id"])["status"] == "queued"
+
+    # Topology is preserved: child can claim first, grandchild remains queued.
+    claimed = task_queue._claim_next()
+    assert claimed["id"] == child["id"]
+    assert task_queue.get(grandchild["id"])["status"] == "queued"
+
+
+def test_board_blocks_integration_while_recovery_is_unresolved(tmp_path, monkeypatch):
+    project, session_id, swarm_id, _ = _seed_repo(tmp_path, monkeypatch)
+    task, _ = _exhausted_task(project, session_id, swarm_id)
+
+    board = swarm.board_snapshot(swarm_id)
+
+    assert board["summary"]["recovery_available"] is True
+    assert board["summary"]["integration_ready"] is False
+    blocker = next(item for item in board["summary"]["recovery_blockers"] if item["task_id"] == task["id"])
+    assert blocker["status"] == "budget_exhausted"
+    assert "needs recovery" in " ".join(board["summary"]["integration_blockers"])
+
+
+def test_recovery_info_reports_fresh_budget_and_checkpoint(tmp_path, monkeypatch):
+    project, session_id, swarm_id, _ = _seed_repo(tmp_path, monkeypatch)
+    task, prior_run_id = _exhausted_task(project, session_id, swarm_id)
+    with connect() as conn:
+        profile_id = conn.execute("SELECT profile_id FROM swarm_runs WHERE id=?", (swarm_id,)).fetchone()["profile_id"]
+        conn.execute(
+            "UPDATE swarm_profiles SET agent_tool_budget=30,resumed_task_tool_budget=44,max_recovery_attempts=3 WHERE id=?",
+            (profile_id,),
+        )
+
+    info = task_queue.recovery_info(task["id"])
+
+    assert info["prior_run_id"] == prior_run_id
+    assert info["checkpoint_available"] is True
+    assert info["checkpoint_bytes"] > 0
+    assert info["worktree_available"] is True
+    assert info["branch_available"] is True
+    assert info["previous_budget"] == 30
+    assert info["resumed_budget"] == 44
+    assert info["max_recovery_attempts"] == 3
+    assert info["can_resume"] is True
