@@ -244,7 +244,7 @@ export default function Home() {
           {tab === "terminal" && <TerminalPanel projectId={project.id} />}
           {tab === "diagrams" && <DiagramStudio initialSource={diagramSource} initialEngine={diagramEngine} />}
           {tab === "office" && <OfficePanel projectId={project.id} selectedPath={selected?.path} onCreated={refreshTree} />}
-          {tab === "tasks" && <div className="tasks-workspace">{session ? <ConversationTaskSummary sessionId={session.id} title={session.title} onOpenConversation={() => setTab("files")} /> : null}<TaskOrchestrationPanel projectId={project.id} onCreated={() => setNotice("Orchestrated task queued")} /><BackgroundTasksPanel projectId={project.id} onOpenSession={openTaskSession} /></div>}
+          {tab === "tasks" && <div className="tasks-workspace">{session ? <ConversationTaskSummary sessionId={session.id} title={session.title} onOpenConversation={() => setTab("files")} /> : null}<TaskOrchestrationPanel projectId={project.id} onCreated={() => setNotice("Orchestrated task queued")} onOpenConversation={openTaskSession} /><BackgroundTasksPanel projectId={project.id} onOpenSession={openTaskSession} /></div>}
           {tab === "memory" && <MemoryPanel projectId={project.id} projectName={project.name} sessionId={session?.id} />}
           {tab === "workspace" && <WorkspacePanel projectId={project.id} projectName={project.name} projects={projects} />}
           {tab === "project" && <ProjectPanel project={project} onUpdated={(updated) => { setProject(updated); setProjects((items) => items.map((item) => item.id === updated.id ? updated : item)); }} />}
