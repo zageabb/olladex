@@ -212,7 +212,7 @@ def recovery_info(task_id: int) -> dict:
         "worktree_branch": worktree_branch,
         "worktree_available": worktree_available,
         "branch_available": branch_available,
-        "previous_budget": int(profile["agent_tool_budget"] or 0) if profile else 0,
+        "previous_budget": int(task.get("budget_override") or 0) or (int(profile["agent_tool_budget"] or 0) if profile else 0),
         "resumed_budget": int(profile["resumed_task_tool_budget"] or 20) if profile else 20,
         "max_recovery_attempts": int(profile["max_recovery_attempts"] or 2) if profile else 2,
         "recovery_attempt": int(task.get("recovery_attempt") or 0),
@@ -346,16 +346,6 @@ def resume_task(
             "UPDATE background_tasks SET budget_override=?,recovery_attempt=?,retry_lineage=?,no_progress_reason='',error='',completed_at='',current_activity=? WHERE id=?",
             (budget, attempt, json.dumps(lineage), f"Recovery attempt {attempt}: restoring checkpoint from run #{prior['id']}", task_id),
         )
-        if task.get("parent_task_id"):
-            conn.execute(
-                "UPDATE background_tasks SET status='recovering',error='' WHERE id=? AND status IN ('coordinating','recovery_available','failed')",
-                (task["parent_task_id"],),
-            )
-        if task.get("swarm_id"):
-            conn.execute(
-                "UPDATE swarm_runs SET status='recovering',completed_at='' WHERE id=? AND status NOT IN ('completed','cancelled')",
-                (task["swarm_id"],),
-            )
 
     content = _recovery_context(get(task_id), prior, summary, budget)
     try:
@@ -377,6 +367,18 @@ def resume_task(
                 (previous["budget_override"], previous["recovery_attempt"], previous["retry_lineage"], task_id),
             )
         raise
+
+    with connect() as conn:
+        if task.get("parent_task_id"):
+            conn.execute(
+                "UPDATE background_tasks SET status='recovering',error='' WHERE id=? AND status IN ('coordinating','recovery_available','failed')",
+                (task["parent_task_id"],),
+            )
+        if task.get("swarm_id"):
+            conn.execute(
+                "UPDATE swarm_runs SET status='recovering',completed_at='' WHERE id=? AND status NOT IN ('completed','cancelled')",
+                (task["swarm_id"],),
+            )
 
     if task.get("swarm_id"):
         try:
