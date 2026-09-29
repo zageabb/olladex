@@ -127,6 +127,9 @@ def embed_texts(texts: list[str], model: str | None = None) -> list[list[float]]
 
 def _execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
     _check_cancelled()
+    task = task_queue.current_task()
+    if task and task.get("task_kind") in {"reviewer", "challenger"} and str(task.get("source_kind") or "").startswith("swarm_") and name in {"write_file", "apply_patch"}:
+        raise ValueError("Reviewer/challenger tasks are inspection-only and may not edit files; Coordinator finalization owns integration.")
     if name == "get_project_tree":
         result = workspace.tree(project, max_items=350)
     elif name == "read_file":
