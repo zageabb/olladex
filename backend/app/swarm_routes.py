@@ -246,7 +246,9 @@ def create_swarm(project_id: int, body: SwarmCreateRequest):
                 f"Challenge: {title}",
                 "Act as an independent challenger. Inspect the completed specialist hand-offs and inherited code. "
                 "Try to disprove the solution by finding regressions, edge cases, security issues, invalid assumptions, "
-                "API incompatibilities, error paths, race conditions, and missing tests. Do not claim issues without evidence.",
+                "API incompatibilities, error paths, race conditions, and missing tests. Do not claim issues without evidence. "
+                "Inspect Git only; do not checkout, switch, merge, rebase, cherry-pick, commit, reset, or otherwise integrate branches. "
+                "Olladex Coordinator finalization owns deterministic integration.",
                 source_kind="swarm_challenger",
                 source_ref=f"swarm:{swarm['id']}",
                 depends_on=child_ids,
@@ -270,7 +272,9 @@ def create_swarm(project_id: int, body: SwarmCreateRequest):
                 f"Review: {title}",
                 "Act as the independent final reviewer. Review all dependency hand-offs, actual inherited changes and "
                 "test evidence. Identify conflicts, omissions, unsupported success claims and remaining risks. "
-                "Summarize what is ready for integration and what still needs work.",
+                "Produce a concrete final report describing verified deliverables, checks observed, missing work and residual risks. "
+                "Inspect Git only; do not checkout, switch, merge, rebase, cherry-pick, commit, reset, create merge branches, "
+                "or otherwise integrate repository work. Olladex Coordinator finalization owns deterministic integration and promotion.",
                 source_kind="swarm_reviewer",
                 source_ref=f"swarm:{swarm['id']}",
                 depends_on=verification_ids,
