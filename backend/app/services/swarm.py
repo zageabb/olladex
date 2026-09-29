@@ -456,7 +456,7 @@ def list_agents(swarm_id: int) -> list[dict]:
                 ).fetchone()
                 if pending:
                     item["pending_approval"] = dict(pending)
-            item["tool_budget"] = tool_budget
+            item["tool_budget"] = tool_budget + int(item.get("budget_extra") or 0)
             if not run_id:
                 item["tool_usage"] = 0
                 item["latest_event"] = None
