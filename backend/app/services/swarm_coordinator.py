@@ -117,6 +117,22 @@ def _reconcile(swarm_id: int) -> None:
         )
         return
 
+    verification_blocked = [
+        item for item in (reviewer, challenger)
+        if item and item.get("status") == "dependency_failed"
+    ]
+    if verification_blocked:
+        if run.get("status") != "recovery_available":
+            swarm.set_status(swarm_id, "recovery_available")
+        _publish_once(
+            swarm_id,
+            "risk",
+            "verification-dependency-blocked",
+            "Final verification is blocked by recovered dependencies: "
+            + ", ".join(f"#{item['id']}" for item in verification_blocked),
+        )
+        return
+
     if unresolved_failed and not active:
         _consider_recovery(run, unresolved_failed, completed)
         return
