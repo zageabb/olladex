@@ -235,7 +235,7 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
   await page.locator('.rail').getByRole('button', {name:'Tasks'}).click();
 
   await expect(page.getByRole('heading', {name:'Auth hardening'})).toBeVisible();
-  await expect(page.getByText(/Swarm #7 · reviewing · 100% complete/)).toBeVisible();
+  await expect(page.getByText(/Swarm #7 · reviewing · 100% agent work/)).toBeVisible();
   await expect(page.getByText('Inspect auth')).toBeVisible();
   await expect(page.getByText(/backend · completed · 100%/)).toBeVisible();
   await expect(page.getByText('Final review', {exact:true})).toBeVisible();
