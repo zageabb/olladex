@@ -652,3 +652,127 @@ test('autonomous advanced orchestration shows no approval controls without an ex
   await expect(detail.getByRole('button',{name:'Approve once'})).toHaveCount(0);
   await expect(detail.getByRole('button',{name:'Decline'})).toHaveCount(0);
 });
+
+
+test('advanced orchestration recovers budget-exhausted agents and blocked dependants without reload', async ({ page }) => {
+  let resumed = false;
+  let rootCompleted = false;
+  let retryRequested = false;
+  let resumeBody: Record<string,unknown>|null = null;
+
+  await baseRoutes(page, async (route,url) => {
+    const p=url.pathname;
+    const json=(data:unknown)=>route.fulfill({json:data});
+    if (p === '/api/projects/1/skills/swarm') {
+      await json({project_id:1,skill:'swarm',enabled:true});
+      return true;
+    }
+    if (p === '/api/projects/1/swarms') {
+      await json([{id:30,title:'Recovery test',status:retryRequested?'recovering':'recovery_available',max_agents:5,max_concurrency:3,total_agents_created:2}]);
+      return true;
+    }
+    if (p === '/api/swarms/30/board') {
+      const rootStatus = rootCompleted ? 'completed' : resumed ? 'running' : 'budget_exhausted';
+      const childStatus = retryRequested ? 'queued' : 'dependency_failed';
+      const recoveryAvailable = !retryRequested && (!rootCompleted || childStatus === 'dependency_failed');
+      await json({
+        swarm:{
+          id:30,title:'Recovery test',status:retryRequested?'recovering':'recovery_available',
+          agents:[
+            {
+              id:301,title:'Implement callbacks',status:rootStatus,agent_role:'frontend',task_kind:'frontend',
+              progress:rootCompleted?100:65,session_id:81,run_id:53,run_status:rootStatus,
+              worktree_branch:'olladex/task-301',
+              recovery:(!resumed&&!rootCompleted)?{
+                task_id:301,status:'budget_exhausted',session_id:81,active_run_id:0,prior_run_id:53,
+                prior_run_status:'budget_exhausted',checkpoint_available:true,checkpoint_bytes:22341,
+                worktree_path:'/tmp/worktrees/30/task-301',worktree_branch:'olladex/task-301',
+                worktree_available:true,branch_available:true,previous_budget:30,resumed_budget:44,
+                max_recovery_attempts:3,recovery_attempt:0,blocking_dependency_ids:[],can_resume:true
+              }:null
+            },
+            {
+              id:302,title:'Review callbacks',status:childStatus,agent_role:'reviewer',task_kind:'reviewer',
+              progress:0,session_id:82,run_status:childStatus,worktree_branch:'olladex/task-302',
+              blocking_dependency_ids:retryRequested?[]:[301],recovery:null
+            }
+          ]
+        },
+        summary:{
+          total_agents:2,active_agents:resumed&&!rootCompleted?1:0,completed_agents:rootCompleted?1:0,
+          failed_agents:retryRequested?0:1,progress:rootCompleted?50:33,max_agents:5,max_concurrency:3,
+          integration_ready:false,recovery_available:recoveryAvailable,
+          recovery_blockers:recoveryAvailable?[
+            ...((!resumed&&!rootCompleted)?[{
+              task_id:301,title:'Implement callbacks',status:'budget_exhausted',blocking_dependency_ids:[],
+              recovery:{
+                task_id:301,status:'budget_exhausted',session_id:81,active_run_id:0,prior_run_id:53,
+                prior_run_status:'budget_exhausted',checkpoint_available:true,checkpoint_bytes:22341,
+                worktree_path:'/tmp/worktrees/30/task-301',worktree_branch:'olladex/task-301',
+                worktree_available:true,branch_available:true,previous_budget:30,resumed_budget:44,
+                max_recovery_attempts:3,recovery_attempt:0,blocking_dependency_ids:[],can_resume:true
+              }
+            }]:[]),
+            ...(retryRequested?[]:[{task_id:302,title:'Review callbacks',status:'dependency_failed',blocking_dependency_ids:[301],recovery:null}])
+          ]:[],
+          integration_blockers:recoveryAvailable?[
+            ...((!resumed&&!rootCompleted)?['#301 needs recovery']:[]),
+            ...(retryRequested?[]:['#302 is blocked by dependencies 301'])
+          ]:[]
+        },
+        budget_requests:[],
+        events:[],coordinator_events:[],blackboard:[],
+        cursors:{event:0,coordinator_event:0,blackboard:0},
+        repository:{repository:true,has_head:true,remotes:[],has_remote:false,github_remote:'',can_push:false,can_create_pull_request:false},
+        locations:{main:'/demo',integration:'',specialists:[
+          {task_id:301,title:'Implement callbacks',role:'frontend',path:'/tmp/worktrees/30/task-301',branch:'olladex/task-301',status:rootStatus}
+        ]}
+      });
+      return true;
+    }
+    if (p === '/api/tasks/301/resume') {
+      resumeBody=route.request().postDataJSON();
+      resumed=true;
+      await json({
+        task_id:301,session_id:81,prior_run_id:53,run_id:54,status:'running',
+        checkpoint_restored:true,checkpoint_bytes:22341,recovery_attempt:1,fresh_budget:44,
+        worktree_path:'/tmp/worktrees/30/task-301',worktree_branch:'olladex/task-301',
+        starting_head:'abc123',dirty_work_preserved:true
+      });
+      return true;
+    }
+    if (p === '/api/tasks/301/retry-dependants') {
+      retryRequested=true;
+      await json({task_id:301,retried_task_ids:[302],full_chain:Boolean(route.request().postDataJSON().full_chain)});
+      return true;
+    }
+    return false;
+  });
+
+  await page.goto('/');
+  await page.locator('.rail').getByRole('button',{name:'Tasks'}).click();
+
+  const recovery=page.locator('.advanced-recovery-banner');
+  await expect(recovery.getByText('Recovery available')).toBeVisible();
+  await expect(recovery.getByText(/Checkpoint 22341 bytes/)).toBeVisible();
+  await expect(recovery.getByText(/prior budget 30 · new budget 44/)).toBeVisible();
+  await expect(recovery.getByText('olladex/task-301',{exact:true})).toBeVisible();
+  await expect(recovery.getByText('/tmp/worktrees/30/task-301',{exact:true})).toBeVisible();
+  await expect(recovery.getByText(/Agent #302 blocked by dependency/)).toBeVisible();
+  await expect(recovery.getByText(/Integration unavailable:/)).toBeVisible();
+  await expect(page.locator('.agent-board-integration')).toHaveCount(0);
+
+  await recovery.getByRole('button',{name:'Resume from checkpoint'}).click();
+  await expect.poll(()=>resumeBody).toEqual({fresh_budget:44});
+  await expect(page.getByText(/frontend · running/)).toBeVisible({timeout:4000});
+  await expect(recovery.getByRole('button',{name:'Resume from checkpoint'})).toHaveCount(0);
+
+  rootCompleted=true;
+  await expect(recovery.getByRole('button',{name:'Retry blocked dependants after #301'})).toBeVisible({timeout:4000});
+  await expect(recovery.getByRole('button',{name:'Retry full dependency chain'})).toBeVisible();
+
+  await recovery.getByRole('button',{name:'Retry full dependency chain'}).click();
+  await expect.poll(()=>retryRequested).toBe(true);
+  await expect(page.getByText(/reviewer · queued/)).toBeVisible({timeout:4000});
+  await expect(page.locator('.advanced-recovery-banner')).toHaveCount(0);
+});
