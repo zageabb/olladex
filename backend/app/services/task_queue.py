@@ -730,6 +730,22 @@ def _finalize_swarm(task: dict, final_status: str, result: str = "", error: str 
         )
 
 
+def _mark_recovery_available(task: dict, reason: str) -> None:
+    with connect() as conn:
+        if task.get("parent_task_id"):
+            conn.execute(
+                "UPDATE background_tasks SET status='recovery_available',error=?,completed_at='' "
+                "WHERE id=? AND status NOT IN ('completed','cancelled')",
+                (reason[:20000], task["parent_task_id"]),
+            )
+        if task.get("swarm_id"):
+            conn.execute(
+                "UPDATE swarm_runs SET status='recovery_available',completed_at='' "
+                "WHERE id=? AND status NOT IN ('completed','cancelled')",
+                (task["swarm_id"],),
+            )
+
+
 def _finalize_parent(task: dict, final_status: str, result: str = "", error: str = "") -> None:
     parent_id = task.get("parent_task_id")
     if not parent_id or (task.get("agent_role") or "") != "reviewer":
@@ -786,8 +802,20 @@ def run_once() -> bool:
             else:
                 from .ollama import BudgetExhausted
                 error = str(exc)[:20000]
-                conn.execute("UPDATE background_tasks SET status=?,error=?,completed_at=? WHERE id=?", ("budget_exhausted" if isinstance(exc, BudgetExhausted) else "failed", error, now(), task["id"]))
-                final_status = "failed"
+                if isinstance(exc, BudgetExhausted):
+                    conn.execute(
+                        "UPDATE background_tasks SET status='budget_exhausted',error=?,completed_at=? WHERE id=?",
+                        (error, now(), task["id"]),
+                    )
+                    final_status = "budget_exhausted"
+                else:
+                    conn.execute(
+                        "UPDATE background_tasks SET status='failed',error=?,completed_at=? WHERE id=?",
+                        (error, now(), task["id"]),
+                    )
+                    final_status = "failed"
+        if final_status == "budget_exhausted":
+            _mark_recovery_available(task, error or "A child task exhausted its budget and can be resumed")
         _finalize_parent(task, final_status, error=error)
         _finalize_swarm(task, final_status, error=error)
     finally:
