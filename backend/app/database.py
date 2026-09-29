@@ -192,6 +192,9 @@ CREATE TABLE IF NOT EXISTS swarm_runs (
   integration_pr_number INTEGER NOT NULL DEFAULT 0,
   integration_pr_url TEXT NOT NULL DEFAULT '',
   integration_pr_state TEXT NOT NULL DEFAULT '',
+  promotion_status TEXT NOT NULL DEFAULT '',
+  promoted_commit TEXT NOT NULL DEFAULT '',
+  promotion_output TEXT NOT NULL DEFAULT '',
   coordinator_instructions TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS swarm_coordinator_events (
@@ -284,6 +287,9 @@ ADDITIVE_COLUMNS = {
         "integration_pr_number": "INTEGER NOT NULL DEFAULT 0",
         "integration_pr_url": "TEXT NOT NULL DEFAULT ''",
         "integration_pr_state": "TEXT NOT NULL DEFAULT ''",
+        "promotion_status": "TEXT NOT NULL DEFAULT ''",
+        "promoted_commit": "TEXT NOT NULL DEFAULT ''",
+        "promotion_output": "TEXT NOT NULL DEFAULT ''",
         "coordinator_instructions": "TEXT NOT NULL DEFAULT ''",
     },
     "background_tasks": {
