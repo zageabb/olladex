@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from ..database import connect
 from . import integration, worktrees
@@ -89,14 +90,14 @@ def _unique_task_changes(task: dict, tasks_by_id: dict[int, dict], base: str) ->
         if dependency_branch and dependency_branch not in exclude_refs:
             exclude_refs.append(dependency_branch)
     args = ["rev-list", branch, "--not", *exclude_refs]
-    code, output = worktrees._git(__import__("pathlib").Path(path), *args)
+    code, output = worktrees._git(Path(path), *args)
     if code:
         raise ValueError(output.strip() or f"Could not inspect unique commits for task #{task['id']}")
     commits = [line.strip() for line in output.splitlines() if line.strip()]
     files: list[str] = []
     for sha in commits:
         code, changed = worktrees._git(
-            __import__("pathlib").Path(path),
+            Path(path),
             "show", "--pretty=format:", "--name-only", sha, "--",
         )
         if code:
