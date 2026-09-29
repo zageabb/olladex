@@ -161,6 +161,8 @@ CREATE TABLE IF NOT EXISTS swarm_profiles (
   dynamic_size INTEGER NOT NULL DEFAULT 1,
   agent_tool_budget INTEGER NOT NULL DEFAULT 30,
   coordinator_tool_budget INTEGER NOT NULL DEFAULT 20,
+  resumed_task_tool_budget INTEGER NOT NULL DEFAULT 20,
+  max_recovery_attempts INTEGER NOT NULL DEFAULT 2,
   require_reviewer INTEGER NOT NULL DEFAULT 1,
   require_challenger INTEGER NOT NULL DEFAULT 0,
   is_builtin INTEGER NOT NULL DEFAULT 0,
@@ -309,6 +311,10 @@ ADDITIVE_COLUMNS = {
         "coordinator_instructions": "TEXT NOT NULL DEFAULT ''",
         "coordinator_budget_extra": "INTEGER NOT NULL DEFAULT 0",
     },
+    "swarm_profiles": {
+        "resumed_task_tool_budget": "INTEGER NOT NULL DEFAULT 20",
+        "max_recovery_attempts": "INTEGER NOT NULL DEFAULT 2",
+    },
     "background_tasks": {
         "worktree_path": "TEXT NOT NULL DEFAULT ''", "worktree_branch": "TEXT NOT NULL DEFAULT ''",
         "pull_request_number": "INTEGER NOT NULL DEFAULT 0", "pull_request_url": "TEXT NOT NULL DEFAULT ''", "pull_request_state": "TEXT NOT NULL DEFAULT ''",
@@ -325,6 +331,11 @@ ADDITIVE_COLUMNS = {
         "progress": "INTEGER NOT NULL DEFAULT 0",
         "current_activity": "TEXT NOT NULL DEFAULT ''",
         "budget_extra": "INTEGER NOT NULL DEFAULT 0",
+        "blocking_dependency_ids": "TEXT NOT NULL DEFAULT '[]'",
+        "retry_lineage": "TEXT NOT NULL DEFAULT '[]'",
+        "recovery_attempt": "INTEGER NOT NULL DEFAULT 0",
+        "no_progress_reason": "TEXT NOT NULL DEFAULT ''",
+        "completion_evidence": "TEXT NOT NULL DEFAULT '{}'",
     },
 }
 
