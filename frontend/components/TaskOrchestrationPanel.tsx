@@ -33,7 +33,7 @@ type SwarmBoard = {
   locations?:{main:string;integration:string;specialists:{task_id:number;title:string;role:string;path:string;branch:string;status:string}[]};
 };
 type SwarmSkill = { project_id:number; skill:"swarm"; enabled:boolean };
-type SwarmProfile = { id:number; name:string; max_agents:number; max_concurrency:number; max_depth:number; dynamic_size:number; agent_tool_budget:number; coordinator_tool_budget:number; require_reviewer:number; require_challenger:number; coordinator_profile_id?:number|null; default_worker_profile_id?:number|null; role_profiles?:Record<string,number> };
+type SwarmProfile = { id:number; name:string; max_agents:number; max_concurrency:number; max_depth:number; dynamic_size:number; agent_tool_budget:number; coordinator_tool_budget:number; resumed_task_tool_budget:number; max_recovery_attempts:number; require_reviewer:number; require_challenger:number; coordinator_profile_id?:number|null; default_worker_profile_id?:number|null; role_profiles?:Record<string,number> };
 type ModelProfile = { id:number; name:string; chat_model:string };
 type SwarmPreflight = { ready:boolean; checks:{name:string;ok:boolean;detail:string}[]; max_agents:number; max_concurrency:number; git:GitCapabilities };
 type SwarmModelSelfTest = { ready:boolean; models:{model:string;roles:string[];ok:boolean;latency_ms:number;response:string;error?:string}[] };
@@ -272,6 +272,8 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
           dynamic_size:Boolean(profile.dynamic_size),
           agent_tool_budget:profile.agent_tool_budget,
           coordinator_tool_budget:profile.coordinator_tool_budget,
+          resumed_task_tool_budget:profile.resumed_task_tool_budget,
+          max_recovery_attempts:profile.max_recovery_attempts,
           require_reviewer:Boolean(profile.require_reviewer),
           require_challenger:Boolean(profile.require_challenger)
         })
@@ -600,6 +602,8 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
             {roles.map(role=><label key={role}>{role}<select value={(profile.role_profiles||{})[role]||""} onChange={event=>updateRoleProfile(profile,role,event.target.value?Number(event.target.value):null)}><option value="">Default worker</option>{modelProfiles.map(model=><option key={model.id} value={model.id}>{model.name} · {model.chat_model}</option>)}</select></label>)}
             <label>Worker tool budget<input type="number" min="1" max="200" value={profile.agent_tool_budget} onChange={event=>updateSwarmProfile(profile.id,{agent_tool_budget:Number(event.target.value)})}/></label>
             <label>Coordinator budget<input type="number" min="1" max="200" value={profile.coordinator_tool_budget} onChange={event=>updateSwarmProfile(profile.id,{coordinator_tool_budget:Number(event.target.value)})}/></label>
+            <label>Resumed task budget<input type="number" min="1" max="200" value={profile.resumed_task_tool_budget||20} onChange={event=>updateSwarmProfile(profile.id,{resumed_task_tool_budget:Number(event.target.value)})}/></label>
+            <label>Maximum recovery attempts<input type="number" min="1" max="10" value={profile.max_recovery_attempts||2} onChange={event=>updateSwarmProfile(profile.id,{max_recovery_attempts:Number(event.target.value)})}/></label>
             <label className="swarm-check"><input type="checkbox" checked={Boolean(profile.dynamic_size)} onChange={event=>updateSwarmProfile(profile.id,{dynamic_size:event.target.checked?1:0})}/> Dynamic size</label>
             <label className="swarm-check"><input type="checkbox" checked={Boolean(profile.require_reviewer)} onChange={event=>updateSwarmProfile(profile.id,{require_reviewer:event.target.checked?1:0})}/> Final reviewer</label>
             <label className="swarm-check"><input type="checkbox" checked={Boolean(profile.require_challenger)} onChange={event=>updateSwarmProfile(profile.id,{require_challenger:event.target.checked?1:0})}/> Challenger</label>
