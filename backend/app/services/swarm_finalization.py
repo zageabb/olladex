@@ -7,7 +7,7 @@ from ..database import connect
 from . import integration, worktrees
 
 
-FAILED_TASK_STATUSES = {"failed", "budget_exhausted", "cancelled", "interrupted"}
+FAILED_TASK_STATUSES = {"failed", "budget_exhausted", "cancelled", "interrupted", "dependency_failed", "no_progress", "incomplete"}
 NO_CHANGE_ROLES = {"researcher", "tester"}
 VERIFICATION_KINDS = {"reviewer", "challenger"}
 
