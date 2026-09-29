@@ -331,6 +331,7 @@ ADDITIVE_COLUMNS = {
         "progress": "INTEGER NOT NULL DEFAULT 0",
         "current_activity": "TEXT NOT NULL DEFAULT ''",
         "budget_extra": "INTEGER NOT NULL DEFAULT 0",
+        "budget_override": "INTEGER NOT NULL DEFAULT 0",
         "blocking_dependency_ids": "TEXT NOT NULL DEFAULT '[]'",
         "retry_lineage": "TEXT NOT NULL DEFAULT '[]'",
         "recovery_attempt": "INTEGER NOT NULL DEFAULT 0",
