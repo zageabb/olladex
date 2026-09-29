@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -269,3 +270,79 @@ def test_recovery_info_reports_fresh_budget_and_checkpoint(tmp_path, monkeypatch
     assert info["resumed_budget"] == 44
     assert info["max_recovery_attempts"] == 3
     assert info["can_resume"] is True
+
+
+def _wait_for(predicate, timeout: float = 3.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(0.02)
+    raise AssertionError("Timed out waiting for recovery state")
+
+
+def test_no_progress_resumed_run_stays_recoverable_and_preserves_checkpoint(tmp_path, monkeypatch):
+    project, session_id, swarm_id, _ = _seed_repo(tmp_path, monkeypatch)
+    task, prior_run_id = _exhausted_task(project, session_id, swarm_id)
+    with connect() as conn:
+        prior_checkpoint = conn.execute(
+            "SELECT checkpoint FROM agent_runs WHERE id=?",
+            (prior_run_id,),
+        ).fetchone()["checkpoint"]
+
+    monkeypatch.setattr(
+        "backend.app.main.run_session_agent",
+        lambda session_id, content: {
+            "id": 1,
+            "role": "assistant",
+            "content": "",
+            "activities": [],
+            "created_at": now(),
+        },
+    )
+
+    resumed = task_queue.resume_task(task["id"], fresh_budget=20)
+    run_id = resumed["run_id"]
+    _wait_for(lambda: conversation_runtime.get(run_id)["status"] == "no_progress")
+
+    state = task_queue.get(task["id"])
+    assert state["status"] == "no_progress"
+    assert "no meaningful" in state["no_progress_reason"].lower() or "empty final response" in state["no_progress_reason"].lower()
+    assert swarm.get_run(swarm_id)["status"] == "recovery_available"
+
+    info = task_queue.recovery_info(task["id"])
+    assert info["can_resume"] is True
+    assert info["prior_run_id"] == run_id
+    assert info["checkpoint_available"] is True
+
+    with connect() as conn:
+        old_checkpoint = conn.execute("SELECT checkpoint FROM agent_runs WHERE id=?", (prior_run_id,)).fetchone()["checkpoint"]
+    assert old_checkpoint == prior_checkpoint
+
+
+def test_failed_resume_startup_preserves_previous_recovery_state(tmp_path, monkeypatch):
+    project, session_id, swarm_id, _ = _seed_repo(tmp_path, monkeypatch)
+    task, prior_run_id = _exhausted_task(project, session_id, swarm_id)
+    before = task_queue.get(task["id"])
+    with connect() as conn:
+        checkpoint = conn.execute("SELECT checkpoint FROM agent_runs WHERE id=?", (prior_run_id,)).fetchone()["checkpoint"]
+
+    monkeypatch.setattr(
+        conversation_runtime,
+        "launch",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("could not create resumed run")),
+    )
+
+    with pytest.raises(RuntimeError, match="could not create resumed run"):
+        task_queue.resume_task(task["id"], fresh_budget=55)
+
+    after = task_queue.get(task["id"])
+    assert after["status"] == "budget_exhausted"
+    assert after["error"] == before["error"]
+    assert after["recovery_attempt"] == before["recovery_attempt"]
+    assert after["budget_override"] == before["budget_override"]
+    assert swarm.get_run(swarm_id)["status"] == "running"
+    with connect() as conn:
+        retained = conn.execute("SELECT checkpoint FROM agent_runs WHERE id=?", (prior_run_id,)).fetchone()["checkpoint"]
+    assert retained == checkpoint
