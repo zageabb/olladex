@@ -91,11 +91,16 @@ def _reconcile(swarm_id: int) -> None:
     reviewer = next((item for item in agents if item.get("task_kind") == "reviewer"), None)
     challenger = next((item for item in agents if item.get("task_kind") == "challenger"), None)
 
-    failed = [item for item in specialists if item.get("status") in {"failed", "budget_exhausted", "interrupted"}]
+    budget_exhausted = [item for item in specialists if item.get("status") == "budget_exhausted"]
+    failed = [item for item in specialists if item.get("status") in {"failed", "interrupted"}]
     active = [item for item in specialists if item.get("status") in {"queued", "running", "waiting_for_input", "waiting_for_approval"}]
     completed = [item for item in specialists if item.get("status") == "completed"]
     recovered_ids = _recovered_failure_ids(completed)
     unresolved_failed = [item for item in failed if int(item["id"]) not in recovered_ids]
+
+    if budget_exhausted:
+        if _consider_budget_exhaustion(run, budget_exhausted, completed):
+            return
 
     if unresolved_failed and not active:
         _consider_recovery(run, unresolved_failed, completed)
@@ -193,6 +198,127 @@ def _prepare_finalization(run: dict) -> None:
     )
 
 
+def _consider_budget_exhaustion(run: dict, exhausted: list[dict], completed: list[dict]) -> bool:
+    swarm_id = int(run["id"])
+    pending = swarm.budget_requests(swarm_id, pending_only=True)
+    if pending:
+        return True
+
+    target = exhausted[0]
+    task_id = int(target["id"])
+    run_id = int(target.get("run_id") or 0)
+    if not run_id:
+        swarm.ensure_budget_request(
+            swarm_id,
+            scope="agent",
+            task_id=task_id,
+            requested_amount=10,
+            reason="Agent exhausted its budget but the prior run could not be resolved for checkpoint resume.",
+        )
+        return True
+
+    decision = _budget_extension_decision(run, target, completed)
+    action = str(decision.get("action") or "ask_user").lower()
+    amount = max(1, min(int(decision.get("amount") or 10), 100))
+    reason = str(decision.get("reason") or "More budget may be needed to complete the current task.")
+
+    if action == "grant":
+        request = swarm.ensure_budget_request(
+            swarm_id,
+            scope="agent",
+            task_id=task_id,
+            run_id=run_id,
+            requested_amount=amount,
+            reason=reason,
+        )
+        try:
+            swarm.decide_budget_request(int(request["id"]), accepted=True, amount=amount, decided_by="coordinator")
+            swarm.publish(
+                swarm_id,
+                "decision",
+                f"Coordinator granted agent #{task_id} +{amount} budget to continue from its saved checkpoint. {reason}",
+                key=f"budget-auto-{request['id']}",
+            )
+        except Exception as exc:
+            swarm.ensure_budget_request(
+                swarm_id,
+                scope="agent",
+                task_id=task_id,
+                run_id=run_id,
+                requested_amount=amount,
+                reason=f"Automatic extension could not resume the agent: {exc}",
+            )
+        return True
+
+    swarm.ensure_budget_request(
+        swarm_id,
+        scope="agent",
+        task_id=task_id,
+        run_id=run_id,
+        requested_amount=amount,
+        reason=reason,
+    )
+    return True
+
+
+def _budget_extension_decision(run: dict, agent: dict, completed: list[dict]) -> dict:
+    swarm_id = int(run["id"])
+    budget = swarm.consume_coordinator_budget(swarm_id, "agent_budget_extension")
+    if not budget["allowed"]:
+        swarm.ensure_budget_request(
+            swarm_id,
+            scope="coordinator",
+            requested_amount=10,
+            reason=f"Coordinator needs more decision budget to assess agent #{agent['id']}'s budget extension.",
+        )
+        return {"action": "ask_user", "amount": 10, "reason": "Coordinator decision budget is exhausted."}
+
+    profile = swarm.get_profile(int(run["profile_id"]))
+    _, model = swarm.coordinator_model(profile)
+    project = _project(int(run["project_id"]))
+    evidence = {
+        "objective": run.get("objective") or "",
+        "agent": {
+            "id": agent.get("id"),
+            "title": agent.get("title"),
+            "role": agent.get("agent_role"),
+            "progress": agent.get("progress"),
+            "tool_usage": agent.get("tool_usage"),
+            "tool_budget": agent.get("tool_budget"),
+            "current_activity": agent.get("current_activity"),
+            "error": agent.get("error"),
+        },
+        "completed": [
+            {"id": item["id"], "title": item["title"], "role": item.get("agent_role"), "result": (item.get("result") or "")[-500:]}
+            for item in completed[-8:]
+        ],
+    }
+    prompt = (
+        "Decide whether this Advanced orchestration specialist should receive a small additional tool budget. "
+        "Return JSON only: {\"action\":\"grant|ask_user\",\"amount\":10|25,\"reason\":\"...\"}. "
+        "Grant only when the task appears to be making concrete progress and a small extension is likely to finish it. "
+        "Ask the user when evidence is ambiguous, the task may be looping, or a larger strategic decision is needed.\n\n"
+        + json.dumps(evidence, default=str)[:16000]
+    )
+    try:
+        with ollama.client(90) as http:
+            response = http.post("/api/chat", json={
+                "model": model or project.get("profile_chat_model") or project.get("model"),
+                "stream": False,
+                "format": "json",
+                "messages": [
+                    {"role": "system", "content": "Return valid JSON only. Be conservative with budget extensions."},
+                    {"role": "user", "content": prompt},
+                ],
+                "options": {"temperature": 0.1},
+            })
+            response.raise_for_status()
+            data = json.loads((response.json().get("message") or {}).get("content") or "{}")
+        return data if isinstance(data, dict) else {"action": "ask_user", "amount": 10, "reason": "Coordinator returned no valid budget decision."}
+    except Exception as exc:
+        return {"action": "ask_user", "amount": 10, "reason": f"Coordinator could not decide safely: {exc}"}
+
+
 def _consider_help_request(run: dict, completed: list[dict]) -> bool:
     swarm_id = int(run["id"])
     questions = [
@@ -239,6 +365,8 @@ def _consider_help_request(run: dict, completed: list[dict]) -> bool:
     agents = run.get("agents") or []
     requester = next((item for item in agents if int(item["id"]) == int(request["task_id"])), None)
     decision = _help_decision(run, profile, request, requester, completed)
+    if str(decision.get("action") or "decline").lower() == "wait":
+        return True
     if str(decision.get("action") or "decline").lower() != "spawn":
         swarm.publish(
             swarm_id,
@@ -293,7 +421,8 @@ def _consider_help_request(run: dict, completed: list[dict]) -> bool:
 def _help_decision(run: dict, profile: dict, request: dict, requester: dict | None, completed: list[dict]) -> dict:
     budget = swarm.consume_coordinator_budget(int(run["id"]), "specialist_help")
     if not budget["allowed"]:
-        return {"action": "decline", "reason": "Coordinator budget is exhausted; no helper was spawned."}
+        swarm.ensure_budget_request(int(run["id"]), scope="coordinator", requested_amount=10, reason="Coordinator needs more budget to evaluate a specialist help request.")
+        return {"action": "wait", "reason": "Coordinator budget is exhausted; waiting for a budget decision."}
     _, model = swarm.coordinator_model(profile)
     project = _project(int(run["project_id"]))
     evidence = {
@@ -400,6 +529,8 @@ def _consider_pre_review(run: dict, profile: dict, completed: list[dict]) -> boo
         return False
 
     decision = _followup_decision(run, profile, completed, risks)
+    if str(decision.get("action") or "proceed").lower() == "wait":
+        return True
     if str(decision.get("action") or "proceed").lower() != "spawn":
         swarm.publish(
             swarm_id,
@@ -449,7 +580,8 @@ def _consider_pre_review(run: dict, profile: dict, completed: list[dict]) -> boo
 def _followup_decision(run: dict, profile: dict, completed: list[dict], risks: list[dict]) -> dict:
     budget = swarm.consume_coordinator_budget(int(run["id"]), "pre_review_risk")
     if not budget["allowed"]:
-        return {"action": "proceed", "reason": "Coordinator budget is exhausted; recorded risks will be left to final verification."}
+        swarm.ensure_budget_request(int(run["id"]), scope="coordinator", requested_amount=10, reason="Coordinator needs more budget to evaluate pre-review risks.")
+        return {"action": "wait", "reason": "Coordinator budget is exhausted; waiting for a budget decision."}
     _, model = swarm.coordinator_model(profile)
     project = _project(int(run["project_id"]))
     evidence = {
@@ -601,7 +733,8 @@ def _retarget_verification(swarm_id: int, recovery_task_id: int) -> None:
 def _recovery_decision(run: dict, profile: dict, failed: list[dict], completed: list[dict]) -> dict:
     budget = swarm.consume_coordinator_budget(int(run["id"]), "failure_recovery")
     if not budget["allowed"]:
-        return {"action": "fail", "reason": "Coordinator budget is exhausted; automatic recovery cannot continue."}
+        swarm.ensure_budget_request(int(run["id"]), scope="coordinator", requested_amount=10, reason="Coordinator needs more budget to plan failure recovery.")
+        return {"action": "defer", "reason": "Coordinator budget is exhausted; waiting for a budget decision."}
     _, model = swarm.coordinator_model(profile)
     project = _project(int(run["project_id"]))
     board = swarm.blackboard(int(run["id"]))
