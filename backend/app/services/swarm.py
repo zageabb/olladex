@@ -55,9 +55,9 @@ def create_profile(data: dict) -> dict:
         cursor = conn.execute(
             "INSERT INTO swarm_profiles("
             "name,enabled,coordinator_profile_id,default_worker_profile_id,role_profiles,"
-            "max_agents,max_concurrency,max_depth,dynamic_size,agent_tool_budget,coordinator_tool_budget,"
+            "max_agents,max_concurrency,max_depth,dynamic_size,agent_tool_budget,coordinator_tool_budget,resumed_task_tool_budget,max_recovery_attempts,"
             "require_reviewer,require_challenger,is_builtin,created_at,updated_at"
-            ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)",
+            ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)",
             (
                 name, 1 if data.get("enabled", True) else 0, coordinator_id, worker_id,
                 json.dumps(role_profiles, sort_keys=True),
@@ -67,6 +67,8 @@ def create_profile(data: dict) -> dict:
                 1 if data.get("dynamic_size", True) else 0,
                 max(1, min(int(data.get("agent_tool_budget") or 30), 200)),
                 max(1, min(int(data.get("coordinator_tool_budget") or 20), 200)),
+                max(1, min(int(data.get("resumed_task_tool_budget") or 20), 200)),
+                max(1, min(int(data.get("max_recovery_attempts") or 2), 10)),
                 1 if data.get("require_reviewer", True) else 0,
                 1 if data.get("require_challenger", False) else 0,
                 stamp, stamp,
@@ -91,7 +93,7 @@ def update_profile(profile_id: int, data: dict) -> dict:
         conn.execute(
             "UPDATE swarm_profiles SET name=?,enabled=?,coordinator_profile_id=?,default_worker_profile_id=?,"
             "role_profiles=?,max_agents=?,max_concurrency=?,max_depth=?,dynamic_size=?,agent_tool_budget=?,"
-            "coordinator_tool_budget=?,require_reviewer=?,require_challenger=?,updated_at=? WHERE id=?",
+            "coordinator_tool_budget=?,resumed_task_tool_budget=?,max_recovery_attempts=?,require_reviewer=?,require_challenger=?,updated_at=? WHERE id=?",
             (
                 name, 1 if data.get("enabled", True) else 0, coordinator_id, worker_id,
                 json.dumps(role_profiles, sort_keys=True),
@@ -101,6 +103,8 @@ def update_profile(profile_id: int, data: dict) -> dict:
                 1 if data.get("dynamic_size", True) else 0,
                 max(1, min(int(data.get("agent_tool_budget") or 30), 200)),
                 max(1, min(int(data.get("coordinator_tool_budget") or 20), 200)),
+                max(1, min(int(data.get("resumed_task_tool_budget") or current.get("resumed_task_tool_budget") or 20), 200)),
+                max(1, min(int(data.get("max_recovery_attempts") or current.get("max_recovery_attempts") or 2), 10)),
                 1 if data.get("require_reviewer", True) else 0,
                 1 if data.get("require_challenger", False) else 0,
                 now(), profile_id,
