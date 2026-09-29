@@ -258,7 +258,7 @@ def launch(session_id, content, resume_id=None, recovery_metadata=None):
     task_id = None
     if resume_id:
         prior = get(resume_id)
-        if prior['session_id'] != session_id or prior['status'] not in ('interrupted', 'budget_exhausted', 'cancelled', 'failed'):
+        if prior['session_id'] != session_id or prior['status'] not in ('interrupted', 'budget_exhausted', 'cancelled', 'failed', 'no_progress', 'incomplete'):
             raise HTTPException(409, 'Only a stopped or interrupted turn can be resumed')
         checkpoint_data = json.loads(prior['checkpoint'])
         task_id = prior['task_id']
@@ -343,9 +343,21 @@ def launch(session_id, content, resume_id=None, recovery_metadata=None):
             finally:
                 if task_id:
                     final_status = get(run_id)["status"]
+                    current_task = task_queue.get(task_id)
+                    final_error = error
+                    if final_status == "no_progress":
+                        final_error = str(current_task.get("no_progress_reason") or current_task.get("error") or "Recovery made no meaningful progress")
                     with connect() as conn:
-                        conn.execute("UPDATE background_tasks SET status=?,result=?,error=?,completed_at=? WHERE id=?", (final_status, result["content"] if result else "", error, now(), task_id))
-                    task_queue._finalize_parent(task_queue.get(task_id), final_status, result=result["content"] if result else "", error=error)
+                        conn.execute(
+                            "UPDATE background_tasks SET status=?,result=?,error=?,completed_at=? WHERE id=?",
+                            (final_status, result["content"] if result else "", final_error, now(), task_id),
+                        )
+                    refreshed_task = task_queue.get(task_id)
+                    if final_status == "budget_exhausted":
+                        task_queue._mark_recovery_available(refreshed_task, final_error or "Recovery budget exhausted again")
+                    elif final_status == "no_progress":
+                        task_queue._mark_recovery_available(refreshed_task, final_error)
+                    task_queue._finalize_parent(refreshed_task, final_status, result=result["content"] if result else "", error=final_error)
                 _local.resume = None
                 task_queue._local.task_id = None
                 with _lock:
