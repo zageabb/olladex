@@ -114,6 +114,10 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
   let integrationBuilt = false;
   let integrationPushed = false;
   let finalPrCreated = false;
+  let boardStatus = 'reviewing';
+  let integrationBranch = '';
+  let integrationPath = '';
+  let integrationCheckStatus = '';
   const coordinatorAfter:string[] = [];
   const blackboardAfter:string[] = [];
   const run = {
@@ -128,7 +132,7 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
       return true;
     }
     if (p === '/api/projects/1/swarms') {
-      await json([run]);
+      await json([{...run,status:boardStatus}]);
       return true;
     }
     if (p === '/api/swarms/7/board') {
@@ -139,7 +143,13 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
       const initial=coordinatorCursor==='0'&&blackboardCursor==='0';
       await json({
         swarm:{
-          id:7,title:'Auth hardening',status:'reviewing',
+          id:7,title:'Auth hardening',status:boardStatus,
+          integration_path:integrationPath,
+          integration_branch:integrationBranch,
+          integration_check_status:integrationCheckStatus,
+          integration_pushed:integrationPushed?1:0,
+          integration_pr_number:finalPrCreated?42:0,
+          integration_pr_state:finalPrCreated?'OPEN':'',
           coordinator_activity:{category:'decision',content:'Coordinator opened final verification.'},
           coordinator_budget:{used:3,budget:20,remaining:17},
           agents:[
@@ -162,7 +172,8 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
           {id:3,task_id:11,category:'finding',content:'| Check | Status |\n| --- | --- |\n| Auth | Ready |',created_at:new Date().toISOString()}
         ]:[],
         cursors:{event:0,coordinator_event:21,blackboard:3},
-        repository:{repository:true,has_head:true,remotes:[{name:'origin',url:'git@github.com:zageabb/olladex.git'}],has_remote:true,github_remote:'origin',can_push:true,can_create_pull_request:true}
+        repository:{repository:true,has_head:true,remotes:[{name:'origin',url:'git@github.com:zageabb/olladex.git'}],has_remote:true,github_remote:'origin',can_push:true,can_create_pull_request:true},
+        locations:{main:'/demo',integration:integrationPath,specialists:[{task_id:11,title:'Inspect auth',role:'backend',path:'/tmp/task-11',branch:'olladex/task-11',status:'completed'}]}
       });
       return true;
     }
@@ -182,16 +193,21 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
     }
     if (p === '/api/swarms/7/integration' && route.request().method() === 'POST') {
       integrationBuilt = true;
-      await json({task_ids:[11],branches:['olladex/task-11'],overlaps:[],path:'/tmp/integration',branch:'olladex/swarm-7-integration'});
+      boardStatus = 'integrating';
+      integrationPath = '/tmp/integration';
+      integrationBranch = 'olladex/integration-swarm-7';
+      await json({task_ids:[11],branches:['olladex/task-11'],overlaps:[],path:integrationPath,branch:integrationBranch});
       return true;
     }
     if (p === '/api/swarms/7/integration/checks') {
-      await json({passed:true,output:'100 passed',command:'pytest'});
+      boardStatus = 'ready_to_promote';
+      integrationCheckStatus = 'passed';
+      await json({passed:true,output:'100 passed',command:'pytest',status:'ready_to_promote'});
       return true;
     }
     if (p === '/api/swarms/7/integration/push') {
       integrationPushed = true;
-      await json({branch:'olladex/swarm-7-integration'});
+      await json({branch:'olladex/integration-swarm-7'});
       return true;
     }
     if (p === '/api/swarms/7/integration/pull-request') {
@@ -395,7 +411,8 @@ test('swarm preflight can initialize local git and continue without a remote', a
   await expect.poll(()=>createdObjective).toBe('Improve local app');
 });
 
-test('verified local swarm integration does not require push or github', async ({ page }) => {
+test('local swarm must be promoted to main before completion', async ({ page }) => {
+  let promoted = false;
   await baseRoutes(page, async (route,url) => {
     const p=url.pathname;
     const json=(data:unknown)=>route.fulfill({json:data});
@@ -404,23 +421,35 @@ test('verified local swarm integration does not require push or github', async (
       return true;
     }
     if (p === '/api/projects/1/swarms') {
-      await json([{id:10,title:'Local only',status:'completed',max_agents:4,max_concurrency:2,total_agents_created:1}]);
+      await json([{id:10,title:'Local only',status:promoted?'completed':'ready_to_promote',max_agents:4,max_concurrency:2,total_agents_created:1}]);
       return true;
     }
     if (p === '/api/swarms/10/board') {
       await json({
         swarm:{
-          id:10,title:'Local only',status:'completed',
+          id:10,title:'Local only',status:promoted?'completed':'ready_to_promote',
           integration_path:'/tmp/local-integration',
-          integration_branch:'olladex/swarm-10-integration',
+          integration_branch:'olladex/integration-swarm-10',
           integration_check_status:'passed',
           integration_check_output:'all good',
+          promotion_status:promoted?'promoted':'',
+          promoted_commit:promoted?'abc123def456':'',
           agents:[{id:101,title:'Local change',status:'completed',agent_role:'backend',task_kind:'backend',worktree_branch:'olladex/task-101',progress:100}]
         },
         summary:{total_agents:1,active_agents:0,completed_agents:1,failed_agents:0,progress:100,max_agents:4,max_concurrency:2,integration_ready:true},
         events:[],coordinator_events:[],blackboard:[],cursors:{event:0,coordinator_event:0,blackboard:0},
-        repository:{repository:true,has_head:true,remotes:[],has_remote:false,github_remote:'',can_push:false,can_create_pull_request:false}
+        repository:{repository:true,has_head:true,remotes:[],has_remote:false,github_remote:'',can_push:false,can_create_pull_request:false},
+        locations:{
+          main:'/Users/test/project',
+          integration:'/tmp/local-integration',
+          specialists:[{task_id:101,title:'Local change',role:'backend',path:'/tmp/task-101',branch:'olladex/task-101',status:'completed'}]
+        }
       });
+      return true;
+    }
+    if (p === '/api/swarms/10/integration/promote') {
+      promoted = true;
+      await json({status:'completed',promotion:{main_commit:'abc123def456',main_path:'/Users/test/project',integration_commit:'abc123def456'}});
       return true;
     }
     return false;
@@ -431,6 +460,15 @@ test('verified local swarm integration does not require push or github', async (
 
   await expect(page.getByRole('heading', {name:'Local only'})).toBeVisible();
   await expect(page.getByText('Verified local integration branch ready')).toBeVisible();
+  await expect(page.getByText(/has not yet been promoted to main/)).toBeVisible();
+  await expect(page.getByText('/Users/test/project')).toBeVisible();
+  await expect(page.getByText('/tmp/local-integration')).toBeVisible();
+  await expect(page.getByText(/olladex\/task-101/)).toBeVisible();
+  await expect(page.getByRole('button', {name:'Promote to main'})).toBeVisible();
   await expect(page.getByRole('button', {name:'Push branch'})).toHaveCount(0);
   await expect(page.getByRole('button', {name:'Create final PR'})).toHaveCount(0);
+
+  await page.getByRole('button', {name:'Promote to main'}).click();
+  await expect.poll(()=>promoted).toBe(true);
+  await expect(page.getByText(/Swarm #10 · completed · 100% complete/)).toBeVisible();
 });
