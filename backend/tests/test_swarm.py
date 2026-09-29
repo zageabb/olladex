@@ -1371,3 +1371,185 @@ def test_unresolved_command_approval_prevents_orchestration_completion(tmp_path,
     waiting_agent = next(item for item in run["agents"] if item["id"] == specialist["id"])
     assert waiting_agent["status"] == "waiting_for_approval"
     assert waiting_agent["pending_approval"]["command"] == "pytest -q"
+
+
+def test_agent_budget_grant_is_additive_and_resumes_same_task_checkpoint(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id, max_agents=3, max_concurrency=2)
+    task = task_queue.enqueue(
+        project_id, session_id, "Budgeted agent", "continue work",
+        swarm_id=swarm_id, source_kind="swarm_specialist",
+        agent_role="backend", task_kind="backend",
+    )
+    stamp = now()
+    with connect() as conn:
+        conn.execute(
+            "UPDATE background_tasks SET status='budget_exhausted',worktree_path=?,worktree_branch=?,error=? WHERE id=?",
+            (str(tmp_path / "task-worktree"), "olladex/task-budget", "budget exhausted", task["id"]),
+        )
+        run_id = int(conn.execute(
+            "INSERT INTO agent_runs(session_id,task_id,status,checkpoint,cancel_requested,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+            (session_id, task["id"], "budget_exhausted", '[{"role":"user","content":"original"}]', 0, stamp, stamp),
+        ).lastrowid)
+
+    launched = {}
+    monkeypatch.setattr(
+        conversation_runtime,
+        "launch",
+        lambda session_id, content, resume_id=None: launched.update(
+            {"session_id": session_id, "content": content, "resume_id": resume_id}
+        ) or {"id": 999, "session_id": session_id, "task_id": task["id"], "status": "running"},
+    )
+
+    request = swarm.ensure_budget_request(
+        swarm_id,
+        scope="agent",
+        task_id=task["id"],
+        run_id=run_id,
+        requested_amount=10,
+        reason="Agent made progress and needs a small extension.",
+    )
+    result = swarm.decide_budget_request(request["id"], accepted=True, amount=25, decided_by="user")
+
+    assert result["status"] == "granted"
+    assert result["granted_amount"] == 25
+    assert launched["session_id"] == session_id
+    assert launched["resume_id"] == run_id
+    assert "Continue the same task" in launched["content"]
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT budget_extra,status,worktree_path FROM background_tasks WHERE id=?",
+            (task["id"],),
+        ).fetchone()
+        profile_budget = int(conn.execute(
+            "SELECT sp.agent_tool_budget FROM swarm_runs sr JOIN swarm_profiles sp ON sp.id=sr.profile_id WHERE sr.id=?",
+            (swarm_id,),
+        ).fetchone()["agent_tool_budget"])
+    assert row["budget_extra"] == 25
+    assert row["status"] == "budget_exhausted"
+    assert row["worktree_path"] == str(tmp_path / "task-worktree")
+    with task_queue.bind(task["id"]):
+        settings = task_queue.current_model_settings()
+    assert settings["agent_tool_budget"] == profile_budget + 25
+
+
+def test_coordinator_budget_extension_is_run_local_and_additive(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id)
+    with connect() as conn:
+        profile_id = int(conn.execute("SELECT profile_id FROM swarm_runs WHERE id=?", (swarm_id,)).fetchone()["profile_id"])
+        conn.execute("UPDATE swarm_profiles SET coordinator_tool_budget=2 WHERE id=?", (profile_id,))
+
+    swarm.consume_coordinator_budget(swarm_id, "one")
+    swarm.consume_coordinator_budget(swarm_id, "two")
+    assert swarm.consume_coordinator_budget(swarm_id, "blocked")["allowed"] is False
+
+    request = swarm.ensure_budget_request(
+        swarm_id,
+        scope="coordinator",
+        requested_amount=10,
+        reason="Coordinator needs more decision budget.",
+    )
+    result = swarm.decide_budget_request(request["id"], accepted=True, amount=10, decided_by="user")
+
+    assert result["status"] == "granted"
+    assert swarm.coordinator_budget(swarm_id)["budget"] == 12
+    assert swarm.consume_coordinator_budget(swarm_id, "after extension")["allowed"] is True
+    with connect() as conn:
+        base = int(conn.execute("SELECT coordinator_tool_budget FROM swarm_profiles WHERE id=?", (profile_id,)).fetchone()[0])
+        extra = int(conn.execute("SELECT coordinator_budget_extra FROM swarm_runs WHERE id=?", (swarm_id,)).fetchone()[0])
+    assert base == 2
+    assert extra == 10
+
+
+def test_declining_agent_budget_turns_exhaustion_into_recoverable_failure(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id)
+    task = task_queue.enqueue(
+        project_id, session_id, "Budgeted agent", "work",
+        swarm_id=swarm_id, source_kind="swarm_specialist",
+        agent_role="backend", task_kind="backend",
+    )
+    stamp = now()
+    with connect() as conn:
+        conn.execute("UPDATE background_tasks SET status='budget_exhausted' WHERE id=?", (task["id"],))
+        run_id = int(conn.execute(
+            "INSERT INTO agent_runs(session_id,task_id,status,cancel_requested,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+            (session_id, task["id"], "budget_exhausted", 0, stamp, stamp),
+        ).lastrowid)
+    request = swarm.ensure_budget_request(
+        swarm_id, scope="agent", task_id=task["id"], run_id=run_id, requested_amount=10, reason="Need more"
+    )
+
+    result = swarm.decide_budget_request(request["id"], accepted=False, decided_by="user")
+
+    assert result["status"] == "declined"
+    with connect() as conn:
+        row = conn.execute("SELECT status,error FROM background_tasks WHERE id=?", (task["id"],)).fetchone()
+    assert row["status"] == "failed"
+    assert "declined" in row["error"].lower()
+
+
+def test_declining_coordinator_budget_stops_orchestration(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id)
+    request = swarm.ensure_budget_request(
+        swarm_id, scope="coordinator", requested_amount=10, reason="Need more decision budget"
+    )
+
+    result = swarm.decide_budget_request(request["id"], accepted=False, decided_by="user")
+
+    assert result["status"] == "declined"
+    assert swarm.get_run(swarm_id)["status"] == "failed"
+
+
+def test_repeated_coordinator_auto_grants_escalate_agent_budget_to_user(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id)
+    task = task_queue.enqueue(
+        project_id, session_id, "Repeated exhaustion", "work",
+        swarm_id=swarm_id, source_kind="swarm_specialist",
+        agent_role="backend", task_kind="backend",
+    )
+    stamp = now()
+    with connect() as conn:
+        conn.execute("UPDATE background_tasks SET status='budget_exhausted',worktree_path=? WHERE id=?", (str(tmp_path / "wt"), task["id"]))
+        run_id = int(conn.execute(
+            "INSERT INTO agent_runs(session_id,task_id,status,cancel_requested,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+            (session_id, task["id"], "budget_exhausted", 0, stamp, stamp),
+        ).lastrowid)
+        for amount in (10, 10):
+            conn.execute(
+                "INSERT INTO swarm_budget_requests(swarm_id,task_id,run_id,scope,status,requested_amount,granted_amount,reason,decided_by,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (swarm_id, task["id"], run_id, "agent", "granted", amount, amount, "auto", "coordinator", stamp, stamp),
+            )
+
+    exhausted = next(item for item in swarm.list_agents(swarm_id) if item["id"] == task["id"])
+    handled = swarm_coordinator._consider_budget_exhaustion(swarm.get_run(swarm_id), [exhausted], [])
+
+    assert handled is True
+    pending = swarm.budget_requests(swarm_id, pending_only=True)
+    assert len(pending) == 1
+    assert pending[0]["scope"] == "agent"
+    assert pending[0]["task_id"] == task["id"]
+    assert pending[0]["requested_amount"] == 25
+    assert "repeatedly" in pending[0]["reason"].lower()
+
+
+def test_budget_decision_route_updates_correct_request(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id)
+    request = swarm.ensure_budget_request(
+        swarm_id, scope="coordinator", requested_amount=10, reason="Need budget"
+    )
+
+    result = swarm_routes.decide_swarm_budget_request(
+        swarm_id,
+        request["id"],
+        swarm_routes.BudgetDecisionRequest(accepted=True, amount=25),
+    )
+
+    assert result["status"] == "granted"
+    assert result["granted_amount"] == 25
+    assert swarm.coordinator_budget(swarm_id)["budget"] >= 25
