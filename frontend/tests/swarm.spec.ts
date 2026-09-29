@@ -245,7 +245,7 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
   await expect.poll(()=>coordinatorAfter.includes('21'),{timeout:5000}).toBe(true);
   await expect.poll(()=>blackboardAfter.includes('3'),{timeout:5000}).toBe(true);
 
-  await page.getByPlaceholder('Guide the Swarm…').fill('Prioritise regression tests.');
+  await page.getByPlaceholder('Guide Advanced orchestration…').fill('Prioritise regression tests.');
   await page.getByRole('button', {name:'Coordinator'}).click();
   await expect.poll(() => coordinatorGuidance).toBe('Prioritise regression tests.');
 
