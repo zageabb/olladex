@@ -83,15 +83,15 @@ test('interaction layer can enable, preflight and start a swarm', async ({ page 
   await page.locator('.rail').getByRole('button', {name:'Tasks'}).click();
 
   await expect(page.getByText('Agent board', {exact:true})).toBeVisible();
-  await page.getByText(/Swarm controls/).click();
-  await expect(page.getByRole('button', {name:'Enable Swarm'})).toBeVisible();
+  await page.getByText(/Advanced orchestration controls/).click();
+  await expect(page.getByRole('button', {name:'Enable Advanced orchestration'})).toBeVisible();
 
-  await page.getByRole('button', {name:'Enable Swarm'}).click();
+  await page.getByRole('button', {name:'Enable Advanced orchestration'}).click();
   await expect.poll(() => swarmEnabled).toBe(true);
 
   await page.getByText('Model & policy settings').click();
   await page.getByRole('combobox', {name:'Coordinator', exact:true}).selectOption('2');
-  await page.getByRole('button', {name:'Save Swarm settings'}).click();
+  await page.getByRole('button', {name:'Save Advanced orchestration settings'}).click();
   await expect.poll(() => savedCoordinatorProfile).toBe(2);
 
   await page.getByRole('button', {name:'Test local models'}).click();
@@ -101,11 +101,11 @@ test('interaction layer can enable, preflight and start a swarm', async ({ page 
   await expect(modelResults.getByText('qwen2.5-coder:7b', {exact:true})).toBeVisible();
   await expect(modelResults.getByText(/280 ms/)).toBeVisible();
 
-  await page.getByPlaceholder('Describe the larger outcome for the Swarm…').fill('Harden authentication');
-  await page.getByRole('button', {name:'Preflight & start Swarm'}).click();
+  await page.getByPlaceholder('Describe the larger outcome for Advanced orchestration…').fill('Harden authentication');
+  await page.getByRole('button', {name:'Preflight & start Advanced orchestration'}).click();
 
   await expect.poll(() => createdObjective).toBe('Harden authentication');
-  await expect(page.getByText(/Swarm #7 started/)).toBeVisible();
+  await expect(page.getByText(/Advanced orchestration #7 started/)).toBeVisible();
 });
 
 test('interaction agent board renders and controls a live swarm', async ({ page }) => {
@@ -235,7 +235,7 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
   await page.locator('.rail').getByRole('button', {name:'Tasks'}).click();
 
   await expect(page.getByRole('heading', {name:'Auth hardening'})).toBeVisible();
-  await expect(page.getByText(/Swarm #7 · reviewing · 100% agent work/)).toBeVisible();
+  await expect(page.getByText(/Advanced orchestration #7 · reviewing · 100% agent work/)).toBeVisible();
   await expect(page.getByText('Inspect auth')).toBeVisible();
   await expect(page.getByText(/backend · completed · 100%/)).toBeVisible();
   await expect(page.getByText('Final review', {exact:true})).toBeVisible();
@@ -338,7 +338,7 @@ test('interaction agent board can steer an active agent and switch between swarm
   await page.getByLabel('Run').selectOption('8');
   await expect(page.getByRole('heading', {name:'Previous swarm'})).toBeVisible();
   await expect(page.getByText('Historical task')).toBeVisible();
-  await expect(page.getByText(/Swarm #8 · completed · 100% complete/)).toBeVisible();
+  await expect(page.getByText(/Advanced orchestration #8 · completed · 100% complete/)).toBeVisible();
 });
 
 
@@ -397,17 +397,17 @@ test('swarm preflight can initialize local git and continue without a remote', a
 
   await page.goto('/');
   await page.locator('.rail').getByRole('button', {name:'Tasks'}).click();
-  await page.getByText(/Swarm controls/).click();
+  await page.getByText(/Advanced orchestration controls/).click();
 
-  await page.getByPlaceholder('Describe the larger outcome for the Swarm…').fill('Improve local app');
-  await page.getByRole('button', {name:'Preflight & start Swarm'}).click();
+  await page.getByPlaceholder('Describe the larger outcome for Advanced orchestration…').fill('Improve local app');
+  await page.getByRole('button', {name:'Preflight & start Advanced orchestration'}).click();
 
   await expect(page.getByRole('button', {name:'Initialize local Git'})).toBeVisible();
   await page.getByRole('button', {name:'Initialize local Git'}).click();
   await expect.poll(()=>initialized).toBe(true);
   await expect(page.getByText(/Local-only Git repository/)).toBeVisible();
 
-  await page.getByRole('button', {name:'Preflight & start Swarm'}).click();
+  await page.getByRole('button', {name:'Preflight & start Advanced orchestration'}).click();
   await expect.poll(()=>createdObjective).toBe('Improve local app');
 });
 
@@ -470,5 +470,5 @@ test('local swarm must be promoted to main before completion', async ({ page }) 
 
   await page.getByRole('button', {name:'Promote to main'}).click();
   await expect.poll(()=>promoted).toBe(true);
-  await expect(page.getByText(/Swarm #10 · completed · 100% complete/)).toBeVisible();
+  await expect(page.getByText(/Advanced orchestration #10 · completed · 100% complete/)).toBeVisible();
 });
