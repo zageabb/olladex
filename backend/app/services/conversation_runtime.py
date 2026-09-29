@@ -253,7 +253,7 @@ def approve(command_id, accepted):
     return {'status': 'approved' if accepted else 'rejected'}
 
 
-def launch(session_id, content, resume_id=None):
+def launch(session_id, content, resume_id=None, recovery_metadata=None):
     checkpoint_data = None
     task_id = None
     if resume_id:
@@ -275,7 +275,16 @@ def launch(session_id, content, resume_id=None):
             if not Path(task['worktree_path']).is_dir():
                 raise HTTPException(409, 'The task workspace is unavailable; start a new conversation to use the main project')
             task_id = task['id']
-    run_id = create(session_id, task_id)
+    recovery_metadata = recovery_metadata or {}
+    run_id = create(
+        session_id,
+        task_id,
+        resumed_from_run_id=resume_id,
+        recovery_attempt=int(recovery_metadata.get("recovery_attempt") or 0),
+        checkpoint_restored=bool(resume_id and checkpoint_data),
+        starting_head=str(recovery_metadata.get("starting_head") or ""),
+        starting_diff=str(recovery_metadata.get("starting_diff") or "")[:500000],
+    )
     def worker():
         with bind(run_id):
             from . import task_queue
@@ -296,7 +305,32 @@ def launch(session_id, content, resume_id=None):
                         result['content'] += f'\n\nTask branch auto-committed as {sha[:12]}.'
                 emit('final', result)
                 if get(run_id)['status'] == 'running':
-                    state('completed')
+                    if resume_id and task_id:
+                        evidence = _validate_recovery_completion(task_id, run_id, result, recovery_metadata)
+                        if not evidence["ok"]:
+                            with connect() as conn:
+                                conn.execute(
+                                    "UPDATE agent_runs SET completion_evidence=?,no_progress_reason=?,updated_at=? WHERE id=?",
+                                    (json.dumps(evidence, default=str), evidence["reason"], now(), run_id),
+                                )
+                                conn.execute(
+                                    "UPDATE background_tasks SET completion_evidence=?,no_progress_reason=?,status='no_progress',error=? WHERE id=?",
+                                    (json.dumps(evidence, default=str), evidence["reason"], evidence["reason"], task_id),
+                                )
+                            state('no_progress')
+                        else:
+                            with connect() as conn:
+                                conn.execute(
+                                    "UPDATE agent_runs SET completion_evidence=?,updated_at=? WHERE id=?",
+                                    (json.dumps(evidence, default=str), now(), run_id),
+                                )
+                                conn.execute(
+                                    "UPDATE background_tasks SET completion_evidence=?,no_progress_reason='' WHERE id=?",
+                                    (json.dumps(evidence, default=str), task_id),
+                                )
+                            state('completed')
+                    else:
+                        state('completed')
             except Exception as exc:
                 from .ollama import AgentCancelled, BudgetExhausted
                 error = str(exc)
@@ -321,6 +355,42 @@ def launch(session_id, content, resume_id=None):
         _threads[run_id] = thread
     thread.start()
     return get(run_id)
+
+
+def _validate_recovery_completion(task_id: int, run_id: int, result: dict, recovery_metadata: dict) -> dict:
+    from . import task_queue, worktrees
+    task = task_queue.get(task_id)
+    project = task_queue._project_for_task(task)
+    summary = worktrees.summary(project, task["worktree_path"]) if task.get("worktree_path") else {}
+    activities = list(result.get("activities") or [])
+    meaningful_tools = {"write_file", "apply_patch", "run_command"}
+    meaningful = [item for item in activities if str(item.get("tool") or "") in meaningful_tools]
+    checks = [item for item in activities if str(item.get("tool") or "") == "run_command"]
+    starting_head = str(recovery_metadata.get("starting_head") or "")
+    ending_head = str(summary.get("head") or "")
+    head_changed = bool(starting_head and ending_head and starting_head != ending_head)
+    working_changes = bool(summary.get("changes"))
+    response = str(result.get("content") or "").strip()
+    ok = bool(response) and bool(meaningful or head_changed or working_changes)
+    reason = ""
+    if not response:
+        reason = "Recovery produced an empty final response."
+    elif not (meaningful or head_changed or working_changes):
+        reason = "Recovery made no meaningful changes, checks, or commits."
+    evidence = {
+        "ok": ok,
+        "reason": reason,
+        "run_id": run_id,
+        "response_nonempty": bool(response),
+        "activity_count": len(activities),
+        "meaningful_tools": [str(item.get("tool") or "") for item in meaningful],
+        "checks_run": len(checks),
+        "starting_head": starting_head,
+        "ending_head": ending_head,
+        "head_changed": head_changed,
+        "worktree_changes": summary.get("changes") or [],
+    }
+    return evidence
 
 
 def resume_messages():
