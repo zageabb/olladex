@@ -195,8 +195,24 @@ CREATE TABLE IF NOT EXISTS swarm_runs (
   promotion_status TEXT NOT NULL DEFAULT '',
   promoted_commit TEXT NOT NULL DEFAULT '',
   promotion_output TEXT NOT NULL DEFAULT '',
-  coordinator_instructions TEXT NOT NULL DEFAULT ''
+  coordinator_instructions TEXT NOT NULL DEFAULT '',
+  coordinator_budget_extra INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS swarm_budget_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  swarm_id INTEGER NOT NULL REFERENCES swarm_runs(id) ON DELETE CASCADE,
+  task_id INTEGER REFERENCES background_tasks(id) ON DELETE CASCADE,
+  run_id INTEGER REFERENCES agent_runs(id) ON DELETE SET NULL,
+  scope TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  requested_amount INTEGER NOT NULL DEFAULT 0,
+  granted_amount INTEGER NOT NULL DEFAULT 0,
+  reason TEXT NOT NULL DEFAULT '',
+  decided_by TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS swarm_budget_requests_swarm ON swarm_budget_requests(swarm_id,id);
 CREATE TABLE IF NOT EXISTS swarm_coordinator_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   swarm_id INTEGER NOT NULL REFERENCES swarm_runs(id) ON DELETE CASCADE,
@@ -291,6 +307,7 @@ ADDITIVE_COLUMNS = {
         "promoted_commit": "TEXT NOT NULL DEFAULT ''",
         "promotion_output": "TEXT NOT NULL DEFAULT ''",
         "coordinator_instructions": "TEXT NOT NULL DEFAULT ''",
+        "coordinator_budget_extra": "INTEGER NOT NULL DEFAULT 0",
     },
     "background_tasks": {
         "worktree_path": "TEXT NOT NULL DEFAULT ''", "worktree_branch": "TEXT NOT NULL DEFAULT ''",
@@ -307,6 +324,7 @@ ADDITIVE_COLUMNS = {
         "depth": "INTEGER NOT NULL DEFAULT 0",
         "progress": "INTEGER NOT NULL DEFAULT 0",
         "current_activity": "TEXT NOT NULL DEFAULT ''",
+        "budget_extra": "INTEGER NOT NULL DEFAULT 0",
     },
 }
 
