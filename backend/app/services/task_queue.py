@@ -766,7 +766,7 @@ def _finalize_parent(task: dict, final_status: str, result: str = "", error: str
         return
     with connect() as conn:
         parent = conn.execute("SELECT status FROM background_tasks WHERE id=?", (parent_id,)).fetchone()
-        if not parent or parent["status"] not in {"coordinating", "queued"}:
+        if not parent or parent["status"] not in {"coordinating", "queued", "recovering", "recovery_available"}:
             return
         if final_status == "completed":
             conn.execute("UPDATE background_tasks SET status='completed',result=?,completed_at=? WHERE id=?", (result, now(), parent_id))
