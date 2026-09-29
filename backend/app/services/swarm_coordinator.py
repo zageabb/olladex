@@ -207,6 +207,22 @@ def _consider_budget_exhaustion(run: dict, exhausted: list[dict], completed: lis
     target = exhausted[0]
     task_id = int(target["id"])
     run_id = int(target.get("run_id") or 0)
+    prior_auto_grants = [
+        item for item in swarm.budget_requests(swarm_id)
+        if int(item.get("task_id") or 0) == task_id
+        and item.get("status") == "granted"
+        and item.get("decided_by") == "coordinator"
+    ]
+    if len(prior_auto_grants) >= 2:
+        swarm.ensure_budget_request(
+            swarm_id,
+            scope="agent",
+            task_id=task_id,
+            run_id=run_id or None,
+            requested_amount=25,
+            reason="This agent has exhausted its budget repeatedly after Coordinator extensions; user guidance is required before adding more.",
+        )
+        return True
     if not run_id:
         swarm.ensure_budget_request(
             swarm_id,
