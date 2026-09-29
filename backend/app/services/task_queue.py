@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+from pathlib import Path
 from collections.abc import Callable
 
 from ..config import settings
@@ -143,6 +144,317 @@ def cancel(task_id: int) -> dict:
             conn.execute("UPDATE background_tasks SET cancel_requested=1 WHERE id=?", (task_id,))
     _wake.set()
     return get(task_id)
+
+
+def recovery_info(task_id: int) -> dict:
+    task = get(task_id)
+    if not task:
+        raise ValueError("Background task not found")
+    with connect() as conn:
+        active = conn.execute(
+            "SELECT id,status FROM agent_runs WHERE task_id=? AND status IN ('running','waiting_for_approval','waiting_for_input') ORDER BY id DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        prior = conn.execute(
+            "SELECT * FROM agent_runs WHERE task_id=? AND status IN ('budget_exhausted','interrupted','failed','cancelled','no_progress') ORDER BY id DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        profile = conn.execute(
+            "SELECT sp.agent_tool_budget,sp.resumed_task_tool_budget,sp.max_recovery_attempts "
+            "FROM background_tasks bt LEFT JOIN swarm_runs sr ON sr.id=bt.swarm_id "
+            "LEFT JOIN swarm_profiles sp ON sp.id=sr.profile_id WHERE bt.id=?",
+            (task_id,),
+        ).fetchone()
+    checkpoint = str(prior["checkpoint"] or "") if prior else ""
+    worktree_path = str(task.get("worktree_path") or "")
+    worktree_branch = str(task.get("worktree_branch") or "")
+    worktree_available = bool(worktree_path and Path(worktree_path).is_dir())
+    branch_available = False
+    if worktree_branch:
+        try:
+            project = _project_for_task(task)
+            from . import worktrees
+            code, _ = worktrees._git(Path(project["path"]).expanduser().resolve(), "show-ref", "--verify", "--quiet", f"refs/heads/{worktree_branch}")
+            branch_available = code == 0
+        except Exception:
+            branch_available = False
+    blocking = task.get("blocking_dependency_ids") or []
+    if not isinstance(blocking, list):
+        try:
+            blocking = json.loads(blocking or "[]")
+        except (TypeError, json.JSONDecodeError):
+            blocking = []
+    return {
+        "task_id": task_id,
+        "status": task.get("status"),
+        "session_id": int(task.get("session_id") or 0),
+        "active_run_id": int(active["id"]) if active else 0,
+        "active_run_status": str(active["status"]) if active else "",
+        "prior_run_id": int(prior["id"]) if prior else 0,
+        "prior_run_status": str(prior["status"]) if prior else "",
+        "checkpoint_available": bool(checkpoint and checkpoint not in {"[]", "null"}),
+        "checkpoint_bytes": len(checkpoint.encode("utf-8")) if checkpoint else 0,
+        "worktree_path": worktree_path,
+        "worktree_branch": worktree_branch,
+        "worktree_available": worktree_available,
+        "branch_available": branch_available,
+        "previous_budget": int(profile["agent_tool_budget"] or 0) if profile else 0,
+        "resumed_budget": int(profile["resumed_task_tool_budget"] or 20) if profile else 20,
+        "max_recovery_attempts": int(profile["max_recovery_attempts"] or 2) if profile else 2,
+        "recovery_attempt": int(task.get("recovery_attempt") or 0),
+        "blocking_dependency_ids": [int(item) for item in blocking],
+        "can_resume": (
+            not active
+            and task.get("status") in {"budget_exhausted", "interrupted", "no_progress", "incomplete", "failed"}
+            and bool(prior)
+            and bool(checkpoint and checkpoint not in {"[]", "null"})
+            and (worktree_available or branch_available)
+        ),
+    }
+
+
+def _recovery_context(task: dict, prior_run: dict, summary: dict, fresh_budget: int) -> str:
+    dependency_context = _dependency_context(task)
+    return (
+        "Continue the existing task from its saved checkpoint and worktree. Inspect saved changes and uncertain command "
+        "outcomes before editing. Do not restart or discard completed work. Do not claim completion until the task's "
+        "acceptance criteria are supported by evidence.\n\n"
+        f"Original task: {task.get('title') or ''}\n"
+        f"Original objective and acceptance criteria:\n{task.get('prompt') or ''}\n\n"
+        f"Prior result:\n{task.get('result') or 'No prior final result.'}\n\n"
+        f"Prior stop reason:\n{task.get('error') or prior_run.get('status') or 'Unknown'}\n\n"
+        f"Recovery budget: {fresh_budget} tool steps\n"
+        f"Checkpoint source run: #{prior_run.get('id')}\n"
+        f"Worktree: {task.get('worktree_path') or ''}\n"
+        f"Branch: {task.get('worktree_branch') or ''}\n"
+        f"Starting HEAD: {summary.get('head') or ''}\n"
+        f"Uncommitted status: {json.dumps(summary.get('changes') or [])}\n"
+        + (f"\n{dependency_context}\n" if dependency_context else "")
+        + "\nExplicit remaining work: inspect the saved checkpoint, current worktree, prior command outcomes and acceptance criteria; "
+        "finish only the work that remains, run relevant checks, and provide evidence for completion."
+    )
+
+
+def resume_task(
+    task_id: int,
+    *,
+    fresh_budget: int | None = None,
+    allow_failed: bool = False,
+    recreate_missing_worktree: bool = False,
+) -> dict:
+    from . import conversation_runtime, worktrees
+    task = get(task_id)
+    if not task:
+        raise ValueError("Background task not found")
+    allowed = {"budget_exhausted", "interrupted", "no_progress", "incomplete"}
+    if allow_failed:
+        allowed.add("failed")
+    if task.get("status") not in allowed:
+        raise ValueError(f"Task status '{task.get('status')}' is not resumable")
+
+    with connect() as conn:
+        active = conn.execute(
+            "SELECT id,status FROM agent_runs WHERE task_id=? AND status IN ('running','waiting_for_approval','waiting_for_input') ORDER BY id DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        if active:
+            raise ValueError(f"Task already has an active run #{active['id']} ({active['status']})")
+        prior = conn.execute(
+            "SELECT * FROM agent_runs WHERE task_id=? AND status IN ('budget_exhausted','interrupted','failed','cancelled','no_progress') ORDER BY id DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        profile = conn.execute(
+            "SELECT sp.agent_tool_budget,sp.resumed_task_tool_budget,sp.max_recovery_attempts "
+            "FROM background_tasks bt LEFT JOIN swarm_runs sr ON sr.id=bt.swarm_id "
+            "LEFT JOIN swarm_profiles sp ON sp.id=sr.profile_id WHERE bt.id=?",
+            (task_id,),
+        ).fetchone()
+    if not prior:
+        raise ValueError("No resumable prior run exists for this task")
+    prior = dict(prior)
+    checkpoint = str(prior.get("checkpoint") or "")
+    if not checkpoint or checkpoint in {"[]", "null"}:
+        raise ValueError("The most recent stopped run has no saved checkpoint")
+
+    project = _project_for_task(task)
+    worktree_path = str(task.get("worktree_path") or "")
+    branch = str(task.get("worktree_branch") or "")
+    if not branch:
+        raise ValueError("The original task branch is unavailable")
+    if not worktree_path or not Path(worktree_path).is_dir():
+        root = Path(project["path"]).expanduser().resolve()
+        code, _ = worktrees._git(root, "show-ref", "--verify", "--quiet", f"refs/heads/{branch}")
+        if code != 0:
+            raise ValueError("Both the original worktree and task branch are unavailable; automatic recovery is unsafe")
+        if not recreate_missing_worktree:
+            raise ValueError("The original worktree is missing but its branch still exists; retry with worktree recreation explicitly enabled")
+        recreated = worktrees.create_for_task(project, task_id)
+        if recreated["branch"] != branch:
+            raise ValueError("Recreated worktree did not attach to the original task branch")
+        set_worktree(task_id, recreated["path"], recreated["branch"])
+        task = get(task_id)
+        worktree_path = recreated["path"]
+
+    summary = worktrees.summary(project, worktree_path)
+    if summary.get("branch") != branch:
+        raise ValueError(f"Recovery worktree is on '{summary.get('branch')}', expected '{branch}'")
+
+    current_attempt = int(task.get("recovery_attempt") or 0)
+    max_attempts = int(profile["max_recovery_attempts"] or 2) if profile else 2
+    attempt = current_attempt + 1
+    if attempt > max_attempts:
+        raise ValueError(f"Task has reached the maximum recovery attempts ({max_attempts})")
+    default_budget = int(profile["resumed_task_tool_budget"] or 20) if profile else 20
+    budget = max(1, min(int(fresh_budget or default_budget), 200))
+    starting_diff = json.dumps(
+        {
+            "branch_diff": summary.get("branch_diff") or "",
+            "working_diff": summary.get("working_diff") or "",
+            "changes": summary.get("changes") or [],
+        },
+        default=str,
+    )[:500000]
+    try:
+        lineage = task.get("retry_lineage") or []
+        if not isinstance(lineage, list):
+            lineage = json.loads(lineage or "[]")
+    except (TypeError, json.JSONDecodeError):
+        lineage = []
+    lineage = [*lineage, int(prior["id"])]
+
+    previous = {
+        "budget_override": int(task.get("budget_override") or 0),
+        "recovery_attempt": current_attempt,
+        "retry_lineage": task.get("retry_lineage") if isinstance(task.get("retry_lineage"), str) else json.dumps(task.get("retry_lineage") or []),
+    }
+    with connect() as conn:
+        conn.execute(
+            "UPDATE background_tasks SET budget_override=?,recovery_attempt=?,retry_lineage=?,no_progress_reason='',error='',completed_at='',current_activity=? WHERE id=?",
+            (budget, attempt, json.dumps(lineage), f"Recovery attempt {attempt}: restoring checkpoint from run #{prior['id']}", task_id),
+        )
+        if task.get("parent_task_id"):
+            conn.execute(
+                "UPDATE background_tasks SET status='recovering',error='' WHERE id=? AND status IN ('coordinating','recovery_available','failed')",
+                (task["parent_task_id"],),
+            )
+        if task.get("swarm_id"):
+            conn.execute(
+                "UPDATE swarm_runs SET status='recovering',completed_at='' WHERE id=? AND status NOT IN ('completed','cancelled')",
+                (task["swarm_id"],),
+            )
+
+    content = _recovery_context(get(task_id), prior, summary, budget)
+    try:
+        run = conversation_runtime.launch(
+            int(task["session_id"]),
+            content,
+            resume_id=int(prior["id"]),
+            recovery_metadata={
+                "recovery_attempt": attempt,
+                "starting_head": summary.get("head") or "",
+                "starting_diff": starting_diff,
+                "fresh_budget": budget,
+            },
+        )
+    except Exception:
+        with connect() as conn:
+            conn.execute(
+                "UPDATE background_tasks SET budget_override=?,recovery_attempt=?,retry_lineage=? WHERE id=?",
+                (previous["budget_override"], previous["recovery_attempt"], previous["retry_lineage"], task_id),
+            )
+        raise
+
+    if task.get("swarm_id"):
+        try:
+            from . import swarm
+            swarm.emit_coordinator_event(
+                int(task["swarm_id"]),
+                "recovery_run_started",
+                {
+                    "task_id": task_id,
+                    "prior_run_id": int(prior["id"]),
+                    "run_id": int(run["id"]),
+                    "recovery_attempt": attempt,
+                    "budget": budget,
+                    "worktree": worktree_path,
+                    "branch": branch,
+                    "checkpoint_bytes": len(checkpoint.encode("utf-8")),
+                },
+            )
+        except Exception:
+            pass
+    return {
+        "task_id": task_id,
+        "session_id": int(task["session_id"]),
+        "prior_run_id": int(prior["id"]),
+        "run_id": int(run["id"]),
+        "status": run["status"],
+        "checkpoint_restored": True,
+        "checkpoint_bytes": len(checkpoint.encode("utf-8")),
+        "recovery_attempt": attempt,
+        "fresh_budget": budget,
+        "worktree_path": worktree_path,
+        "worktree_branch": branch,
+        "starting_head": summary.get("head") or "",
+        "dirty_work_preserved": bool(summary.get("changes")),
+    }
+
+
+def blocked_descendants(task_id: int) -> list[dict]:
+    with connect() as conn:
+        tasks = [dict(row) for row in conn.execute(
+            "SELECT * FROM background_tasks WHERE project_id=(SELECT project_id FROM background_tasks WHERE id=?) ORDER BY id",
+            (task_id,),
+        )]
+    descendants: list[dict] = []
+    frontier = {int(task_id)}
+    seen: set[int] = set()
+    while frontier:
+        next_frontier: set[int] = set()
+        for item in tasks:
+            item_id = int(item["id"])
+            if item_id in seen or item["status"] != "dependency_failed":
+                continue
+            deps = _dependency_ids(item)
+            if any(dep in frontier for dep in deps):
+                try:
+                    blockers = json.loads(item.get("blocking_dependency_ids") or "[]")
+                except (TypeError, json.JSONDecodeError):
+                    blockers = []
+                item["depends_on"] = deps
+                item["blocking_dependency_ids"] = [int(value) for value in blockers]
+                descendants.append(item)
+                seen.add(item_id)
+                next_frontier.add(item_id)
+        frontier = next_frontier
+    return descendants
+
+
+def retry_blocked_dependants(task_id: int, *, full_chain: bool = True) -> dict:
+    root = get(task_id)
+    if not root:
+        raise ValueError("Background task not found")
+    if root.get("status") != "completed":
+        raise ValueError("The recovered task must complete successfully before blocked dependants can be retried")
+    descendants = blocked_descendants(task_id)
+    if not full_chain:
+        descendants = [item for item in descendants if task_id in _dependency_ids(item)]
+    reset: list[int] = []
+    with connect() as conn:
+        for item in descendants:
+            conn.execute(
+                "UPDATE background_tasks SET status='queued',error='',blocking_dependency_ids='[]',completed_at='',cancel_requested=0,current_activity='Retry queued after dependency recovery' WHERE id=? AND status='dependency_failed'",
+                (item["id"],),
+            )
+            reset.append(int(item["id"]))
+        parent_id = root.get("parent_task_id")
+        if parent_id and reset:
+            conn.execute("UPDATE background_tasks SET status='recovering',error='' WHERE id=?", (parent_id,))
+        if root.get("swarm_id") and reset:
+            conn.execute("UPDATE swarm_runs SET status='recovering',completed_at='' WHERE id=?", (root["swarm_id"],))
+    if reset:
+        _wake.set()
+    return {"task_id": task_id, "retried_task_ids": reset, "full_chain": full_chain}
 
 
 def current_task() -> dict:
