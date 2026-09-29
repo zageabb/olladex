@@ -1235,3 +1235,90 @@ def test_legacy_completed_unpromoted_swarm_migrates_back_to_finalization(tmp_pat
     assert row["completed_at"] == ""
     assert row["integration_path"] == ""
     assert row["promoted_commit"] == ""
+
+
+def test_agent_detail_only_exposes_current_active_run_pending_approval(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id, max_agents=3, max_concurrency=2)
+    task = task_queue.enqueue(
+        project_id, session_id, "Approval agent", "run command",
+        swarm_id=swarm_id, source_kind="swarm_specialist",
+        agent_role="backend", task_kind="backend",
+    )
+    stamp = now()
+    with connect() as conn:
+        old_run = int(conn.execute(
+            "INSERT INTO agent_runs(session_id,task_id,status,cancel_requested,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+            (session_id, task["id"], "completed", 0, stamp, stamp),
+        ).lastrowid)
+        active_run = int(conn.execute(
+            "INSERT INTO agent_runs(session_id,task_id,status,cancel_requested,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+            (session_id, task["id"], "waiting_for_approval", 0, stamp, stamp),
+        ).lastrowid)
+        old_command = int(conn.execute(
+            "INSERT INTO command_runs(project_id,task_id,run_id,cwd,command,output,exit_code,status,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (project_id, task["id"], old_run, "/old", "printf old", "", -1, "pending", stamp, stamp),
+        ).lastrowid)
+        active_command = int(conn.execute(
+            "INSERT INTO command_runs(project_id,task_id,run_id,cwd,command,output,exit_code,status,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (project_id, task["id"], active_run, "/active", "printf active", "", -1, "pending", stamp, stamp),
+        ).lastrowid)
+        conn.execute("UPDATE background_tasks SET status='waiting_for_approval' WHERE id=?", (task["id"],))
+
+    detail = swarm_routes.swarm_agent_detail(task["id"])
+
+    assert detail["run"]["id"] == active_run
+    assert detail["run"]["status"] == "waiting_for_approval"
+    assert [item["id"] for item in detail["active_pending_commands"]] == [active_command]
+    assert {item["id"] for item in detail["commands"]} >= {old_command, active_command}
+    agent = next(item for item in swarm.list_agents(swarm_id) if item["id"] == task["id"])
+    assert agent["pending_approval"]["id"] == active_command
+    assert agent["pending_approval"]["command"] == "printf active"
+    assert agent["session_id"] == session_id
+
+
+def test_board_marks_only_agent_with_current_pending_approval(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id, max_agents=4, max_concurrency=2)
+    waiting = task_queue.enqueue(
+        project_id, session_id, "Needs approval", "run command",
+        swarm_id=swarm_id, source_kind="swarm_specialist",
+        agent_role="backend", task_kind="backend",
+    )
+    other_session = None
+    with connect() as conn:
+        other_session = int(conn.execute(
+            "INSERT INTO sessions(project_id,title,created_at,updated_at) VALUES(?,?,?,?)",
+            (project_id, "Other agent", now(), now()),
+        ).lastrowid)
+    other = task_queue.enqueue(
+        project_id, other_session, "No approval", "work",
+        swarm_id=swarm_id, source_kind="swarm_specialist",
+        agent_role="tester", task_kind="tester",
+    )
+    stamp = now()
+    with connect() as conn:
+        waiting_run = int(conn.execute(
+            "INSERT INTO agent_runs(session_id,task_id,status,cancel_requested,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+            (session_id, waiting["id"], "waiting_for_approval", 0, stamp, stamp),
+        ).lastrowid)
+        conn.execute(
+            "INSERT INTO command_runs(project_id,task_id,run_id,cwd,command,output,exit_code,status,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (project_id, waiting["id"], waiting_run, "/repo", "pytest -q", "", -1, "pending", stamp, stamp),
+        )
+        conn.execute(
+            "INSERT INTO agent_runs(session_id,task_id,status,cancel_requested,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+            (other_session, other["id"], "running", 0, stamp, stamp),
+        )
+        conn.execute("UPDATE background_tasks SET status='waiting_for_approval' WHERE id=?", (waiting["id"],))
+        conn.execute("UPDATE background_tasks SET status='running' WHERE id=?", (other["id"],))
+
+    agents = swarm.list_agents(swarm_id)
+    waiting_agent = next(item for item in agents if item["id"] == waiting["id"])
+    other_agent = next(item for item in agents if item["id"] == other["id"])
+
+    assert waiting_agent["pending_approval"]["command"] == "pytest -q"
+    assert other_agent["pending_approval"] is None
