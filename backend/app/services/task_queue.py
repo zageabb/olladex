@@ -585,20 +585,38 @@ def _dependency_ids(task: dict) -> list[int]:
         return []
 
 
-def _dependency_state(conn, task: dict) -> tuple[bool, str, list[int]]:
+def _dependency_blockers(conn, task: dict) -> list[int]:
     dependency_ids = _dependency_ids(task)
     if not dependency_ids:
-        return True, "", []
+        return []
     placeholders = ",".join("?" for _ in dependency_ids)
-    states = {row["id"]: row["status"] for row in conn.execute(f"SELECT id,status FROM background_tasks WHERE id IN ({placeholders})", dependency_ids)}
+    states = {row["id"]: row["status"] for row in conn.execute(
+        f"SELECT id,status FROM background_tasks WHERE id IN ({placeholders})",
+        dependency_ids,
+    )}
     missing = [item for item in dependency_ids if item not in states]
     if missing:
-        return False, f"Missing dependency tasks: {missing}", missing
+        return missing
     blocked_statuses = {"failed", "cancelled", "budget_exhausted", "interrupted", "dependency_failed", "no_progress", "incomplete"}
-    blocked = [item for item, status in states.items() if status in blocked_statuses]
+    return [item for item, status in states.items() if status in blocked_statuses]
+
+
+def _dependency_state(conn, task: dict) -> tuple[bool, str]:
+    dependency_ids = _dependency_ids(task)
+    if not dependency_ids:
+        return True, ""
+    placeholders = ",".join("?" for _ in dependency_ids)
+    states = {row["id"]: row["status"] for row in conn.execute(
+        f"SELECT id,status FROM background_tasks WHERE id IN ({placeholders})",
+        dependency_ids,
+    )}
+    missing = [item for item in dependency_ids if item not in states]
+    if missing:
+        return False, f"Missing dependency tasks: {missing}"
+    blocked = _dependency_blockers(conn, task)
     if blocked:
-        return False, f"Blocked by dependency task(s): {blocked}", blocked
-    return all(states[item] == "completed" for item in dependency_ids), "", []
+        return False, f"Blocked by dependency task(s): {blocked}"
+    return all(states[item] == "completed" for item in dependency_ids), ""
 
 
 def _dependency_context(task: dict) -> str:
@@ -671,8 +689,9 @@ def _claim_next() -> dict | None:
                 ).fetchone()[0]
                 if int(active) >= max(1, int(swarm["max_concurrency"] or 1)):
                     continue
-            ready, blocked_reason, blocking_ids = _dependency_state(conn, task)
+            ready, blocked_reason = _dependency_state(conn, task)
             if blocked_reason:
+                blocking_ids = _dependency_blockers(conn, task)
                 conn.execute(
                     "UPDATE background_tasks SET status='dependency_failed',error=?,blocking_dependency_ids=?,completed_at=? WHERE id=? AND status='queued'",
                     (blocked_reason, json.dumps(blocking_ids), now(), task["id"]),
