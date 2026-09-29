@@ -721,6 +721,27 @@ A specialist may request help from the Coordinator when another bounded role wou
 
 The specialist cannot create another agent directly. The Coordinator decides whether to decline the request or use spare dynamic-swarm capacity to create one helper. Final challenger/reviewer verification remains downstream of any accepted helper.
 
+### 15.6 Advanced orchestration command approvals
+
+Advanced orchestration agents use the same command approval policy as normal conversations.
+
+When a background agent is waiting for an assisted-mode command approval:
+
+- the Agent Board shows a prominent **Command approval required** notification;
+- the parent board identifies the exact agent with **Agent #N needs command approval**;
+- opening that agent shows the exact command and working directory;
+- **Approve once** approves only that pending command;
+- **Decline** returns control to the same background agent so it can choose another approach;
+- **Open conversation** opens that agent's own conversation session, where approvals and questions can also be handled.
+
+Only a pending command belonging to the agent's current active `waiting_for_approval` run is actionable. Historical pending rows from completed, interrupted, failed, cancelled, or budget-exhausted runs are not offered for approval.
+
+In autonomous mode, normal commands do not show approval controls unless another explicit safety mechanism requires an approval.
+
+An Advanced orchestration run cannot finalize while a specialist command approval remains unresolved.
+
+---
+
 ### 15.7 Swarm finalization, integration and promotion
 
 Managed Swarm worktrees deliberately isolate agent changes from the configured project directory. A specialist or reviewer finishing does **not** mean those files are on `main`.
