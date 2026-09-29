@@ -195,3 +195,38 @@ def test_expected_deliverables_block_success_when_objective_evidence_is_missing(
     assert "tests" in evidence["missing"]
     assert "backup support" in evidence["missing"]
     assert "JSON persistence" in evidence["missing"]
+
+
+def test_blocked_promotion_never_resets_deletes_branches_or_removes_worktrees(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    monkeypatch.setattr(settings, "data_root", tmp_path / "data")
+    project = {"id": 36, "path": str(repo), "git_author_name": "Olladex Test", "git_author_email": "olladex-test@example.invalid"}
+    task = _task_branch(project, 36, "feature.txt", "feature\n")
+    result = integration.create(project, 36, [task["branch"]], "main", namespace="swarm")
+    (repo / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+
+    original_git = worktrees._git
+    calls: list[tuple[str, ...]] = []
+
+    def recording_git(root, *args, **kwargs):
+        calls.append(tuple(args))
+        return original_git(root, *args, **kwargs)
+
+    monkeypatch.setattr(worktrees, "_git", recording_git)
+
+    with pytest.raises(ValueError, match="dirty"):
+        integration.promote_to_main(project, result["path"], "main")
+
+    forbidden = []
+    for args in calls:
+        if not args:
+            continue
+        if args[0] in {"reset", "clean"}:
+            forbidden.append(args)
+        if args[0] == "worktree" and len(args) > 1 and args[1] == "remove":
+            forbidden.append(args)
+        if args[0] == "branch" and any(flag in args[1:3] for flag in ("-d", "-D")):
+            forbidden.append(args)
+    assert forbidden == []
+    assert Path(result["path"]).exists()
+    assert _git(repo, "show-ref", "--verify", f"refs/heads/{result['branch']}")
