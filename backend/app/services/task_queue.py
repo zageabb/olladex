@@ -145,6 +145,11 @@ def cancel(task_id: int) -> dict:
     return get(task_id)
 
 
+def current_task() -> dict:
+    task_id = current_task_id()
+    return get(task_id) if task_id else {}
+
+
 def current_task_id() -> int | None:
     return getattr(_local, "task_id", None)
 
@@ -382,20 +387,18 @@ def _finalize_swarm(task: dict, final_status: str, result: str = "", error: str 
     swarm_id = task.get("swarm_id")
     if not swarm_id or (task.get("agent_role") or "") != "reviewer":
         return
+    if final_status == "completed":
+        # Reviewer completion is evidence for the Coordinator finalization gate.
+        # It must never mark the Swarm complete by itself.
+        return
     with connect() as conn:
         swarm = conn.execute("SELECT status FROM swarm_runs WHERE id=?", (swarm_id,)).fetchone()
         if not swarm or swarm["status"] in {"completed", "failed", "cancelled"}:
             return
-        if final_status == "completed":
-            conn.execute(
-                "UPDATE swarm_runs SET status='completed',completed_at=? WHERE id=?",
-                (now(), swarm_id),
-            )
-        else:
-            conn.execute(
-                "UPDATE swarm_runs SET status='failed',completed_at=? WHERE id=?",
-                (now(), swarm_id),
-            )
+        conn.execute(
+            "UPDATE swarm_runs SET status='failed',completed_at=? WHERE id=?",
+            (now(), swarm_id),
+        )
 
 
 def _finalize_parent(task: dict, final_status: str, result: str = "", error: str = "") -> None:
