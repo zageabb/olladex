@@ -217,7 +217,7 @@ def current_model_settings() -> dict:
     with connect() as conn:
         row = conn.execute(
             "SELECT mp.chat_model,mp.embedding_model,mp.temperature,mp.max_steps,mp.context_files,mp.context_chars,mp.context_tokens,"
-            "sp.agent_tool_budget,bt.budget_extra "
+            "sp.agent_tool_budget,bt.budget_extra,bt.budget_override "
             "FROM background_tasks bt "
             "LEFT JOIN model_profiles mp ON mp.id=bt.model_profile_id "
             "LEFT JOIN swarm_runs sr ON sr.id=bt.swarm_id "
@@ -228,7 +228,9 @@ def current_model_settings() -> dict:
     if not row:
         return {}
     result = dict(row)
-    result["agent_tool_budget"] = int(result.get("agent_tool_budget") or 0) + int(result.get("budget_extra") or 0)
+    base_budget = int(result.get("agent_tool_budget") or 0)
+    override = int(result.get("budget_override") or 0)
+    result["agent_tool_budget"] = override if override > 0 else base_budget + int(result.get("budget_extra") or 0)
     return result
 
 
