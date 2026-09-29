@@ -205,3 +205,25 @@ def test_swarm_reviewer_can_inspect_git(tmp_path, monkeypatch):
 
     assert result["exit_code"] == 0
     assert result["output"] == "clean"
+
+
+def test_swarm_reviewer_cannot_edit_files(tmp_path, monkeypatch):
+    target = tmp_path / "main.py"
+    target.write_text("print('original')\n", encoding="utf-8")
+    project = {"id": 1, "name": "Tools", "path": str(tmp_path), "model": "test"}
+    monkeypatch.setattr(task_queue, "cancel_requested", lambda: False)
+    monkeypatch.setattr(
+        task_queue,
+        "current_task",
+        lambda: {"id": 79, "task_kind": "reviewer", "source_kind": "swarm_reviewer"},
+    )
+    monkeypatch.setattr(task_queue, "current_task_id", lambda: 79)
+    monkeypatch.setattr(task_queue, "current_worktree_path", lambda: str(tmp_path))
+    monkeypatch.setattr(ollama.runtime, "cancelled", lambda: False)
+
+    result, activity = execute_tool(project, "write_file", {"path": "main.py", "content": "print('changed')\n"})
+
+    assert result["recoverable"] is True
+    assert "inspection-only" in result["error"]
+    assert target.read_text(encoding="utf-8") == "print('original')\n"
+    assert activity["tool"] == "write_file"
