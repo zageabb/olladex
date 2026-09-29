@@ -974,3 +974,11 @@ button.primary:hover { background: var(--blue-2); }
 .markdown-document .markdown-body{max-width:980px;margin:0 auto}
 .markdown-file-toolbar{display:flex;gap:6px;align-items:center}
 .markdown-file-toolbar button.active{background:#eaf2ff;border-color:#b9d2f7;color:#174f9f}
+
+.swarm-workspace-locations{padding:9px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
+.swarm-workspace-locations article{min-width:0;padding:8px;background:#fff;border:1px solid #e7edf4;border-radius:7px;display:grid;gap:4px}
+.swarm-workspace-locations strong{font-size:8px;text-transform:uppercase;color:#60738c}
+.swarm-workspace-locations code{display:block;max-width:100%;overflow:auto;padding:5px 6px;border-radius:5px;background:#f5f7fa;font-size:8px;white-space:nowrap}
+.swarm-workspace-locations small{display:block;color:#6b7b8f;font-size:8px;line-height:1.35;overflow-wrap:anywhere}
+.swarm-workspace-locations article>div{display:grid;gap:3px}
+@media(max-width:1000px){.swarm-workspace-locations{grid-template-columns:1fr}}
