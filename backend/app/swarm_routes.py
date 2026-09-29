@@ -386,6 +386,22 @@ def swarm_board(
         )
         project = _project(int(board["swarm"]["project_id"]))
         board["repository"] = git.capabilities(project)
+        board["locations"] = {
+            "main": str(project["path"]),
+            "integration": str(board["swarm"].get("integration_path") or ""),
+            "specialists": [
+                {
+                    "task_id": int(agent["id"]),
+                    "title": agent.get("title") or "",
+                    "role": agent.get("agent_role") or "",
+                    "path": agent.get("worktree_path") or "",
+                    "branch": agent.get("worktree_branch") or "",
+                    "status": agent.get("status") or "",
+                }
+                for agent in board["swarm"].get("agents", [])
+                if agent.get("task_kind") not in {"reviewer", "challenger"} and agent.get("worktree_path")
+            ],
+        }
         return board
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
