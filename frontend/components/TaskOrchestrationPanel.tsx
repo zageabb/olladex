@@ -15,8 +15,9 @@ type LeadResponse = { lead:Node; specialists:unknown[]; reviewer:unknown; plan:{
 type IntegrationState = { lead_task_id:number; path:string; branch:string; base:string; diff?:string; changes?:string[]; check_command?:string; check_status?:string; check_output?:string; pull_request_number?:number; pull_request_url?:string; pull_request_state?:string };
 type IntegrationPreflight = { lead_task_id:number; task_ids:number[]; base:string; branches:string[]; files_by_branch:Record<string,string[]>; overlaps:{path:string;branches:string[]}[] };
 type SwarmListItem = { id:number; title:string; status:string; max_agents:number; max_concurrency:number; total_agents_created:number };
-type SwarmAgent = { id:number; title:string; status:string; agent_role:string; progress?:number; assigned_model?:string; current_activity?:string; tool_usage?:number; tool_budget?:number; latest_insight?:{category:string;content:string}|null; task_kind?:string; worktree_branch?:string; result?:string };
-type SwarmAgentDetail = { task:SwarmAgent; commands:{id:number;command:string;output:string;exit_code:number;status:string}[]; blackboard:{id:number;category:string;content:string}[]; changed_files:string[]; worktree?:{branch_diff?:string;working_diff?:string}|null };
+type PendingCommand = { id:number; run_id?:number; command:string; cwd:string; status:string; output?:string; exit_code?:number; created_at?:string; updated_at?:string };
+type SwarmAgent = { id:number; title:string; status:string; agent_role:string; progress?:number; assigned_model?:string; current_activity?:string; tool_usage?:number; tool_budget?:number; latest_insight?:{category:string;content:string}|null; task_kind?:string; worktree_branch?:string; result?:string; session_id?:number; run_id?:number; run_status?:string; pending_approval?:PendingCommand|null };
+type SwarmAgentDetail = { task:SwarmAgent; run?:{id:number;session_id:number;task_id:number;status:string;cancel_requested:number}|null; commands:PendingCommand[]; active_pending_commands:PendingCommand[]; blackboard:{id:number;category:string;content:string}[]; changed_files:string[]; worktree?:{branch_diff?:string;working_diff?:string}|null };
 type GitCapabilities = { repository:boolean; has_head:boolean; remotes:{name:string;url:string}[]; has_remote:boolean; github_remote:string; can_push:boolean; can_create_pull_request:boolean };
 type SwarmBoard = {
   swarm:{ id:number; title:string; status:string; agents?:SwarmAgent[]; coordinator_activity?:{category:string;content:string}|null; coordinator_budget?:{used:number;budget:number;remaining:number}; integration_path?:string; integration_branch?:string; integration_check_status?:string; integration_check_output?:string; integration_pushed?:number; integration_pr_number?:number; integration_pr_url?:string; integration_pr_state?:string; promotion_status?:string; promoted_commit?:string; promotion_output?:string };
@@ -35,7 +36,7 @@ type SwarmPreflight = { ready:boolean; checks:{name:string;ok:boolean;detail:str
 type SwarmModelSelfTest = { ready:boolean; models:{model:string;roles:string[];ok:boolean;latency_ms:number;response:string;error?:string}[] };
 type SwarmIntegrationPlan = { task_ids?:number[]; branches:string[]; overlaps:{path:string;branches:string[]}[]; files_by_branch?:Record<string,string[]>; path?:string; branch?:string; check_status?:string; check_output?:string };
 
-export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:number; onCreated:()=>void }) {
+export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversation }: { projectId:number; onCreated:()=>void; onOpenConversation?:(sessionId:number)=>void }) {
   const [graph,setGraph]=useState<Graph>({project_id:projectId,nodes:[]});
   const [review,setReview]=useState<ReviewBundle|null>(null);
   const [draft,setDraft]=useState<Draft>({title:"",prompt:"",role:"worker",parent:"",dependencies:""});
@@ -76,7 +77,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
     swarmCursors.current={event:0,coordinator_event:0,blackboard:0};
     setSwarmBoard(null);
     load(); loadSwarmSettings();
-    const timer=window.setInterval(load,3000);
+    const timer=window.setInterval(load,1000);
     return()=>window.clearInterval(timer);
   },[projectId,selectedSwarmId]);
   async function load(){
@@ -155,7 +156,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
         method:"PUT",body:JSON.stringify({enabled:!swarmSkill.enabled})
       });
       setSwarmSkill(updated);
-      setNotice(updated.enabled?"Swarm enabled for this project":"Swarm disabled for this project");
+      setNotice(updated.enabled?"Advanced orchestration enabled for this project":"Advanced orchestration disabled for this project");
     }catch(error){setNotice(error instanceof Error?error.message:String(error));}
     finally{setBusy(false);}
   }
@@ -235,7 +236,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
     try{
       const result=await request<SwarmModelSelfTest>(`/projects/${projectId}/swarms/self-test?profile_id=${swarmProfileId}`,{method:"POST"});
       setSwarmSelfTest(result);
-      setNotice(result.ready?"All configured Swarm models responded":"One or more configured Swarm models failed the self-test");
+      setNotice(result.ready?"All configured Advanced orchestration models responded":"One or more configured Advanced orchestration models failed the self-test");
     }catch(error){setNotice(error instanceof Error?error.message:String(error));}
     finally{setBusy(false);}
   }
@@ -272,7 +273,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
         })
       });
       setSwarmProfiles(items=>items.map(item=>item.id===saved.id?saved:item));
-      setNotice("Swarm model and policy settings saved");
+      setNotice("Advanced orchestration model and policy settings saved");
     }catch(error){setNotice(error instanceof Error?error.message:String(error));}
     finally{setBusy(false);}
   }
@@ -309,7 +310,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
       });
       setSwarmIntegration({...result,task_ids:taskIds});
       setSwarmIntegrationPushed(false);
-      setNotice("Swarm integration worktree created");
+      setNotice("Advanced orchestration integration worktree created");
       await load();
     }catch(error){setNotice(error instanceof Error?error.message:String(error));}
     finally{setBusy(false);}
@@ -351,7 +352,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
       if(!remote){setNotice("No Git remote is configured; the verified integration branch remains local");return;}
       await request(`/swarms/${swarmBoard.swarm.id}/integration/push`,{method:"POST",body:JSON.stringify({remote})});
       setSwarmIntegrationPushed(true);
-      setNotice(`Swarm integration branch pushed to ${remote}`);
+      setNotice(`Advanced orchestration integration branch pushed to ${remote}`);
       await load();
     }catch(error){setNotice(error instanceof Error?error.message:String(error));}
     finally{setBusy(false);}
@@ -364,8 +365,8 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
       const result=await request<{pull_request_number:number;url:string}>(`/swarms/${swarmBoard.swarm.id}/integration/pull-request`,{
         method:"POST",
         body:JSON.stringify({
-          title:`Olladex Swarm #${swarmBoard.swarm.id}: ${swarmBoard.swarm.title}`,
-          body:`Integrated and verified by Olladex Swarm #${swarmBoard.swarm.id}.`,
+          title:`Olladex Advanced orchestration #${swarmBoard.swarm.id}: ${swarmBoard.swarm.title}`,
+          body:`Integrated and verified by Olladex Advanced orchestration #${swarmBoard.swarm.id}.`,
           base:"main"
         })
       });
@@ -389,7 +390,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
       setSwarmPreflight(readiness);
       if(!readiness.ready){
         const failed=readiness.checks.filter(item=>!item.ok).map(item=>item.detail).join(" · ");
-        setNotice("Swarm is not ready: "+failed);
+        setNotice("Advanced orchestration is not ready: "+failed);
         return;
       }
       const created=await request<{swarm:{id:number}}>(`/projects/${projectId}/swarms`,{
@@ -403,9 +404,29 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
         })
       });
       setSwarmObjective(""); setSwarmTitle("");
-      setNotice("Swarm #"+created.swarm.id+" started");
+      setNotice("Advanced orchestration #"+created.swarm.id+" started");
       await load();
       onCreated();
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
+  }
+
+  async function refreshSelectedAgent(taskId=selectedSwarmAgentId){
+    if(!taskId)return;
+    const detail=await request<SwarmAgentDetail>(`/swarm-agents/${taskId}`);
+    setSelectedSwarmAgent(detail);
+  }
+
+  async function decideAgentCommand(commandId:number,accepted:boolean){
+    if(!selectedSwarmAgentId)return;
+    setBusy(true);
+    try{
+      await request(`/commands/${commandId}/decision`,{
+        method:"POST",body:JSON.stringify({accepted})
+      });
+      setNotice(accepted?"Command approved once":"Command declined");
+      await Promise.all([refreshSelectedAgent(selectedSwarmAgentId),load()]);
+      window.setTimeout(()=>{refreshSelectedAgent(selectedSwarmAgentId).catch(()=>{});load().catch(()=>{});},250);
     }catch(error){setNotice(error instanceof Error?error.message:String(error));}
     finally{setBusy(false);}
   }
@@ -420,7 +441,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
       }catch(error){if(!disposed)setNotice(error instanceof Error?error.message:String(error));}
     }
     refresh();
-    const timer=window.setInterval(refresh,3000);
+    const timer=window.setInterval(refresh,1000);
     return()=>{disposed=true;window.clearInterval(timer);};
   },[selectedSwarmAgentId]);
 
@@ -448,18 +469,21 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
   const boardTotal=swarmBoard?swarmBoard.summary.total_agents:graph.nodes.length;
   const boardActive=swarmBoard?swarmBoard.summary.active_agents:activeAgents.length;
   const boardCompleted=swarmBoard?swarmBoard.summary.completed_agents:completedAgents.length;
+  const approvalAgents=boardAgents.filter(agent=>agent.run_status==="waiting_for_approval"&&agent.pending_approval);
 
   return <section className={styles.panel}>
     <section className="agent-board-shell">
-      <div><p className="eyebrow">Agent board</p><h3>{swarmBoard?swarmBoard.swarm.title:"Under the hood"}</h3><p>{swarmBoard?`Swarm #${swarmBoard.swarm.id} · ${swarmBoard.swarm.status.replaceAll("_"," ")} · ${swarmBoard.summary.progress}% ${swarmBoard.swarm.status==="completed"?"complete":"agent work"}`:"Normal tasks stay simple. Expand this view when you want to inspect specialist agents, roles and execution state."}</p>{swarmRuns.length>1&&<label className="agent-board-run-select">Run<select value={selectedSwarmId||""} onChange={event=>{swarmCursors.current={event:0,coordinator_event:0,blackboard:0};setSelectedSwarmAgentId(null);setSwarmIntegration(null);setSelectedSwarmId(Number(event.target.value));}}>{swarmRuns.map(run=><option key={run.id} value={run.id}>#{run.id} {run.title} · {run.status}</option>)}</select></label>}</div>
+      <div><p className="eyebrow">Advanced orchestration</p><h3>{swarmBoard?swarmBoard.swarm.title:"Agent board"}</h3><p>{swarmBoard?`Advanced orchestration #${swarmBoard.swarm.id} · ${swarmBoard.swarm.status.replaceAll("_"," ")} · ${swarmBoard.summary.progress}% ${swarmBoard.swarm.status==="completed"?"complete":"agent work"}`:"Normal tasks stay simple. Expand this view when you want to inspect specialist agents, roles and execution state."}</p>{swarmRuns.length>1&&<label className="agent-board-run-select">Run<select value={selectedSwarmId||""} onChange={event=>{swarmCursors.current={event:0,coordinator_event:0,blackboard:0};setSelectedSwarmAgentId(null);setSwarmIntegration(null);setSelectedSwarmId(Number(event.target.value));}}>{swarmRuns.map(run=><option key={run.id} value={run.id}>#{run.id} {run.title} · {run.status}</option>)}</select></label>}</div>
       <div className="agent-board-metrics"><span><strong>{boardTotal}</strong> agents</span><span><strong>{boardActive}</strong> active</span><span><strong>{boardCompleted}</strong> complete</span>{swarmBoard?.summary.integration_ready&&<span><strong>✓</strong> integrate</span>}</div>
+      {approvalAgents.length>0&&<section className="advanced-approval-banner" aria-live="assertive"><strong>Command approval required</strong><div>{approvalAgents.map(agent=><button type="button" key={agent.id} onClick={()=>setSelectedSwarmAgentId(agent.id)}>Agent #{agent.id} needs command approval</button>)}</div></section>}
       {swarmBoard&&<>
         <article className="agent-board-coordinator"><span className={`agent-dot ${swarmBoard.swarm.status}`}>●</span><div><strong>Coordinator</strong><small>budget {swarmBoard.swarm.coordinator_budget?.used||0}/{swarmBoard.swarm.coordinator_budget?.budget||0} · {swarmBoard.swarm.coordinator_activity?.content||"Monitoring specialist progress and dependencies"}</small></div><div className="agent-board-control-actions">{swarmBoard.swarm.status==="paused"?<button type="button" onClick={()=>swarmAction("resume")} disabled={busy}>Resume</button>:["running","reviewing","waiting"].includes(swarmBoard.swarm.status)&&<button type="button" onClick={()=>swarmAction("pause")} disabled={busy}>Pause</button>}{!["completed","failed","cancelled"].includes(swarmBoard.swarm.status)&&<button type="button" onClick={()=>swarmAction("stop")} disabled={busy}>Stop</button>}</div></article>
-        {!["completed","failed","cancelled"].includes(swarmBoard.swarm.status)&&<form className="agent-board-guidance" onSubmit={event=>{event.preventDefault();sendSwarmGuidance(false);}}><input value={swarmGuidance} onChange={event=>setSwarmGuidance(event.target.value)} placeholder="Guide the Swarm…"/><button disabled={busy||!swarmGuidance.trim()}>Coordinator</button><button type="button" onClick={()=>sendSwarmGuidance(true)} disabled={busy||!swarmGuidance.trim()}>Apply to all</button></form>}
+        {!["completed","failed","cancelled"].includes(swarmBoard.swarm.status)&&<form className="agent-board-guidance" onSubmit={event=>{event.preventDefault();sendSwarmGuidance(false);}}><input value={swarmGuidance} onChange={event=>setSwarmGuidance(event.target.value)} placeholder="Guide Advanced orchestration…"/><button disabled={busy||!swarmGuidance.trim()}>Coordinator</button><button type="button" onClick={()=>sendSwarmGuidance(true)} disabled={busy||!swarmGuidance.trim()}>Apply to all</button></form>}
       </>}
-      <div className="agent-board-preview">{swarmBoard&&boardAgents.length?boardAgents.slice(0,8).map(agent=><article key={agent.id} role="button" tabIndex={0} onClick={()=>setSelectedSwarmAgentId(agent.id)} onKeyDown={event=>{if(event.key==="Enter")setSelectedSwarmAgentId(agent.id);}}><span className={`agent-dot ${agent.status}`}>●</span><div><strong>{agent.title}</strong><small>{agent.agent_role} · {agent.status.replaceAll("_"," ")}{typeof agent.progress==="number"?` · ${agent.progress}%`:""}{agent.tool_budget?` · tools ${agent.tool_usage||0}/${agent.tool_budget}`:""}</small>{agent.current_activity&&<small>{agent.current_activity}</small>}{agent.latest_insight&&<div className="agent-card-markdown"><b>{agent.latest_insight.category}</b><MarkdownBody value={agent.latest_insight.content} compact /></div>}</div></article>):graph.nodes.length?graph.nodes.slice(0,8).map(node=><article key={node.id}><span className={`agent-dot ${node.status}`}>●</span><div><strong>{node.title}</strong><small>{node.agent_role} · {node.status.replaceAll("_"," ")}</small></div></article>):<p>No specialist agents yet. Swarm-backed tasks will appear here through the same board.</p>}</div>
+      <div className="agent-board-preview">{swarmBoard&&boardAgents.length?boardAgents.slice(0,8).map(agent=><article key={agent.id} role="button" tabIndex={0} onClick={()=>setSelectedSwarmAgentId(agent.id)} onKeyDown={event=>{if(event.key==="Enter")setSelectedSwarmAgentId(agent.id);}}><span className={`agent-dot ${agent.status}`}>●</span><div><strong>{agent.title}</strong><small>{agent.agent_role} · {agent.status.replaceAll("_"," ")}{typeof agent.progress==="number"?` · ${agent.progress}%`:""}{agent.tool_budget?` · tools ${agent.tool_usage||0}/${agent.tool_budget}`:""}</small>{agent.pending_approval&&<button type="button" className="agent-approval-link" onClick={event=>{event.stopPropagation();setSelectedSwarmAgentId(agent.id);}}>Agent #{agent.id} needs command approval</button>}{agent.current_activity&&<small>{agent.current_activity}</small>}{agent.latest_insight&&<div className="agent-card-markdown"><b>{agent.latest_insight.category}</b><MarkdownBody value={agent.latest_insight.content} compact /></div>}</div></article>):graph.nodes.length?graph.nodes.slice(0,8).map(node=><article key={node.id}><span className={`agent-dot ${node.status}`}>●</span><div><strong>{node.title}</strong><small>{node.agent_role} · {node.status.replaceAll("_"," ")}</small></div></article>):<p>No specialist agents yet. Swarm-backed tasks will appear here through the same board.</p>}</div>
       {selectedSwarmAgent&&<section className="agent-board-detail">
-        <header><div><p className="eyebrow">Agent #{selectedSwarmAgent.task.id}</p><h4>{selectedSwarmAgent.task.title}</h4><small>{selectedSwarmAgent.task.agent_role} · {selectedSwarmAgent.task.status.replaceAll("_"," ")}</small></div><div className="agent-board-control-actions">{["queued","running","waiting_for_input","waiting_for_approval"].includes(selectedSwarmAgent.task.status)&&<button type="button" onClick={stopSwarmAgent} disabled={busy}>Stop agent</button>}<button type="button" onClick={()=>setSelectedSwarmAgentId(null)}>Close</button></div></header>
+        <header><div><p className="eyebrow">Advanced orchestration agent #{selectedSwarmAgent.task.id}</p><h4>{selectedSwarmAgent.task.title}</h4><small>{selectedSwarmAgent.task.agent_role} · {(selectedSwarmAgent.run?.status||selectedSwarmAgent.task.status).replaceAll("_"," ")}</small></div><div className="agent-board-control-actions">{selectedSwarmAgent.run?.session_id&&onOpenConversation&&<button type="button" onClick={()=>onOpenConversation(selectedSwarmAgent.run!.session_id)}>Open conversation</button>}{["queued","running","waiting_for_input","waiting_for_approval"].includes(selectedSwarmAgent.task.status)&&<button type="button" onClick={stopSwarmAgent} disabled={busy}>Stop agent</button>}<button type="button" onClick={()=>setSelectedSwarmAgentId(null)}>Close</button></div></header>
+        {selectedSwarmAgent.active_pending_commands.length>0&&selectedSwarmAgent.run?.status==="waiting_for_approval"&&<section className="agent-pending-approvals"><strong>Command approval required</strong>{selectedSwarmAgent.active_pending_commands.map(command=><article key={command.id}><code>{command.command}</code><small>Working directory: {command.cwd}</small><div><button type="button" className="primary" onClick={()=>decideAgentCommand(command.id,true)} disabled={busy}>Approve once</button><button type="button" onClick={()=>decideAgentCommand(command.id,false)} disabled={busy}>Decline</button></div></article>)}</section>}
         <div className="agent-board-detail-grid">
           <article><strong>Activity</strong><p>{selectedSwarmAgent.task.current_activity||"No current activity"}</p><small>{selectedSwarmAgent.task.progress||0}% · tools {selectedSwarmAgent.task.tool_usage||0}/{selectedSwarmAgent.task.tool_budget||0}</small></article>
           <article><strong>Changed files</strong>{selectedSwarmAgent.changed_files.length?<ul>{selectedSwarmAgent.changed_files.map(path=><li key={path}>{path}</li>)}</ul>:<p>No committed branch changes yet.</p>}</article>
@@ -474,7 +498,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
         <details><summary>Blackboard · {swarmBoard.blackboard?.length||0}</summary><div>{swarmBoard.blackboard?.length?swarmBoard.blackboard.slice().reverse().slice(0,12).map(item=><article key={item.id}><b>{item.category}</b><MarkdownBody value={item.content} compact />{item.task_id?<small>Agent #{item.task_id}</small>:<small>Coordinator</small>}</article>):<p>No shared knowledge yet.</p>}</div></details>
       </div>}
       {swarmBoard&&(swarmBoard.summary.integration_ready||swarmIntegration)&&<section className="agent-board-integration">
-        <header><div><p className="eyebrow">Swarm integration</p><h4>{swarmIntegration?.branch||"Completed specialist branches are ready"}</h4></div><div className="agent-board-control-actions"><button type="button" onClick={checkSwarmIntegration} disabled={busy}>Check overlaps</button>{!swarmBoard.swarm.integration_branch&&<button type="button" className="primary" onClick={buildSwarmIntegration} disabled={busy}>Build integration</button>}</div></header>
+        <header><div><p className="eyebrow">Advanced orchestration integration</p><h4>{swarmIntegration?.branch||"Completed specialist branches are ready"}</h4></div><div className="agent-board-control-actions"><button type="button" onClick={checkSwarmIntegration} disabled={busy}>Check overlaps</button>{!swarmBoard.swarm.integration_branch&&<button type="button" className="primary" onClick={buildSwarmIntegration} disabled={busy}>Build integration</button>}</div></header>
         {swarmBoard.locations&&<div className="swarm-workspace-locations">
           <article><strong>Main project directory</strong><code>{swarmBoard.locations.main}</code><small>{swarmBoard.swarm.status==="completed"&&swarmBoard.swarm.promoted_commit?`Promoted · ${swarmBoard.swarm.promoted_commit.slice(0,12)}`:"Target worktree"}</small></article>
           <article><strong>Integration worktree</strong><code>{swarmBoard.locations.integration||"Not prepared yet"}</code><small>{swarmBoard.swarm.integration_branch||"No integration branch"}</small></article>
@@ -520,7 +544,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
             <label className="swarm-check"><input type="checkbox" checked={Boolean(profile.dynamic_size)} onChange={event=>updateSwarmProfile(profile.id,{dynamic_size:event.target.checked?1:0})}/> Dynamic size</label>
             <label className="swarm-check"><input type="checkbox" checked={Boolean(profile.require_reviewer)} onChange={event=>updateSwarmProfile(profile.id,{require_reviewer:event.target.checked?1:0})}/> Final reviewer</label>
             <label className="swarm-check"><input type="checkbox" checked={Boolean(profile.require_challenger)} onChange={event=>updateSwarmProfile(profile.id,{require_challenger:event.target.checked?1:0})}/> Challenger</label>
-            <div className={styles.actions}><button type="button" onClick={()=>saveSwarmProfile(profile)} disabled={busy}>Save Swarm settings</button><button type="button" onClick={testSwarmModels} disabled={busy}>Test local models</button></div>
+            <div className={styles.actions}><button type="button" onClick={()=>saveSwarmProfile(profile)} disabled={busy}>Save Advanced orchestration settings</button><button type="button" onClick={testSwarmModels} disabled={busy}>Test local models</button></div>
             {swarmSelfTest&&<div className="swarm-model-test-results">{swarmSelfTest.models.map(item=><article key={item.model} className={item.ok?"ok":"failed"}><strong>{item.model}</strong><span>{item.ok?"ready":"failed"} · {item.latency_ms} ms</span><small>{item.roles.join(", ")}</small>{!item.ok&&<small>{item.error||item.response||"Unexpected model response"}</small>}</article>)}</div>}
           </div></details>})()}
         </>}
