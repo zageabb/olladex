@@ -16,7 +16,7 @@ def start_active() -> None:
     _stop.clear()
     with connect() as conn:
         ids = [int(row["id"]) for row in conn.execute(
-            "SELECT id FROM swarm_runs WHERE status IN ('running','waiting','reviewing','paused','ready_for_integration','integrating','checks_failed','ready_to_promote') AND cancel_requested=0"
+            "SELECT id FROM swarm_runs WHERE status IN ('running','waiting','reviewing','paused') AND cancel_requested=0"
         )]
     for swarm_id in ids:
         start(swarm_id)
@@ -55,7 +55,7 @@ def _loop(swarm_id: int) -> None:
             if not row:
                 return
             run = dict(row)
-            if run["status"] in {"completed", "failed", "cancelled"} or run["cancel_requested"]:
+            if run["status"] in {"completed", "failed", "cancelled", "ready_for_integration", "integrating", "checks_failed", "ready_to_promote"} or run["cancel_requested"]:
                 return
             if run["status"] == "paused":
                 time.sleep(.5)
