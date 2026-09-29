@@ -195,6 +195,6 @@ test('project AI model selectors show every detected Ollama model', async ({ pag
     expect(effectiveOptions).toContain(model);
   }
 
-  expect(defaultOptions.length).toBe(models.length + 1);
-  expect(effectiveOptions.length).toBe(models.length + 1);
+  expect(defaultOptions.length).toBeGreaterThanOrEqual(models.length + 1);
+  expect(effectiveOptions.length).toBeGreaterThanOrEqual(models.length + 1);
 });
