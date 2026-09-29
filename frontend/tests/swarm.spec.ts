@@ -472,3 +472,183 @@ test('local swarm must be promoted to main before completion', async ({ page }) 
   await expect.poll(()=>promoted).toBe(true);
   await expect(page.getByText(/Advanced orchestration #10 · completed · 100% complete/)).toBeVisible();
 });
+
+
+test('advanced orchestration surfaces and resolves the correct agent command approval', async ({ page }) => {
+  let boardCalls = 0;
+  let decision: {id:number;accepted:boolean}|null = null;
+  let currentCommandId = 901;
+  let waiting = true;
+  const sessions = [
+    {id:1,project_id:1,title:'Chat',updated_at:new Date().toISOString()},
+    {id:42,project_id:1,title:'Approval agent conversation',updated_at:new Date().toISOString()},
+    {id:43,project_id:1,title:'Other agent conversation',updated_at:new Date().toISOString()}
+  ];
+
+  await baseRoutes(page, async (route,url) => {
+    const p=url.pathname;
+    const json=(data:unknown)=>route.fulfill({json:data});
+
+    if (p === '/api/projects/1/sessions') {
+      await json(sessions);
+      return true;
+    }
+    if (p === '/api/projects/1/skills/swarm') {
+      await json({project_id:1,skill:'swarm',enabled:true});
+      return true;
+    }
+    if (p === '/api/projects/1/swarms') {
+      await json([{id:20,title:'Approval test',status:'running',max_agents:4,max_concurrency:2,total_agents_created:2}]);
+      return true;
+    }
+    if (p === '/api/swarms/20/board') {
+      boardCalls += 1;
+      const approvalVisible = boardCalls >= 2 && waiting;
+      await json({
+        swarm:{
+          id:20,title:'Approval test',status:'running',
+          coordinator_budget:{used:1,budget:20,remaining:19},
+          agents:[
+            {
+              id:201,title:'Command agent',status:approvalVisible?'waiting_for_approval':'running',
+              agent_role:'backend',task_kind:'backend',progress:55,session_id:42,
+              run_id:701,run_status:approvalVisible?'waiting_for_approval':'running',
+              pending_approval:approvalVisible?{
+                id:currentCommandId,command:'pytest backend/tests/test_auth.py -q',
+                cwd:'/demo/.olladex/task-201',status:'pending'
+              }:null
+            },
+            {
+              id:202,title:'Other agent',status:'running',agent_role:'tester',task_kind:'tester',
+              progress:40,session_id:43,run_id:702,run_status:'running',pending_approval:null
+            }
+          ]
+        },
+        summary:{total_agents:2,active_agents:2,completed_agents:0,failed_agents:0,progress:48,max_agents:4,max_concurrency:2,integration_ready:false},
+        events:[],coordinator_events:[],blackboard:[],cursors:{event:0,coordinator_event:0,blackboard:0},
+        repository:{repository:true,has_head:true,remotes:[],has_remote:false,github_remote:'',can_push:false,can_create_pull_request:false}
+      });
+      return true;
+    }
+    if (p === '/api/swarm-agents/201') {
+      const active = waiting;
+      await json({
+        task:{
+          id:201,title:'Command agent',status:active?'waiting_for_approval':'running',
+          agent_role:'backend',task_kind:'backend',progress:55,session_id:42
+        },
+        run:{id:701,session_id:42,task_id:201,status:active?'waiting_for_approval':'running',cancel_requested:0},
+        commands:[
+          {id:currentCommandId,run_id:701,command:'pytest backend/tests/test_auth.py -q',cwd:'/demo/.olladex/task-201',output:'',exit_code:-1,status:active?'pending':(decision?.accepted?'running':'rejected')},
+          {id:900,run_id:699,command:'printf stale',cwd:'/old/worktree',output:'',exit_code:-1,status:'pending'}
+        ],
+        active_pending_commands:active?[
+          {id:currentCommandId,run_id:701,command:'pytest backend/tests/test_auth.py -q',cwd:'/demo/.olladex/task-201',output:'',exit_code:-1,status:'pending'}
+        ]:[],
+        blackboard:[],changed_files:[],worktree:null
+      });
+      return true;
+    }
+    if (p === '/api/swarm-agents/202') {
+      await json({
+        task:{id:202,title:'Other agent',status:'running',agent_role:'tester',task_kind:'tester',progress:40,session_id:43},
+        run:{id:702,session_id:43,task_id:202,status:'running',cancel_requested:0},
+        commands:[],active_pending_commands:[],blackboard:[],changed_files:[],worktree:null
+      });
+      return true;
+    }
+    if (p === '/api/commands/' + currentCommandId + '/decision') {
+      decision={id:currentCommandId,accepted:Boolean(route.request().postDataJSON().accepted)};
+      waiting=false;
+      await json({status:decision.accepted?'approved':'rejected'});
+      return true;
+    }
+    return false;
+  });
+
+  await page.goto('/');
+  await page.locator('.rail').getByRole('button', {name:'Tasks'}).click();
+
+  await expect.poll(()=>boardCalls,{timeout:4000}).toBeGreaterThanOrEqual(2);
+  const banner=page.locator('.advanced-approval-banner');
+  await expect(banner.getByText('Command approval required')).toBeVisible();
+  await expect(banner.getByRole('button',{name:'Agent #201 needs command approval'})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Agent #202 needs command approval'})).toHaveCount(0);
+
+  await banner.getByRole('button',{name:'Agent #201 needs command approval'}).click();
+  const detail=page.locator('.agent-board-detail');
+  await expect(detail.getByText('Advanced orchestration agent #201')).toBeVisible();
+  const approval=detail.locator('.agent-pending-approvals');
+  await expect(approval.getByText('pytest backend/tests/test_auth.py -q',{exact:true})).toBeVisible();
+  await expect(approval.getByText('Working directory: /demo/.olladex/task-201')).toBeVisible();
+  await expect(approval.getByRole('button',{name:'Approve once'})).toBeVisible();
+  await expect(approval.getByRole('button',{name:'Decline'})).toBeVisible();
+  await expect(detail.getByText('printf stale',{exact:true})).toBeVisible();
+  await expect(detail.locator('.agent-pending-approvals').getByText('printf stale',{exact:true})).toHaveCount(0);
+
+  await approval.getByRole('button',{name:'Approve once'}).click();
+  await expect.poll(()=>decision).toEqual({id:901,accepted:true});
+  await expect(detail.locator('.agent-pending-approvals')).toHaveCount(0);
+  await expect(page.locator('.advanced-approval-banner')).toHaveCount(0);
+
+  currentCommandId=902;
+  decision=null;
+  waiting=true;
+  await expect(page.locator('.advanced-approval-banner').getByRole('button',{name:'Agent #201 needs command approval'})).toBeVisible({timeout:4000});
+  await page.locator('.advanced-approval-banner').getByRole('button',{name:'Agent #201 needs command approval'}).click();
+  await expect(detail.locator('.agent-pending-approvals').getByRole('button',{name:'Decline'})).toBeVisible();
+  await detail.locator('.agent-pending-approvals').getByRole('button',{name:'Decline'}).click();
+  await expect.poll(()=>decision).toEqual({id:902,accepted:false});
+  await expect(detail.locator('.agent-pending-approvals')).toHaveCount(0);
+
+  await detail.getByRole('button',{name:'Open conversation'}).click();
+  await expect(page.locator('.conversation-panel').getByRole('heading',{name:'Approval agent conversation'})).toBeVisible();
+});
+
+test('autonomous advanced orchestration shows no approval controls without an explicit pending command', async ({ page }) => {
+  await baseRoutes(page, async (route,url) => {
+    const p=url.pathname;
+    const json=(data:unknown)=>route.fulfill({json:data});
+    if (p === '/api/projects') {
+      await json([{...project,approval_mode:'autonomous'}]);
+      return true;
+    }
+    if (p === '/api/projects/1/skills/swarm') {
+      await json({project_id:1,skill:'swarm',enabled:true});
+      return true;
+    }
+    if (p === '/api/projects/1/swarms') {
+      await json([{id:21,title:'Autonomous orchestration',status:'running',max_agents:3,max_concurrency:2,total_agents_created:1}]);
+      return true;
+    }
+    if (p === '/api/swarms/21/board') {
+      await json({
+        swarm:{id:21,title:'Autonomous orchestration',status:'running',agents:[
+          {id:211,title:'Autonomous agent',status:'running',agent_role:'backend',task_kind:'backend',session_id:42,run_id:801,run_status:'running',pending_approval:null}
+        ]},
+        summary:{total_agents:1,active_agents:1,completed_agents:0,failed_agents:0,progress:20,max_agents:3,max_concurrency:2,integration_ready:false},
+        events:[],coordinator_events:[],blackboard:[],cursors:{event:0,coordinator_event:0,blackboard:0}
+      });
+      return true;
+    }
+    if (p === '/api/swarm-agents/211') {
+      await json({
+        task:{id:211,title:'Autonomous agent',status:'running',agent_role:'backend',task_kind:'backend',session_id:42},
+        run:{id:801,session_id:42,task_id:211,status:'running',cancel_requested:0},
+        commands:[{id:950,run_id:801,command:'pytest -q',cwd:'/demo',output:'ok',exit_code:0,status:'completed'}],
+        active_pending_commands:[],blackboard:[],changed_files:[],worktree:null
+      });
+      return true;
+    }
+    return false;
+  });
+
+  await page.goto('/');
+  await page.locator('.rail').getByRole('button',{name:'Tasks'}).click();
+
+  await expect(page.locator('.advanced-approval-banner')).toHaveCount(0);
+  await page.getByText('Autonomous agent',{exact:true}).click();
+  const detail=page.locator('.agent-board-detail');
+  await expect(detail.getByRole('button',{name:'Approve once'})).toHaveCount(0);
+  await expect(detail.getByRole('button',{name:'Decline'})).toHaveCount(0);
+});
