@@ -445,6 +445,16 @@ def list_agents(swarm_id: int) -> list[dict]:
                 item["depends_on"] = json.loads(item.get("depends_on") or "[]")
             except (TypeError, json.JSONDecodeError):
                 item["depends_on"] = []
+            try:
+                item["blocking_dependency_ids"] = json.loads(item.get("blocking_dependency_ids") or "[]")
+            except (TypeError, json.JSONDecodeError):
+                item["blocking_dependency_ids"] = []
+            item["recovery"] = None
+            if item.get("status") in {"budget_exhausted", "interrupted", "no_progress", "incomplete", "failed"}:
+                try:
+                    item["recovery"] = task_queue.recovery_info(int(item["id"]))
+                except Exception:
+                    item["recovery"] = None
             run_id = item.get("run_id")
             item["session_id"] = int(item.get("run_session_id") or item.get("session_id") or 0)
             item["pending_approval"] = None
@@ -855,7 +865,18 @@ def board_snapshot(
 
     complete = status_counts.get("completed", 0)
     active = sum(status_counts.get(state, 0) for state in ("running", "waiting_for_input", "waiting_for_approval"))
-    failed = sum(status_counts.get(state, 0) for state in ("failed", "budget_exhausted"))
+    failed = sum(status_counts.get(state, 0) for state in ("failed", "budget_exhausted", "dependency_failed", "no_progress", "incomplete"))
+    recovery_blockers = [
+        {
+            "task_id": int(agent["id"]),
+            "title": agent.get("title") or "",
+            "status": agent.get("status") or "",
+            "blocking_dependency_ids": agent.get("blocking_dependency_ids") or [],
+            "recovery": agent.get("recovery"),
+        }
+        for agent in agent_items
+        if agent.get("status") in {"budget_exhausted", "dependency_failed", "interrupted", "no_progress", "incomplete"}
+    ]
     overall_progress = 0
     if agent_items:
         overall_progress = round(sum(
@@ -869,7 +890,8 @@ def board_snapshot(
     tool_budget_capacity = int(run.get("max_agents") or 0) * tool_budget_per_agent if tool_budget_per_agent else 0
 
     integration_ready = bool(
-        run.get("status") in {"ready_for_integration", "integrating", "checks_failed", "ready_to_promote", "completed"}
+        not recovery_blockers
+        and run.get("status") in {"ready_for_integration", "integrating", "checks_failed", "ready_to_promote", "completed"}
         and any(
             agent.get("status") == "completed"
             and agent.get("task_kind") not in {"reviewer", "challenger"}
@@ -897,6 +919,16 @@ def board_snapshot(
             "tool_budget_capacity": tool_budget_capacity,
             "coordinator_budget": run.get("coordinator_budget") or {"used": 0, "budget": 0, "remaining": 0},
             "integration_ready": integration_ready,
+            "recovery_available": bool(recovery_blockers),
+            "recovery_blockers": recovery_blockers,
+            "integration_blockers": [
+                (
+                    f"#{item['task_id']} needs recovery"
+                    if item["status"] in {"budget_exhausted", "interrupted", "no_progress", "incomplete"}
+                    else f"#{item['task_id']} is blocked by dependencies {item['blocking_dependency_ids']}"
+                )
+                for item in recovery_blockers
+            ],
         },
         "events": agent_events,
         "coordinator_events": coordinator_items,
