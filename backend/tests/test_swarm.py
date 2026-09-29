@@ -1322,3 +1322,52 @@ def test_board_marks_only_agent_with_current_pending_approval(tmp_path, monkeypa
 
     assert waiting_agent["pending_approval"]["command"] == "pytest -q"
     assert other_agent["pending_approval"] is None
+
+
+def test_unresolved_command_approval_prevents_orchestration_completion(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id, max_agents=3, max_concurrency=2)
+    specialist = task_queue.enqueue(
+        project_id, session_id, "Waiting command", "run command",
+        swarm_id=swarm_id, source_kind="swarm_specialist",
+        agent_role="backend", task_kind="backend",
+    )
+    reviewer_session = None
+    with connect() as conn:
+        reviewer_session = int(conn.execute(
+            "INSERT INTO sessions(project_id,title,created_at,updated_at) VALUES(?,?,?,?)",
+            (project_id, "Review", now(), now()),
+        ).lastrowid)
+    reviewer = task_queue.enqueue(
+        project_id, reviewer_session, "Final review", "review",
+        swarm_id=swarm_id, source_kind="swarm_reviewer",
+        agent_role="reviewer", task_kind="reviewer", priority=300,
+        depends_on=[specialist["id"]],
+    )
+    stamp = now()
+    with connect() as conn:
+        run_id = int(conn.execute(
+            "INSERT INTO agent_runs(session_id,task_id,status,cancel_requested,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+            (session_id, specialist["id"], "waiting_for_approval", 0, stamp, stamp),
+        ).lastrowid)
+        conn.execute(
+            "INSERT INTO command_runs(project_id,task_id,run_id,cwd,command,output,exit_code,status,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (project_id, specialist["id"], run_id, "/repo", "pytest -q", "", -1, "pending", stamp, stamp),
+        )
+        conn.execute(
+            "UPDATE background_tasks SET status='waiting_for_approval' WHERE id=?",
+            (specialist["id"],),
+        )
+        conn.execute(
+            "UPDATE background_tasks SET status='completed',result=?,completed_at=? WHERE id=?",
+            ("Reviewer report cannot override unresolved approval.", stamp, reviewer["id"]),
+        )
+
+    swarm_coordinator._reconcile(swarm_id)
+
+    run = swarm.get_run(swarm_id)
+    assert run["status"] not in {"completed", "ready_for_integration", "integrating", "ready_to_promote"}
+    waiting_agent = next(item for item in run["agents"] if item["id"] == specialist["id"])
+    assert waiting_agent["status"] == "waiting_for_approval"
+    assert waiting_agent["pending_approval"]["command"] == "pytest -q"
