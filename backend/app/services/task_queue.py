@@ -119,6 +119,10 @@ def get(task_id: int) -> dict:
         result["depends_on"] = json.loads(result.get("depends_on") or "[]")
     except json.JSONDecodeError:
         result["depends_on"] = []
+    try:
+        result["blocking_dependency_ids"] = json.loads(result.get("blocking_dependency_ids") or "[]")
+    except (TypeError, json.JSONDecodeError):
+        result["blocking_dependency_ids"] = []
     return result
 
 
@@ -130,6 +134,16 @@ def list_for_project(project_id: int) -> list[dict]:
             item["depends_on"] = json.loads(item.get("depends_on") or "[]")
         except json.JSONDecodeError:
             item["depends_on"] = []
+        try:
+            item["blocking_dependency_ids"] = json.loads(item.get("blocking_dependency_ids") or "[]")
+        except (TypeError, json.JSONDecodeError):
+            item["blocking_dependency_ids"] = []
+        item["recovery"] = None
+        if item.get("status") in {"budget_exhausted", "interrupted", "no_progress", "incomplete", "failed"}:
+            try:
+                item["recovery"] = recovery_info(int(item["id"]))
+            except Exception:
+                item["recovery"] = None
     return result
 
 
