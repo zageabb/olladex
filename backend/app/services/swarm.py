@@ -427,7 +427,8 @@ def list_agents(swarm_id: int) -> list[dict]:
         rows = [dict(row) for row in conn.execute(
             "SELECT bt.*, "
             "(SELECT ar.id FROM agent_runs ar WHERE ar.task_id=bt.id ORDER BY ar.id DESC LIMIT 1) AS run_id, "
-            "(SELECT ar.status FROM agent_runs ar WHERE ar.task_id=bt.id ORDER BY ar.id DESC LIMIT 1) AS run_status "
+            "(SELECT ar.status FROM agent_runs ar WHERE ar.task_id=bt.id ORDER BY ar.id DESC LIMIT 1) AS run_status, "
+            "(SELECT ar.session_id FROM agent_runs ar WHERE ar.task_id=bt.id ORDER BY ar.id DESC LIMIT 1) AS run_session_id "
             "FROM background_tasks bt "
             "WHERE bt.swarm_id=? ORDER BY bt.priority ASC,bt.id ASC",
             (swarm_id,),
@@ -445,6 +446,16 @@ def list_agents(swarm_id: int) -> list[dict]:
             except (TypeError, json.JSONDecodeError):
                 item["depends_on"] = []
             run_id = item.get("run_id")
+            item["session_id"] = int(item.get("run_session_id") or item.get("session_id") or 0)
+            item["pending_approval"] = None
+            if run_id and item.get("run_status") == "waiting_for_approval":
+                pending = conn.execute(
+                    "SELECT id,command,cwd,status,created_at,updated_at FROM command_runs "
+                    "WHERE task_id=? AND run_id=? AND status='pending' ORDER BY id DESC LIMIT 1",
+                    (item["id"], run_id),
+                ).fetchone()
+                if pending:
+                    item["pending_approval"] = dict(pending)
             item["tool_budget"] = tool_budget
             if not run_id:
                 item["tool_usage"] = 0
