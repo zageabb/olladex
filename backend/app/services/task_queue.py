@@ -147,7 +147,14 @@ def cancel(task_id: int) -> dict:
 
 def current_task() -> dict:
     task_id = current_task_id()
-    return get(task_id) if task_id else {}
+    if not task_id:
+        return {}
+    try:
+        return get(task_id)
+    except Exception:
+        # Tool-level helpers may run in isolated unit tests or before database
+        # initialization. Absence of task metadata must not break normal tools.
+        return {}
 
 
 def current_task_id() -> int | None:
