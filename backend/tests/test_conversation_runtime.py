@@ -216,3 +216,85 @@ def test_followup_to_task_keeps_original_worktree(client_project, monkeypatch):
         task=conn.execute('SELECT * FROM background_tasks WHERE id=?',(task_id,)).fetchone()
     assert task['status']=='completed'
     assert task['result']=='Followup complete'
+
+
+def test_declining_command_returns_control_to_same_background_run(client_project, monkeypatch):
+    client, project, session, _ = client_project
+    seen = {}
+
+    def fake_chat(project, history, **kwargs):
+        seen["run_id_before"] = runtime.current_id()
+        result = runtime.command(project, "printf should-not-run")
+        seen["command_result"] = result
+        seen["run_id_after"] = runtime.current_id()
+        return "Handled the decline and continued.", []
+
+    monkeypatch.setattr(ollama, "chat", fake_chat)
+    run = client.post(f"/api/sessions/{session['id']}/runs", json={"content": "Try command"}).json()
+    wait_for(lambda: runtime.get(run["id"])["status"] == "waiting_for_approval")
+    approval = next(e["payload"] for e in runtime.events(run["id"]) if e["kind"] == "approval")
+
+    response = client.post(
+        f"/api/commands/{approval['command_run_id']}/decision",
+        json={"accepted": False},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "rejected"
+    wait_for(lambda: runtime.get(run["id"])["status"] == "completed")
+
+    assert seen["run_id_before"] == run["id"]
+    assert seen["run_id_after"] == run["id"]
+    assert seen["command_result"]["status"] == "rejected"
+    assert seen["command_result"]["exit_code"] == 126
+    with connect() as conn:
+        command = conn.execute(
+            "SELECT status FROM command_runs WHERE id=?",
+            (approval["command_run_id"],),
+        ).fetchone()
+    assert command["status"] == "rejected"
+
+
+def test_stale_command_approval_is_rejected(client_project):
+    client, project, session, _ = client_project
+    run_id = runtime.create(session["id"])
+    runtime.state("waiting_for_approval", run_id)
+    with connect() as conn:
+        command_id = int(conn.execute(
+            "INSERT INTO command_runs(project_id,task_id,run_id,cwd,command,output,exit_code,status,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (project["id"], None, run_id, project["path"], "printf stale", "", -1, "pending", now(), now()),
+        ).lastrowid)
+    runtime.state("completed", run_id)
+
+    response = client.post(
+        f"/api/commands/{command_id}/decision",
+        json={"accepted": True},
+    )
+
+    assert response.status_code == 409
+    with connect() as conn:
+        row = conn.execute("SELECT status FROM command_runs WHERE id=?", (command_id,)).fetchone()
+    assert row["status"] == "pending"
+
+
+def test_autonomous_mode_does_not_request_normal_command_approval(client_project, monkeypatch):
+    client, project, session, _ = client_project
+    with connect() as conn:
+        conn.execute("UPDATE projects SET approval_mode='autonomous' WHERE id=?", (project["id"],))
+
+    def fake_chat(project, history, **kwargs):
+        result = runtime.command(project, "printf autonomous")
+        return result["output"], []
+
+    monkeypatch.setattr(ollama, "chat", fake_chat)
+    run = client.post(f"/api/sessions/{session['id']}/runs", json={"content": "Run it"}).json()
+    wait_for(lambda: runtime.get(run["id"])["status"] == "completed")
+
+    assert not any(event["kind"] == "approval" for event in runtime.events(run["id"]))
+    with connect() as conn:
+        command = conn.execute(
+            "SELECT status,output FROM command_runs WHERE run_id=? ORDER BY id DESC LIMIT 1",
+            (run["id"],),
+        ).fetchone()
+    assert command["status"] == "completed"
+    assert "autonomous" in command["output"]
