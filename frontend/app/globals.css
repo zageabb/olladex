@@ -1004,3 +1004,21 @@ button.primary:hover { background: var(--blue-2); }
 .advanced-budget-actions{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .advanced-budget-actions input{width:72px;padding:6px;border:1px solid #c9cfd8;border-radius:6px;font-size:9px}
 .advanced-budget-actions button{padding:6px 8px;font-size:8px}
+
+.advanced-recovery-banner{margin:8px 0;padding:10px 12px;border:1px solid #4f9a72;border-radius:8px;background:#f2fbf6;display:grid;gap:8px}
+.advanced-recovery-banner header>div{display:grid;gap:3px}
+.advanced-recovery-banner header strong{font-size:10px;text-transform:uppercase;letter-spacing:.04em}
+.advanced-recovery-banner header small,.advanced-recovery-banner article small{font-size:8px;color:#587064;line-height:1.4;overflow-wrap:anywhere}
+.advanced-recovery-banner article{padding:8px;border:1px solid #bfe0cd;border-radius:7px;background:#fff;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center}
+.advanced-recovery-banner article>div:first-child{display:grid;gap:3px;min-width:0}
+.advanced-recovery-banner article>div:last-child{display:flex;flex-wrap:wrap;gap:6px}
+.advanced-recovery-actions{display:flex;flex-wrap:wrap;gap:6px}
+.advanced-recovery-actions span{display:flex;gap:6px;flex-wrap:wrap}
+.recovery-integration-blocker{display:block;padding:7px 8px;border-radius:6px;background:#fff3f0;color:#8d3d2f}
+.agent-recovery-link{display:inline-flex;width:max-content;margin-top:4px;border:1px solid #4f9a72;background:#f2fbf6;color:#256342;border-radius:6px;padding:6px 8px;font-size:9px;font-weight:700;cursor:pointer}
+.agent-recovery-detail,.task-recovery-card{margin:9px 0;padding:9px;border:1px solid #bfe0cd;border-radius:8px;background:#f2fbf6;display:grid;gap:5px}
+.agent-recovery-detail strong,.task-recovery-card strong{font-size:9px}
+.agent-recovery-detail small,.task-recovery-card small{font-size:8px;color:#587064;overflow-wrap:anywhere}
+.agent-recovery-detail code{padding:5px 6px;border-radius:5px;background:#fff;overflow:auto;white-space:nowrap;font-size:8px}
+.agent-recovery-detail>div,.task-recovery-card>div{display:flex;gap:6px;flex-wrap:wrap}
+@media(max-width:900px){.advanced-recovery-banner article{grid-template-columns:1fr}}
