@@ -13,6 +13,16 @@ from .services import task_queue, worktrees
 router = APIRouter(prefix="/api/tasks", tags=["task-worktrees"])
 
 
+class TaskResumeRequest(BaseModel):
+    fresh_budget: int | None = Field(default=None, ge=1, le=200)
+    allow_failed: bool = False
+    recreate_missing_worktree: bool = False
+
+
+class RetryDependantsRequest(BaseModel):
+    full_chain: bool = True
+
+
 class TaskCommitRequest(BaseModel):
     message: str = Field(min_length=1, max_length=5_000)
 
@@ -87,6 +97,35 @@ def _check_summary(checks: list[dict] | None) -> dict:
 def _pr_number(url: str) -> int:
     match = re.search(r"/pull/(\d+)(?:\b|/|$)", url or "")
     return int(match.group(1)) if match else 0
+
+
+@router.get("/{task_id}/recovery")
+def task_recovery_info(task_id: int):
+    try:
+        return task_queue.recovery_info(task_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/{task_id}/resume")
+def resume_task(task_id: int, body: TaskResumeRequest):
+    try:
+        return task_queue.resume_task(
+            task_id,
+            fresh_budget=body.fresh_budget,
+            allow_failed=body.allow_failed,
+            recreate_missing_worktree=body.recreate_missing_worktree,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/{task_id}/retry-dependants")
+def retry_task_dependants(task_id: int, body: RetryDependantsRequest):
+    try:
+        return task_queue.retry_blocked_dependants(task_id, full_chain=body.full_chain)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.get("/{task_id}/worktree")
