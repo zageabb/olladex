@@ -56,16 +56,28 @@ def create(project: dict, lead_task_id: int, branches: list[str], base: str = "m
         raise ValueError("Unsupported integration namespace")
     path = managed / f"{namespace}-{lead_task_id}"
     branch = f"olladex/integration-{namespace}-{lead_task_id}" if namespace != "lead" else f"olladex/integration-{lead_task_id}"
+    reused = False
     if path.exists():
         code, current = worktrees._git(path, "branch", "--show-current")
         if code == 0 and current.strip() == branch:
-            return {"path": str(path), "branch": branch, "reused": True, **plan}
-        shutil.rmtree(path, ignore_errors=True)
-    worktrees._git(root, "branch", "-D", branch)
-    code, output = worktrees._git(root, "worktree", "add", "-b", branch, str(path), base, timeout=120)
-    if code:
-        raise ValueError(output.strip() or "Could not create integration worktree")
+            reused = True
+            code, dirty = worktrees._git(path, "status", "--porcelain")
+            if code:
+                raise ValueError(dirty.strip() or "Could not inspect existing integration worktree")
+            if dirty.strip():
+                raise ValueError("Existing integration worktree has uncommitted changes; preserving it for inspection")
+        else:
+            raise ValueError("Managed integration path already exists with an unexpected branch; preserving it for inspection")
+    else:
+        branch_exists, _ = worktrees._git(root, "show-ref", "--verify", "--quiet", f"refs/heads/{branch}")
+        if branch_exists == 0:
+            code, output = worktrees._git(root, "worktree", "add", str(path), branch, timeout=120)
+        else:
+            code, output = worktrees._git(root, "worktree", "add", "-b", branch, str(path), base, timeout=120)
+        if code:
+            raise ValueError(output.strip() or "Could not create integration worktree")
     applied: list[dict] = []
+    skipped: list[dict] = []
     try:
         for source_branch in plan["branches"]:
             code, commits = worktrees._git(path, "rev-list", "--reverse", f"{base}..{source_branch}")
@@ -75,15 +87,19 @@ def create(project: dict, lead_task_id: int, branches: list[str], base: str = "m
             if not shas:
                 raise ValueError(f"{source_branch} has no committed changes relative to {base}")
             for sha in shas:
+                present, _ = worktrees._git(path, "merge-base", "--is-ancestor", sha, "HEAD")
+                if present == 0:
+                    skipped.append({"branch": source_branch, "sha": sha})
+                    continue
                 code, output = worktrees._git(path, "cherry-pick", sha, timeout=180)
                 if code:
                     worktrees._git(path, "cherry-pick", "--abort")
                     raise ValueError(f"Integration conflict while applying {source_branch} ({sha[:12]}): {output.strip()}")
                 applied.append({"branch": source_branch, "sha": sha})
     except Exception:
-        # Preserve the integration worktree for inspection after safe cherry-pick abort.
+        # Preserve the integration worktree and branch after safely aborting the current cherry-pick.
         raise
-    return {"path": str(path), "branch": branch, "reused": False, "applied": applied, **plan, **summary(project, str(path), base)}
+    return {"path": str(path), "branch": branch, "reused": reused, "applied": applied, "skipped": skipped, **plan, **summary(project, str(path), base)}
 
 
 def integration_project(project: dict, path: str) -> dict:
