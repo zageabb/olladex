@@ -16,6 +16,7 @@ type IntegrationState = { lead_task_id:number; path:string; branch:string; base:
 type IntegrationPreflight = { lead_task_id:number; task_ids:number[]; base:string; branches:string[]; files_by_branch:Record<string,string[]>; overlaps:{path:string;branches:string[]}[] };
 type SwarmListItem = { id:number; title:string; status:string; max_agents:number; max_concurrency:number; total_agents_created:number };
 type PendingCommand = { id:number; run_id?:number; command:string; cwd:string; status:string; output?:string; exit_code?:number; created_at?:string; updated_at?:string };
+type BudgetRequest = { id:number; swarm_id:number; task_id?:number|null; run_id?:number|null; scope:"agent"|"coordinator"; status:string; requested_amount:number; granted_amount:number; reason:string; decided_by:string };
 type SwarmAgent = { id:number; title:string; status:string; agent_role:string; progress?:number; assigned_model?:string; current_activity?:string; tool_usage?:number; tool_budget?:number; latest_insight?:{category:string;content:string}|null; task_kind?:string; worktree_branch?:string; result?:string; session_id?:number; run_id?:number; run_status?:string; pending_approval?:PendingCommand|null };
 type SwarmAgentDetail = { task:SwarmAgent; run?:{id:number;session_id:number;task_id:number;status:string;cancel_requested:number}|null; commands:PendingCommand[]; active_pending_commands:PendingCommand[]; blackboard:{id:number;category:string;content:string}[]; changed_files:string[]; worktree?:{branch_diff?:string;working_diff?:string}|null };
 type GitCapabilities = { repository:boolean; has_head:boolean; remotes:{name:string;url:string}[]; has_remote:boolean; github_remote:string; can_push:boolean; can_create_pull_request:boolean };
@@ -27,6 +28,7 @@ type SwarmBoard = {
   blackboard?:{id:number;task_id?:number|null;category:string;content:string;key?:string;created_at:string}[];
   cursors?:{event:number;coordinator_event:number;blackboard:number};
   repository?:GitCapabilities;
+  budget_requests?:BudgetRequest[];
   locations?:{main:string;integration:string;specialists:{task_id:number;title:string;role:string;path:string;branch:string;status:string}[]};
 };
 type SwarmSkill = { project_id:number; skill:"swarm"; enabled:boolean };
@@ -71,6 +73,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
   const [swarmIntegration,setSwarmIntegration]=useState<SwarmIntegrationPlan|null>(null);
   const [swarmCheckCommand,setSwarmCheckCommand]=useState("python -m pytest backend/tests -q && cd frontend && npx tsc --noEmit && npm run build");
   const [swarmIntegrationPushed,setSwarmIntegrationPushed]=useState(false);
+  const [budgetGrantAmounts,setBudgetGrantAmounts]=useState<Record<number,string>>({});
   const swarmCursors=useRef({event:0,coordinator_event:0,blackboard:0});
 
   useEffect(()=>{
@@ -330,6 +333,27 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
     finally{setBusy(false);}
   }
 
+  async function decideBudgetRequest(requestItem:BudgetRequest,accepted:boolean,amount?:number){
+    if(!swarmBoard)return;
+    setBusy(true);
+    try{
+      await request(`/swarms/${swarmBoard.swarm.id}/budget-requests/${requestItem.id}/decision`,{
+        method:"POST",
+        body:JSON.stringify({accepted,amount:accepted?(amount||requestItem.requested_amount):null})
+      });
+      setNotice(
+        accepted
+          ? `${requestItem.scope==="coordinator"?"Coordinator":"Agent #"+requestItem.task_id} budget extended by ${amount||requestItem.requested_amount}`
+          : `${requestItem.scope==="coordinator"?"Coordinator":"Agent #"+requestItem.task_id} budget extension declined`
+      );
+      await load();
+      if(requestItem.task_id&&selectedSwarmAgentId===requestItem.task_id){
+        await refreshSelectedAgent(requestItem.task_id);
+      }
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
+  }
+
   async function promoteSwarmIntegration(){
     if(!swarmBoard)return;
     setBusy(true);
@@ -476,6 +500,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
       <div><p className="eyebrow">Advanced orchestration</p><h3>{swarmBoard?swarmBoard.swarm.title:"Agent board"}</h3><p>{swarmBoard?`Advanced orchestration #${swarmBoard.swarm.id} · ${swarmBoard.swarm.status.replaceAll("_"," ")} · ${swarmBoard.summary.progress}% ${swarmBoard.swarm.status==="completed"?"complete":"agent work"}`:"Normal tasks stay simple. Expand this view when you want to inspect specialist agents, roles and execution state."}</p>{swarmRuns.length>1&&<label className="agent-board-run-select">Run<select value={selectedSwarmId||""} onChange={event=>{swarmCursors.current={event:0,coordinator_event:0,blackboard:0};setSelectedSwarmAgentId(null);setSwarmIntegration(null);setSelectedSwarmId(Number(event.target.value));}}>{swarmRuns.map(run=><option key={run.id} value={run.id}>#{run.id} {run.title} · {run.status}</option>)}</select></label>}</div>
       <div className="agent-board-metrics"><span><strong>{boardTotal}</strong> agents</span><span><strong>{boardActive}</strong> active</span><span><strong>{boardCompleted}</strong> complete</span>{swarmBoard?.summary.integration_ready&&<span><strong>✓</strong> integrate</span>}</div>
       {approvalAgents.length>0&&<section className="advanced-approval-banner" aria-live="assertive"><strong>Command approval required</strong><div>{approvalAgents.map(agent=><button type="button" key={agent.id} onClick={()=>setSelectedSwarmAgentId(agent.id)}>Agent #{agent.id} needs command approval</button>)}</div></section>}
+      {(swarmBoard?.budget_requests||[]).length>0&&<section className="advanced-budget-banner" aria-live="assertive"><strong>More budget requested</strong>{(swarmBoard?.budget_requests||[]).map(item=><article key={item.id}><div><b>{item.scope==="coordinator"?"Coordinator":`Agent #${item.task_id}`} needs more budget</b><small>{item.reason||"Additional budget is needed to continue."}</small></div><div className="advanced-budget-actions"><button type="button" onClick={()=>decideBudgetRequest(item,true,10)} disabled={busy}>+10</button><button type="button" onClick={()=>decideBudgetRequest(item,true,25)} disabled={busy}>+25</button><input aria-label={`Custom budget for request ${item.id}`} type="number" min="1" max="200" value={budgetGrantAmounts[item.id]??String(item.requested_amount||10)} onChange={event=>setBudgetGrantAmounts(current=>({...current,[item.id]:event.target.value}))}/><button type="button" onClick={()=>decideBudgetRequest(item,true,Number(budgetGrantAmounts[item.id]||item.requested_amount||10))} disabled={busy}>Grant custom</button><button type="button" onClick={()=>decideBudgetRequest(item,false)} disabled={busy}>Decline</button>{item.task_id&&<button type="button" onClick={()=>setSelectedSwarmAgentId(Number(item.task_id))}>Open agent</button>}</div></article>)}</section>}
       {swarmBoard&&<>
         <article className="agent-board-coordinator"><span className={`agent-dot ${swarmBoard.swarm.status}`}>●</span><div><strong>Coordinator</strong><small>budget {swarmBoard.swarm.coordinator_budget?.used||0}/{swarmBoard.swarm.coordinator_budget?.budget||0} · {swarmBoard.swarm.coordinator_activity?.content||"Monitoring specialist progress and dependencies"}</small></div><div className="agent-board-control-actions">{swarmBoard.swarm.status==="paused"?<button type="button" onClick={()=>swarmAction("resume")} disabled={busy}>Resume</button>:["running","reviewing","waiting"].includes(swarmBoard.swarm.status)&&<button type="button" onClick={()=>swarmAction("pause")} disabled={busy}>Pause</button>}{!["completed","failed","cancelled"].includes(swarmBoard.swarm.status)&&<button type="button" onClick={()=>swarmAction("stop")} disabled={busy}>Stop</button>}</div></article>
         {!["completed","failed","cancelled"].includes(swarmBoard.swarm.status)&&<form className="agent-board-guidance" onSubmit={event=>{event.preventDefault();sendSwarmGuidance(false);}}><input value={swarmGuidance} onChange={event=>setSwarmGuidance(event.target.value)} placeholder="Guide Advanced orchestration…"/><button disabled={busy||!swarmGuidance.trim()}>Coordinator</button><button type="button" onClick={()=>sendSwarmGuidance(true)} disabled={busy||!swarmGuidance.trim()}>Apply to all</button></form>}
