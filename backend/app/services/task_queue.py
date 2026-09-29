@@ -369,6 +369,8 @@ def _prepare_isolation(task: dict) -> threading.Lock | None:
 
 
 def _auto_commit_specialist(task: dict) -> str:
+    if task.get("task_kind") in {"reviewer", "challenger"}:
+        return ""
     if (
         task.get("source_kind") != "lead_specialist"
         and not str(task.get("source_kind") or "").startswith("swarm_")
