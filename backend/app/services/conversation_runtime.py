@@ -285,6 +285,12 @@ def launch(session_id, content, resume_id=None, recovery_metadata=None):
         starting_head=str(recovery_metadata.get("starting_head") or ""),
         starting_diff=str(recovery_metadata.get("starting_diff") or "")[:500000],
     )
+    if resume_id and checkpoint_data:
+        with connect() as conn:
+            conn.execute(
+                "UPDATE agent_runs SET checkpoint=?,checkpoint_restored=1,updated_at=? WHERE id=?",
+                (json.dumps(checkpoint_data, default=str), now(), run_id),
+            )
     def worker():
         with bind(run_id):
             from . import task_queue
