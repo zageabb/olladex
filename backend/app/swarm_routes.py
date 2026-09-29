@@ -698,12 +698,19 @@ def swarm_agent_detail(task_id: int):
             (task_id,),
         ).fetchone()
         commands = [dict(row) for row in conn.execute(
-            "SELECT id,command,output,exit_code,status,cwd,created_at,updated_at "
+            "SELECT id,run_id,command,output,exit_code,status,cwd,created_at,updated_at "
             "FROM command_runs WHERE task_id=? ORDER BY id DESC LIMIT 50",
             (task_id,),
         )]
     for item in commands:
         item["output"] = str(item.get("output") or "")[-20000:]
+    active_pending_commands = []
+    if run and run["status"] == "waiting_for_approval":
+        active_run_id = int(run["id"])
+        active_pending_commands = [
+            item for item in commands
+            if item.get("status") == "pending" and int(item.get("run_id") or 0) == active_run_id
+        ]
     board = swarm_service.blackboard(int(task["swarm_id"]), task_id=task_id, limit=100)
     worktree_summary = None
     changed_files: list[str] = []
@@ -725,6 +732,7 @@ def swarm_agent_detail(task_id: int):
         "task": detailed_task,
         "run": dict(run) if run else None,
         "commands": commands,
+        "active_pending_commands": active_pending_commands,
         "blackboard": board,
         "changed_files": changed_files,
         "worktree": worktree_summary,
