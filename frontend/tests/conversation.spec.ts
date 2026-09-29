@@ -142,3 +142,59 @@ test('keeps long fenced code readable inside the conversation column', async ({ 
   await expect.poll(() => code.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
   await expect.poll(() => bubble.evaluate(element => element.getBoundingClientRect().right <= (element.parentElement?.getBoundingClientRect().right || 0))).toBe(true);
 });
+
+
+test('project AI model selectors show every detected Ollama model', async ({ page }) => {
+  const models = Array.from({length: 28}, (_, index) => `model-${String(index + 1).padStart(2, '0')}:latest`);
+  const project = {
+    id:1,name:'Demo',path:'/demo',model:models[0],approval_mode:'assisted',
+    instructions:'',git_author_name:'Olladex User',git_author_email:'olladex@local'
+  };
+
+  await page.route('**/api/**', async route => {
+    const url = new URL(route.request().url());
+    const p = url.pathname;
+    const json = (data: unknown) => route.fulfill({json:data});
+    if (p === '/api/projects') return json([project]);
+    if (p === '/api/status') return json({version:'test',ollama:{connected:true,models}});
+    if (p === '/api/projects/1/sessions') return json([{id:1,project_id:1,title:'Chat'}]);
+    if (p === '/api/sessions/1/messages') return json([]);
+    if (p === '/api/sessions/1/runs') return json([]);
+    if (p === '/api/sessions/1/memory') return json({content:''});
+    if (p === '/api/projects/1/tree') return json([]);
+    if (p === '/api/projects/1/changes') return json([]);
+    if (p === '/api/projects/1/git/diff') return json({diff:''});
+    if (p === '/api/projects/1/git') return json({changes:[],branches:[],remotes:[]});
+    if (p === '/api/projects/1/intelligence') return json({name:'Demo',path:'/demo',file_count:0,total_bytes:0,languages:[],frameworks:[],test_commands:[],build_commands:[],symbols:[],instructions_configured:false});
+    if (p === '/api/model-profiles') return json([]);
+    if (p === '/api/projects/1/index') return json({files:0,embedded:0});
+    if (p === '/api/settings/ollama') return json({
+      ollama_url:'http://127.0.0.1:11434',
+      ollama_model:models[0],
+      ollama_embedding_model:models[1],
+      connected:true,
+      models,
+      model_available:true,
+      embedding_available:true
+    });
+    return json([]);
+  });
+
+  await page.goto('/');
+  await page.locator('.inspector-tabs').getByRole('button', {name:'project'}).click();
+
+  const defaultSelect = page.getByLabel('Default chat model');
+  const effectiveSelect = page.getByLabel('Effective project model');
+
+  await expect(defaultSelect).toBeVisible();
+  const defaultOptions = await defaultSelect.locator('option').allTextContents();
+  const effectiveOptions = await effectiveSelect.locator('option').allTextContents();
+
+  for (const model of models) {
+    expect(defaultOptions).toContain(model);
+    expect(effectiveOptions).toContain(model);
+  }
+
+  expect(defaultOptions.length).toBe(models.length + 1);
+  expect(effectiveOptions.length).toBe(models.length + 1);
+});
