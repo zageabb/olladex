@@ -712,7 +712,7 @@ def board_snapshot(
     tool_budget_capacity = int(run.get("max_agents") or 0) * tool_budget_per_agent if tool_budget_per_agent else 0
 
     integration_ready = bool(
-        run.get("status") == "completed"
+        run.get("status") in {"ready_for_integration", "integrating", "checks_failed", "ready_to_promote", "completed"}
         and any(
             agent.get("status") == "completed"
             and agent.get("task_kind") not in {"reviewer", "challenger"}
