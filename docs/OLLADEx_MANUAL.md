@@ -721,18 +721,83 @@ A specialist may request help from the Coordinator when another bounded role wou
 
 The specialist cannot create another agent directly. The Coordinator decides whether to decline the request or use spare dynamic-swarm capacity to create one helper. Final challenger/reviewer verification remains downstream of any accepted helper.
 
-### 15.7 Swarm integration and final PR
+### 15.7 Swarm finalization, integration and promotion
 
-When completed specialist branches are ready, the Agent Board exposes the Swarm integration workflow:
+Managed Swarm worktrees deliberately isolate agent changes from the configured project directory. A specialist or reviewer finishing does **not** mean those files are on `main`.
 
-1. select **Check overlaps**;
-2. inspect files changed by more than one specialist branch;
-3. select **Build integration**;
-4. run the combined validation command;
-5. only after checks pass, select **Push branch**;
-6. select **Create final PR**.
+The finalization lifecycle is:
 
-The integration worktree and branch are separate from specialist worktrees. Failed combined checks do not permit the normal finalization path.
+```text
+reviewing
+  → ready_for_integration
+  → integrating
+  → checks_failed      (when combined checks or evidence fail)
+  → ready_to_promote   (only after evidence-backed checks pass)
+  → completed          (local promotion to main succeeded)
+```
+
+The Coordinator owns deterministic integration. Reviewer and challenger agents may inspect Git, but they cannot checkout/switch/merge/rebase/cherry-pick/reset/commit or edit files for repository integration.
+
+Before integration, Olladex verifies:
+
+- required specialist tasks completed;
+- specialist worktrees are clean;
+- implementation work is committed;
+- recovery tasks produced a meaningful committed diff;
+- required reviewer output contains a substantive final report.
+
+The Coordinator then prepares a dedicated branch such as:
+
+```text
+olladex/integration-swarm-<swarm-id>
+```
+
+inside the Olladex integration worktree area. Specialist/reviewer worktrees are preserved.
+
+Before `ready_to_promote`, Olladex verifies:
+
+- the integration worktree is clean;
+- configured combined checks pass;
+- expected deliverables explicitly named or implied by the objective are present;
+- reviewer evidence remains valid.
+
+The Agent Board shows three separate locations:
+
+1. **Specialist worktrees** — isolated agent branches and files;
+2. **Integration worktree** — deterministic combined result;
+3. **Main project directory** — the configured repository path users normally open.
+
+Until local promotion succeeds, the board shows:
+
+```text
+Work is committed on <branch> but has not yet been promoted to main.
+```
+
+#### Local repositories
+
+For a local-only repository, select **Promote to main** after the Swarm reaches `ready_to_promote`.
+
+Promotion runs from the configured main worktree and uses a fast-forward-only merge. Olladex:
+
+- confirms `main` is already checked out in the configured project directory;
+- requires the main worktree to be clean;
+- resolves the integration commit;
+- requires `main` to be an ancestor of that integration commit;
+- runs `git merge --ff-only <integration-commit>`;
+- verifies main contains the integration commit;
+- verifies expected generated files are visible in the configured project directory.
+
+Olladex never force-resets main during promotion. On dirty/diverged/conflicting state it reports the problem and preserves all branches/worktrees for recovery.
+
+Only successful local promotion marks a local-only Swarm `completed`.
+
+#### Remote repositories
+
+For repositories with a remote, the verified integration branch can still be pushed. If the remote is GitHub, **Create final PR** remains available.
+
+A pushed integration branch or open PR is **not** equivalent to “merged to main”; the board keeps those states distinct.
+
+Failed checks, failed evidence gates and blocked promotion never delete specialist or integration worktrees automatically.
 
 ---
 
