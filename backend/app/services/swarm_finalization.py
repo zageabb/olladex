@@ -66,9 +66,52 @@ def reviewer_report(swarm_id: int) -> dict:
     return {"required": required, "task_id": int(reviewer["id"]), "report": report}
 
 
+def _dependency_ids(task: dict) -> list[int]:
+    value = task.get("depends_on")
+    if isinstance(value, list):
+        return [int(item) for item in value if int(item) > 0]
+    try:
+        parsed = json.loads(str(value or "[]"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    return [int(item) for item in parsed if int(item) > 0]
+
+
+def _unique_task_changes(task: dict, tasks_by_id: dict[int, dict], base: str) -> dict:
+    path = str(task.get("worktree_path") or "").strip()
+    branch = str(task.get("worktree_branch") or "").strip()
+    if not path or not branch:
+        return {"commits": [], "files": []}
+    exclude_refs = [base]
+    for dependency_id in _dependency_ids(task):
+        dependency = tasks_by_id.get(dependency_id)
+        dependency_branch = str((dependency or {}).get("worktree_branch") or "").strip()
+        if dependency_branch and dependency_branch not in exclude_refs:
+            exclude_refs.append(dependency_branch)
+    args = ["rev-list", branch, "--not", *exclude_refs]
+    code, output = worktrees._git(__import__("pathlib").Path(path), *args)
+    if code:
+        raise ValueError(output.strip() or f"Could not inspect unique commits for task #{task['id']}")
+    commits = [line.strip() for line in output.splitlines() if line.strip()]
+    files: list[str] = []
+    for sha in commits:
+        code, changed = worktrees._git(
+            __import__("pathlib").Path(path),
+            "show", "--pretty=format:", "--name-only", sha, "--",
+        )
+        if code:
+            raise ValueError(changed.strip() or f"Could not inspect commit {sha[:12]} for task #{task['id']}")
+        for item in changed.splitlines():
+            item = item.strip()
+            if item and item not in files:
+                files.append(item)
+    return {"commits": commits, "files": files}
+
+
 def specialist_evidence(swarm_id: int, project: dict, base: str = "main") -> dict:
     tasks = _tasks(swarm_id)
     specialists = [item for item in tasks if item.get("task_kind") not in VERIFICATION_KINDS]
+    tasks_by_id = {int(item["id"]): item for item in tasks}
     recovered_ids = _recovered_failure_ids(tasks)
     unresolved = [
         item for item in specialists
@@ -104,14 +147,15 @@ def specialist_evidence(swarm_id: int, project: dict, base: str = "main") -> dic
         if state.get("changes"):
             raise ValueError(f"Specialist task #{task['id']} still has uncommitted worktree changes")
         changed = integration.changed_files(project, branch, base)
-        changed_by_task[int(task["id"])] = changed
+        unique = _unique_task_changes(task, tasks_by_id, base)
+        changed_by_task[int(task["id"])] = unique["files"]
 
-        if task.get("source_kind") == "swarm_recovery" and not changed:
+        if task.get("source_kind") == "swarm_recovery" and not unique["files"]:
             raise ValueError(f"Recovery task #{task['id']} completed without a meaningful committed diff")
         role = str(task.get("task_kind") or task.get("agent_role") or "worker")
         if role not in NO_CHANGE_ROLES and task.get("source_kind") in {
             "swarm_specialist", "swarm_recovery", "swarm_followup", "swarm_help"
-        } and not changed:
+        } and not unique["files"]:
             raise ValueError(f"Implementation task #{task['id']} completed without committed changes")
 
         if changed and branch not in branches:
@@ -123,6 +167,8 @@ def specialist_evidence(swarm_id: int, project: dict, base: str = "main") -> dic
             "branch": branch,
             "head": state.get("head") or "",
             "changed_files": changed,
+            "unique_changed_files": unique["files"],
+            "unique_commits": unique["commits"],
             "recovery": task.get("source_kind") == "swarm_recovery",
         })
 
