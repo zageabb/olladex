@@ -31,6 +31,8 @@ class SwarmProfileRequest(BaseModel):
     dynamic_size: bool = True
     agent_tool_budget: int = Field(default=30, ge=1, le=200)
     coordinator_tool_budget: int = Field(default=20, ge=1, le=200)
+    resumed_task_tool_budget: int = Field(default=20, ge=1, le=200)
+    max_recovery_attempts: int = Field(default=2, ge=1, le=10)
     require_reviewer: bool = True
     require_challenger: bool = False
 
