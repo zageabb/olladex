@@ -969,7 +969,7 @@ def test_swarm_integration_push_state_is_durable_and_required_for_pr(tmp_path, m
     swarm_id = _create_swarm(project_id, session_id)
     with connect() as conn:
         conn.execute(
-            "UPDATE swarm_runs SET status='integrating',integration_path=?,integration_branch=?,integration_check_status='passed' WHERE id=?",
+            "UPDATE swarm_runs SET status='ready_to_promote',integration_path=?,integration_branch=?,integration_check_status='passed' WHERE id=?",
             (str(tmp_path / "integration"), "olladex/swarm-test-integration", swarm_id),
         )
 
