@@ -1212,3 +1212,26 @@ def test_create_run_requires_git_repository_with_head(tmp_path, monkeypatch):
     git.initialize_local_repository(swarm_routes._project(project_id))
     created = swarm.create_run(project_id, session_id, "Local", "Test local swarm", profile_id)
     assert created["id"]
+
+
+def test_legacy_completed_unpromoted_swarm_migrates_back_to_finalization(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id)
+    with connect() as conn:
+        conn.execute(
+            "UPDATE swarm_runs SET status='completed',completed_at=?,integration_path='',integration_branch='',"
+            "integration_check_status='',promoted_commit='' WHERE id=?",
+            (now(), swarm_id),
+        )
+
+    init_db()
+
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT status,completed_at,integration_path,promoted_commit FROM swarm_runs WHERE id=?",
+            (swarm_id,),
+        ).fetchone()
+    assert row["status"] == "ready_for_integration"
+    assert row["completed_at"] == ""
+    assert row["integration_path"] == ""
+    assert row["promoted_commit"] == ""
