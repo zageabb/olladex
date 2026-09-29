@@ -756,8 +756,8 @@ test('advanced orchestration recovers budget-exhausted agents and blocked depend
   await expect(recovery.getByText('Recovery available')).toBeVisible();
   await expect(recovery.getByText(/Checkpoint 22341 bytes/)).toBeVisible();
   await expect(recovery.getByText(/prior budget 30 · new budget 44/)).toBeVisible();
-  await expect(recovery.getByText('olladex/task-301',{exact:true})).toBeVisible();
-  await expect(recovery.getByText('/tmp/worktrees/30/task-301',{exact:true})).toBeVisible();
+  await expect(recovery.getByText('Branch: olladex/task-301',{exact:true})).toBeVisible();
+  await expect(recovery.getByText('Worktree: /tmp/worktrees/30/task-301',{exact:true})).toBeVisible();
   await expect(recovery.getByText(/Agent #302 blocked by dependency/)).toBeVisible();
   await expect(recovery.getByText(/Integration unavailable:/)).toBeVisible();
   await expect(page.locator('.agent-board-integration')).toHaveCount(0);
