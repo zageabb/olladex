@@ -659,43 +659,35 @@ def ensure_budget_request(
 
 
 def _resume_budget_exhausted_agent(task_id: int, run_id: int, amount: int) -> dict:
-    from . import conversation_runtime
-    with connect() as conn:
-        task = conn.execute(
-            "SELECT id,session_id,status,worktree_path,swarm_id FROM background_tasks WHERE id=?",
-            (task_id,),
-        ).fetchone()
-        prior = conn.execute(
-            "SELECT id,status,session_id,task_id,checkpoint FROM agent_runs WHERE id=?",
-            (run_id,),
-        ).fetchone()
-    if not task or not prior:
+    from . import task_queue
+    task = task_queue.get(task_id)
+    if not task:
         raise ValueError("Budget-exhausted agent could not be found")
-    if int(prior["task_id"] or 0) != int(task_id):
-        raise ValueError("Budget request no longer belongs to this agent")
-    if prior["status"] != "budget_exhausted":
-        raise ValueError("Only a budget-exhausted agent can be resumed")
-    if task["status"] != "budget_exhausted":
-        raise ValueError("Agent task is no longer waiting for budget")
-    if not str(task["worktree_path"] or "").strip():
-        raise ValueError("Agent worktree is unavailable")
-    with connect() as conn:
-        conn.execute(
-            "UPDATE background_tasks SET budget_extra=budget_extra+?,error='',completed_at='',cancel_requested=0,current_activity=? WHERE id=?",
-            (amount, f"Budget extended by {amount}; resuming from checkpoint", task_id),
-        )
-    resumed = conversation_runtime.launch(
-        int(task["session_id"]),
-        f"Budget extended by {amount}. Continue the same task from the saved checkpoint and existing worktree.",
-        resume_id=run_id,
-    )
+    info = task_queue.recovery_info(task_id)
+    if int(info.get("prior_run_id") or 0) != int(run_id):
+        raise ValueError("Budget request no longer targets the most recent resumable run")
+    resumed = task_queue.resume_task(task_id, fresh_budget=amount)
     emit_coordinator_event(
         int(task["swarm_id"]),
         "budget_granted",
-        {"scope": "agent", "task_id": task_id, "prior_run_id": run_id, "new_run_id": resumed["id"], "amount": amount},
+        {
+            "scope": "agent",
+            "task_id": task_id,
+            "prior_run_id": run_id,
+            "new_run_id": resumed["run_id"],
+            "amount": amount,
+            "checkpoint_restored": resumed["checkpoint_restored"],
+            "worktree": resumed["worktree_path"],
+            "branch": resumed["worktree_branch"],
+        },
     )
-    return {"task_id": task_id, "prior_run_id": run_id, "run_id": resumed["id"], "amount": amount}
-
+    return {
+        "task_id": task_id,
+        "prior_run_id": run_id,
+        "run_id": resumed["run_id"],
+        "amount": amount,
+        "recovery": resumed,
+    }
 
 def decide_budget_request(request_id: int, *, accepted: bool, amount: int | None = None, decided_by: str = "user") -> dict:
     with connect() as conn:
