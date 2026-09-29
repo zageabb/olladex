@@ -63,6 +63,27 @@ def status() -> dict:
         return {"connected": False, "url": settings.ollama_url, "models": [], "embedding_model": settings.ollama_embedding_model, "embedding_available": False, "error": str(exc)}
 
 
+def _guard_verifier_git_command(command: str) -> None:
+    task = task_queue.current_task()
+    if not task or task.get("task_kind") not in {"reviewer", "challenger"}:
+        return
+    if not str(task.get("source_kind") or "").startswith("swarm_"):
+        return
+    mutating = re.compile(
+        r"(?:^|[;&|]\s*)git\s+(?:"
+        r"checkout|switch|merge|rebase|cherry-pick|reset|commit|add|restore|clean|rm|mv|"
+        r"worktree|update-ref|tag|"
+        r"branch\s+(?:-d|-D|-m|-M)"
+        r")\b",
+        re.I,
+    )
+    if mutating.search(str(command or "")):
+        raise ValueError(
+            "Reviewer/challenger tasks may inspect Git but may not mutate or integrate repository branches. "
+            "Olladex Coordinator finalization owns deterministic integration and promotion."
+        )
+
+
 def _check_cancelled() -> None:
     if task_queue.cancel_requested() or runtime.cancelled():
         raise AgentCancelled("Task cancelled")
@@ -204,6 +225,7 @@ def _execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
             result = {"path": path, "diff": diff, "before": before, "after": after, "status": "proposed"}
     elif name == "run_command":
         command = args.get("command", "")
+        _guard_verifier_git_command(command)
         if task_queue.current_task_id() and not task_queue.current_worktree_path():
             raise ValueError("Background commands require an isolated Git worktree")
         if runtime.current_id():
