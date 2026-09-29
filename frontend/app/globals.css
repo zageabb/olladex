@@ -994,3 +994,13 @@ button.primary:hover { background: var(--blue-2); }
 .agent-pending-approvals code{display:block;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:9px}
 .agent-pending-approvals small{font-size:8px;color:#68778b;word-break:break-all}
 .agent-pending-approvals article>div{display:flex;gap:6px}
+
+.advanced-budget-banner{margin:8px 0;padding:10px 12px;border:1px solid #a98bd4;border-radius:8px;background:#faf7ff;display:grid;gap:8px}
+.advanced-budget-banner>strong{font-size:10px;text-transform:uppercase;letter-spacing:.04em}
+.advanced-budget-banner article{padding:8px;border:1px solid #ddd0ef;border-radius:7px;background:#fff;display:grid;gap:7px}
+.advanced-budget-banner article>div:first-child{display:grid;gap:3px}
+.advanced-budget-banner b{font-size:9px}
+.advanced-budget-banner small{font-size:8px;color:#68778b;line-height:1.4}
+.advanced-budget-actions{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.advanced-budget-actions input{width:72px;padding:6px;border:1px solid #c9cfd8;border-radius:6px;font-size:9px}
+.advanced-budget-actions button{padding:6px 8px;font-size:8px}
