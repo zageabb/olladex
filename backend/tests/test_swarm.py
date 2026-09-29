@@ -463,11 +463,12 @@ def test_dynamic_initial_budget_reserves_one_recovery_slot():
     assert swarm.initial_specialist_budget(dynamic, 3) == 2
 
 
-def test_challenger_only_profile_completes_after_challenger(tmp_path, monkeypatch):
+def test_challenger_completion_hands_off_to_finalization_instead_of_completing(tmp_path, monkeypatch):
     project_id, session_id = _seed(tmp_path, monkeypatch)
     swarm_id = _create_swarm(project_id, session_id, max_agents=3, max_concurrency=2)
     with connect() as conn:
         profile_id = int(conn.execute("SELECT id FROM swarm_profiles WHERE name='Deep Development'").fetchone()["id"])
+        conn.execute("UPDATE swarm_profiles SET require_reviewer=0 WHERE id=?", (profile_id,))
         conn.execute(
             "UPDATE swarm_runs SET profile_id=? WHERE id=?",
             (profile_id, swarm_id),
@@ -486,9 +487,14 @@ def test_challenger_only_profile_completes_after_challenger(tmp_path, monkeypatc
         conn.execute("UPDATE background_tasks SET status='completed',result='ok',completed_at=? WHERE id=?", (now(), specialist["id"]))
         conn.execute("UPDATE background_tasks SET status='completed',result='checked',completed_at=? WHERE id=?", (now(), challenger["id"]))
 
+    handed_off = []
+    monkeypatch.setattr(swarm_coordinator, "_prepare_finalization", lambda run: handed_off.append(int(run["id"])))
+
     swarm_coordinator._reconcile(swarm_id)
 
-    assert swarm.get_run(swarm_id)["status"] == "completed"
+    assert handed_off == [swarm_id]
+    assert swarm.get_run(swarm_id)["status"] == "reviewing"
+    assert swarm.get_run(swarm_id)["status"] != "completed"
 
 
 def test_challenger_only_profile_fails_when_challenger_fails(tmp_path, monkeypatch):
