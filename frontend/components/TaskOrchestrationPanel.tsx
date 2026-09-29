@@ -19,13 +19,14 @@ type SwarmAgent = { id:number; title:string; status:string; agent_role:string; p
 type SwarmAgentDetail = { task:SwarmAgent; commands:{id:number;command:string;output:string;exit_code:number;status:string}[]; blackboard:{id:number;category:string;content:string}[]; changed_files:string[]; worktree?:{branch_diff?:string;working_diff?:string}|null };
 type GitCapabilities = { repository:boolean; has_head:boolean; remotes:{name:string;url:string}[]; has_remote:boolean; github_remote:string; can_push:boolean; can_create_pull_request:boolean };
 type SwarmBoard = {
-  swarm:{ id:number; title:string; status:string; agents?:SwarmAgent[]; coordinator_activity?:{category:string;content:string}|null; coordinator_budget?:{used:number;budget:number;remaining:number}; integration_path?:string; integration_branch?:string; integration_check_status?:string; integration_check_output?:string; integration_pushed?:number; integration_pr_number?:number; integration_pr_url?:string; integration_pr_state?:string };
+  swarm:{ id:number; title:string; status:string; agents?:SwarmAgent[]; coordinator_activity?:{category:string;content:string}|null; coordinator_budget?:{used:number;budget:number;remaining:number}; integration_path?:string; integration_branch?:string; integration_check_status?:string; integration_check_output?:string; integration_pushed?:number; integration_pr_number?:number; integration_pr_url?:string; integration_pr_state?:string; promotion_status?:string; promoted_commit?:string; promotion_output?:string };
   summary:{ total_agents:number; active_agents:number; completed_agents:number; failed_agents:number; progress:number; max_agents:number; max_concurrency:number; integration_ready:boolean };
   events?:{id:number;task_id:number;kind:string;payload:Record<string,unknown>;created_at:string}[];
   coordinator_events?:{id:number;kind:string;payload:Record<string,unknown>;created_at:string}[];
   blackboard?:{id:number;task_id?:number|null;category:string;content:string;key?:string;created_at:string}[];
   cursors?:{event:number;coordinator_event:number;blackboard:number};
   repository?:GitCapabilities;
+  locations?:{main:string;integration:string;specialists:{task_id:number;title:string;role:string;path:string;branch:string;status:string}[]};
 };
 type SwarmSkill = { project_id:number; skill:"swarm"; enabled:boolean };
 type SwarmProfile = { id:number; name:string; max_agents:number; max_concurrency:number; max_depth:number; dynamic_size:number; agent_tool_budget:number; coordinator_tool_budget:number; require_reviewer:number; require_challenger:number; coordinator_profile_id?:number|null; default_worker_profile_id?:number|null; role_profiles?:Record<string,number> };
@@ -328,6 +329,20 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
     finally{setBusy(false);}
   }
 
+  async function promoteSwarmIntegration(){
+    if(!swarmBoard)return;
+    setBusy(true);
+    try{
+      const result=await request<{status:string;promotion:{main_commit:string;main_path:string;integration_commit:string}}>(`/swarms/${swarmBoard.swarm.id}/integration/promote`,{
+        method:"POST",body:JSON.stringify({target_branch:"main"})
+      });
+      setNotice(`Promoted to main at ${result.promotion.main_commit.slice(0,12)}`);
+      await load();
+      onCreated();
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
+  }
+
   async function pushSwarmIntegration(){
     if(!swarmBoard)return;
     setBusy(true);
@@ -458,12 +473,19 @@ export function TaskOrchestrationPanel({ projectId, onCreated }: { projectId:num
         <details><summary>Blackboard · {swarmBoard.blackboard?.length||0}</summary><div>{swarmBoard.blackboard?.length?swarmBoard.blackboard.slice().reverse().slice(0,12).map(item=><article key={item.id}><b>{item.category}</b><MarkdownBody value={item.content} compact />{item.task_id?<small>Agent #{item.task_id}</small>:<small>Coordinator</small>}</article>):<p>No shared knowledge yet.</p>}</div></details>
       </div>}
       {swarmBoard&&(swarmBoard.summary.integration_ready||swarmIntegration)&&<section className="agent-board-integration">
-        <header><div><p className="eyebrow">Swarm integration</p><h4>{swarmIntegration?.branch||"Completed specialist branches are ready"}</h4></div><div className="agent-board-control-actions"><button type="button" onClick={checkSwarmIntegration} disabled={busy}>Check overlaps</button>{swarmIntegration&&<button type="button" className="primary" onClick={buildSwarmIntegration} disabled={busy}>Build integration</button>}</div></header>
+        <header><div><p className="eyebrow">Swarm integration</p><h4>{swarmIntegration?.branch||"Completed specialist branches are ready"}</h4></div><div className="agent-board-control-actions"><button type="button" onClick={checkSwarmIntegration} disabled={busy}>Check overlaps</button>{!swarmBoard.swarm.integration_branch&&<button type="button" className="primary" onClick={buildSwarmIntegration} disabled={busy}>Build integration</button>}</div></header>
+        {swarmBoard.locations&&<div className="swarm-workspace-locations">
+          <article><strong>Main project directory</strong><code>{swarmBoard.locations.main}</code><small>{swarmBoard.swarm.status==="completed"&&swarmBoard.swarm.promoted_commit?`Promoted · ${swarmBoard.swarm.promoted_commit.slice(0,12)}`:"Target worktree"}</small></article>
+          <article><strong>Integration worktree</strong><code>{swarmBoard.locations.integration||"Not prepared yet"}</code><small>{swarmBoard.swarm.integration_branch||"No integration branch"}</small></article>
+          <article><strong>Specialist worktrees</strong><div>{swarmBoard.locations.specialists.length?swarmBoard.locations.specialists.map(item=><small key={item.task_id}>#{item.task_id} {item.branch} · {item.path}</small>):<small>No specialist worktrees</small>}</div></article>
+        </div>}
+        {swarmBoard.swarm.integration_branch&&swarmBoard.swarm.status!=="completed"&&<div className="integration-warning"><strong>Not yet in main</strong><span>Work is committed on {swarmBoard.swarm.integration_branch} but has not yet been promoted to main.</span></div>}
         {swarmIntegration?.overlaps?.length?<div className="integration-warning"><strong>{swarmIntegration.overlaps.length} overlap(s)</strong><span>{swarmIntegration.overlaps.map(item=>item.path).join(", ")}</span></div>:swarmIntegration&&<div className="integration-ok">No overlapping files detected.</div>}
         {swarmIntegration?.branch&&<div className="agent-board-integration-actions"><label>Combined checks<input value={swarmCheckCommand} onChange={event=>setSwarmCheckCommand(event.target.value)}/></label><button type="button" onClick={runSwarmChecks} disabled={busy||!swarmCheckCommand.trim()}>Run checks</button><span>{swarmIntegration.check_status||"not tested"}</span>
-          {swarmIntegration.check_status==="passed"&&!swarmBoard.repository?.has_remote&&<span>Verified local integration branch ready</span>}
-          {swarmIntegration.check_status==="passed"&&swarmBoard.repository?.has_remote&&!swarmIntegrationPushed&&<button type="button" onClick={pushSwarmIntegration} disabled={busy}>Push branch</button>}
-          {swarmIntegration.check_status==="passed"&&swarmIntegrationPushed&&swarmBoard.repository?.can_create_pull_request&&!swarmBoard.swarm.integration_pr_number&&<button type="button" className="primary" onClick={createSwarmPullRequest} disabled={busy}>Create final PR</button>}
+          {swarmBoard.swarm.status==="ready_to_promote"&&<button type="button" className="primary" onClick={promoteSwarmIntegration} disabled={busy}>Promote to main</button>}
+          {swarmBoard.swarm.status==="ready_to_promote"&&!swarmBoard.repository?.has_remote&&<span>Verified local integration branch ready</span>}
+          {swarmBoard.swarm.status==="ready_to_promote"&&swarmBoard.repository?.has_remote&&!swarmIntegrationPushed&&<button type="button" onClick={pushSwarmIntegration} disabled={busy}>Push branch</button>}
+          {swarmBoard.swarm.status==="ready_to_promote"&&swarmIntegrationPushed&&swarmBoard.repository?.can_create_pull_request&&!swarmBoard.swarm.integration_pr_number&&<button type="button" onClick={createSwarmPullRequest} disabled={busy}>Create final PR</button>}
           {swarmIntegration.check_status==="passed"&&swarmIntegrationPushed&&!swarmBoard.repository?.can_create_pull_request&&<span>Remote branch pushed · GitHub PR not available</span>}
           {swarmBoard.swarm.integration_pr_number?<span>PR #{swarmBoard.swarm.integration_pr_number} {swarmBoard.swarm.integration_pr_state||""}</span>:null}
         </div>}
