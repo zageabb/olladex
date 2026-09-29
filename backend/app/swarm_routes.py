@@ -68,6 +68,11 @@ class SwarmIntegrationPushRequest(BaseModel):
     remote: str = Field(default="origin", min_length=1, max_length=120)
 
 
+class BudgetDecisionRequest(BaseModel):
+    accepted: bool
+    amount: int | None = Field(default=None, ge=1, le=200)
+
+
 class SwarmPromotionRequest(BaseModel):
     target_branch: str = Field(default="main", min_length=1, max_length=200)
 
@@ -333,6 +338,25 @@ def steer_swarm_coordinator(swarm_id: int, body: AgentInputRequest):
 def broadcast_swarm_guidance(swarm_id: int, body: AgentInputRequest):
     try:
         return swarm_service.broadcast_guidance(swarm_id, body.content)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/swarms/{swarm_id}/budget-requests/{request_id}/decision")
+def decide_swarm_budget_request(swarm_id: int, request_id: int, body: BudgetDecisionRequest):
+    try:
+        request = next(
+            (item for item in swarm_service.budget_requests(swarm_id) if int(item["id"]) == request_id),
+            None,
+        )
+        if not request:
+            raise ValueError("Budget request not found in this Advanced orchestration run")
+        return swarm_service.decide_budget_request(
+            request_id,
+            accepted=body.accepted,
+            amount=body.amount,
+            decided_by="user",
+        )
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 
