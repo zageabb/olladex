@@ -982,3 +982,15 @@ button.primary:hover { background: var(--blue-2); }
 .swarm-workspace-locations small{display:block;color:#6b7b8f;font-size:8px;line-height:1.35;overflow-wrap:anywhere}
 .swarm-workspace-locations article>div{display:grid;gap:3px}
 @media(max-width:1000px){.swarm-workspace-locations{grid-template-columns:1fr}}
+
+.advanced-approval-banner{margin:8px 0;padding:10px 12px;border:1px solid #d7a928;border-radius:8px;background:#fff9e8;display:grid;gap:7px}
+.advanced-approval-banner>strong{font-size:10px;text-transform:uppercase;letter-spacing:.04em}
+.advanced-approval-banner>div{display:flex;flex-wrap:wrap;gap:6px}
+.advanced-approval-banner button,.agent-approval-link{border:1px solid #d7a928;background:#fff;color:#6e5200;border-radius:6px;padding:6px 8px;font-size:9px;font-weight:700;cursor:pointer}
+.agent-approval-link{display:inline-flex;width:max-content;margin-top:4px}
+.agent-pending-approvals{margin:10px 0;padding:10px;border:1px solid #d7a928;border-radius:8px;background:#fff9e8;display:grid;gap:8px}
+.agent-pending-approvals>strong{font-size:10px;text-transform:uppercase;letter-spacing:.04em}
+.agent-pending-approvals article{padding:8px;border:1px solid #ead79d;border-radius:6px;background:#fff;display:grid;gap:6px}
+.agent-pending-approvals code{display:block;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:9px}
+.agent-pending-approvals small{font-size:8px;color:#68778b;word-break:break-all}
+.agent-pending-approvals article>div{display:flex;gap:6px}
