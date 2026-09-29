@@ -1373,7 +1373,7 @@ def test_unresolved_command_approval_prevents_orchestration_completion(tmp_path,
     assert waiting_agent["pending_approval"]["command"] == "pytest -q"
 
 
-def test_agent_budget_grant_is_additive_and_resumes_same_task_checkpoint(tmp_path, monkeypatch):
+def test_agent_budget_grant_uses_supported_recovery_service(tmp_path, monkeypatch):
     project_id, session_id = _seed(tmp_path, monkeypatch)
     swarm_id = _create_swarm(project_id, session_id, max_agents=3, max_concurrency=2)
     task = task_queue.enqueue(
@@ -1392,13 +1392,26 @@ def test_agent_budget_grant_is_additive_and_resumes_same_task_checkpoint(tmp_pat
             (session_id, task["id"], "budget_exhausted", '[{"role":"user","content":"original"}]', 0, stamp, stamp),
         ).lastrowid)
 
-    launched = {}
+    resumed = {}
     monkeypatch.setattr(
-        conversation_runtime,
-        "launch",
-        lambda session_id, content, resume_id=None: launched.update(
-            {"session_id": session_id, "content": content, "resume_id": resume_id}
-        ) or {"id": 999, "session_id": session_id, "task_id": task["id"], "status": "running"},
+        task_queue,
+        "recovery_info",
+        lambda task_id: {"prior_run_id": run_id},
+    )
+    monkeypatch.setattr(
+        task_queue,
+        "resume_task",
+        lambda task_id, fresh_budget=None: resumed.update(
+            {"task_id": task_id, "fresh_budget": fresh_budget}
+        ) or {
+            "task_id": task_id,
+            "prior_run_id": run_id,
+            "run_id": 999,
+            "fresh_budget": fresh_budget,
+            "checkpoint_restored": True,
+            "worktree_path": str(tmp_path / "task-worktree"),
+            "worktree_branch": "olladex/task-budget",
+        },
     )
 
     request = swarm.ensure_budget_request(
@@ -1413,24 +1426,9 @@ def test_agent_budget_grant_is_additive_and_resumes_same_task_checkpoint(tmp_pat
 
     assert result["status"] == "granted"
     assert result["granted_amount"] == 25
-    assert launched["session_id"] == session_id
-    assert launched["resume_id"] == run_id
-    assert "Continue the same task" in launched["content"]
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT budget_extra,status,worktree_path FROM background_tasks WHERE id=?",
-            (task["id"],),
-        ).fetchone()
-        profile_budget = int(conn.execute(
-            "SELECT sp.agent_tool_budget FROM swarm_runs sr JOIN swarm_profiles sp ON sp.id=sr.profile_id WHERE sr.id=?",
-            (swarm_id,),
-        ).fetchone()["agent_tool_budget"])
-    assert row["budget_extra"] == 25
-    assert row["status"] == "budget_exhausted"
-    assert row["worktree_path"] == str(tmp_path / "task-worktree")
-    with task_queue.bind(task["id"]):
-        settings = task_queue.current_model_settings()
-    assert settings["agent_tool_budget"] == profile_budget + 25
+    assert resumed == {"task_id": task["id"], "fresh_budget": 25}
+    assert result["resume"]["recovery"]["checkpoint_restored"] is True
+    assert result["resume"]["recovery"]["worktree_branch"] == "olladex/task-budget"
 
 
 def test_coordinator_budget_extension_is_run_local_and_additive(tmp_path, monkeypatch):
