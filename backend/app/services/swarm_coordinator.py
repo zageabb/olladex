@@ -235,10 +235,23 @@ def _prepare_finalization(run: dict) -> None:
 def _consider_budget_exhaustion(run: dict, exhausted: list[dict], completed: list[dict]) -> bool:
     swarm_id = int(run["id"])
     pending = swarm.budget_requests(swarm_id, pending_only=True)
-    if pending:
-        return True
 
-    target = exhausted[0]
+    # A pending Coordinator-budget request prevents safe automated decisions.
+    # Agent-specific requests, however, must not stall unrelated exhausted
+    # specialists; pick the next exhausted task that has no request of its own.
+    if any(item.get("scope") == "coordinator" for item in pending):
+        return True
+    pending_agent_ids = {
+        int(item.get("task_id") or 0)
+        for item in pending
+        if item.get("scope") == "agent" and item.get("task_id")
+    }
+    target = next(
+        (item for item in exhausted if int(item["id"]) not in pending_agent_ids),
+        None,
+    )
+    if target is None:
+        return True
     task_id = int(target["id"])
     run_id = int(target.get("run_id") or 0)
     prior_auto_grants = [
@@ -271,6 +284,13 @@ def _consider_budget_exhaustion(run: dict, exhausted: list[dict], completed: lis
     action = str(decision.get("action") or "ask_user").lower()
     amount = max(1, min(int(decision.get("amount") or 10), 100))
     reason = str(decision.get("reason") or "More budget may be needed to complete the current task.")
+
+    if action == "wait":
+        # _budget_extension_decision already created a Coordinator-budget
+        # request. Do not also create an agent request: once the Coordinator
+        # receives more decision budget, the next reconciliation can make the
+        # agent extension decision automatically.
+        return True
 
     if action == "grant":
         request = swarm.ensure_budget_request(
@@ -321,7 +341,7 @@ def _budget_extension_decision(run: dict, agent: dict, completed: list[dict]) ->
             requested_amount=10,
             reason=f"Coordinator needs more decision budget to assess agent #{agent['id']}'s budget extension.",
         )
-        return {"action": "ask_user", "amount": 10, "reason": "Coordinator decision budget is exhausted."}
+        return {"action": "wait", "amount": 10, "reason": "Coordinator decision budget is exhausted."}
 
     profile = swarm.get_profile(int(run["profile_id"]))
     _, model = swarm.coordinator_model(profile)
