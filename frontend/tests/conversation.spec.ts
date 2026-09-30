@@ -187,14 +187,22 @@ test('project AI model selectors show every detected Ollama model', async ({ pag
   const effectiveSelect = page.getByLabel('Effective project model');
 
   await expect(defaultSelect).toBeVisible();
-  const defaultOptions = await defaultSelect.locator('option').allTextContents();
-  const effectiveOptions = await effectiveSelect.locator('option').allTextContents();
+
+  // The Ollama settings request is loaded asynchronously after the project
+  // panel renders. Assert option values after that request has populated the
+  // selectors rather than reading their initial configured-only state.
+  await expect.poll(async () => defaultSelect.locator('option').count()).toBeGreaterThanOrEqual(models.length + 1);
+  await expect.poll(async () => effectiveSelect.locator('option').count()).toBeGreaterThanOrEqual(models.length + 1);
+
+  const defaultOptions = await defaultSelect.locator('option').evaluateAll(
+    options => options.map(option => (option as HTMLOptionElement).value)
+  );
+  const effectiveOptions = await effectiveSelect.locator('option').evaluateAll(
+    options => options.map(option => (option as HTMLOptionElement).value)
+  );
 
   for (const model of models) {
     expect(defaultOptions).toContain(model);
     expect(effectiveOptions).toContain(model);
   }
-
-  expect(defaultOptions.length).toBeGreaterThanOrEqual(models.length + 1);
-  expect(effectiveOptions.length).toBeGreaterThanOrEqual(models.length + 1);
 });
