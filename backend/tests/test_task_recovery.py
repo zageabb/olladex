@@ -353,6 +353,43 @@ def test_recovery_info_reports_fresh_budget_and_checkpoint(tmp_path, monkeypatch
     assert info["can_resume"] is True
 
 
+def test_recovery_limit_disables_resume_and_blocks_more_automatic_recovery(tmp_path, monkeypatch):
+    project, session_id, swarm_id, _ = _seed_repo(tmp_path, monkeypatch)
+    task, prior_run_id = _exhausted_task(project, session_id, swarm_id)
+    with connect() as conn:
+        profile_id = conn.execute(
+            "SELECT profile_id FROM swarm_runs WHERE id=?",
+            (swarm_id,),
+        ).fetchone()["profile_id"]
+        conn.execute(
+            "UPDATE swarm_profiles SET max_recovery_attempts=2 WHERE id=?",
+            (profile_id,),
+        )
+        conn.execute(
+            "UPDATE background_tasks SET recovery_attempt=2 WHERE id=?",
+            (task["id"],),
+        )
+
+    info = task_queue.recovery_info(task["id"])
+
+    assert info["prior_run_id"] == prior_run_id
+    assert info["recovery_attempt"] == 2
+    assert info["max_recovery_attempts"] == 2
+    assert info["recovery_limit_reached"] is True
+    assert info["can_resume"] is False
+
+    with pytest.raises(ValueError, match="maximum recovery attempts"):
+        task_queue.resume_task(task["id"], fresh_budget=20)
+
+    board = swarm.board_snapshot(swarm_id)
+    assert any(
+        blocker["task_id"] == task["id"]
+        and blocker["recovery"]["recovery_limit_reached"] is True
+        for blocker in board["summary"]["recovery_blockers"]
+    )
+    assert f"#{task['id']} recovery limit reached" in board["summary"]["integration_blockers"]
+
+
 def _wait_for(predicate, timeout: float = 3.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
