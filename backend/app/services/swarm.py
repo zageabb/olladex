@@ -869,7 +869,7 @@ def board_snapshot(
 
     complete = status_counts.get("completed", 0)
     active = sum(status_counts.get(state, 0) for state in ("running", "waiting_for_input", "waiting_for_approval"))
-    failed = sum(status_counts.get(state, 0) for state in ("failed", "budget_exhausted", "dependency_failed", "no_progress", "incomplete"))
+    failed = sum(status_counts.get(state, 0) for state in ("failed", "dependency_failed", "no_progress", "incomplete"))
     recovery_blockers = [
         {
             "task_id": int(agent["id"]),
