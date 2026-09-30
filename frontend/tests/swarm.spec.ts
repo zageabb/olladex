@@ -460,6 +460,13 @@ test('local swarm must be promoted to main before completion', async ({ page }) 
 
   await expect(page.getByRole('heading', {name:'Local only'})).toBeVisible();
   await expect(page.getByText('Verified local integration branch ready')).toBeVisible();
+  const delivery=page.locator('.agent-board-delivery-status');
+  await expect(delivery.getByText('Branch assembly')).toBeVisible();
+  await expect(delivery.getByText('Integration branch built')).toBeVisible();
+  await expect(delivery.getByText('Verification')).toBeVisible();
+  await expect(delivery.getByText('Checks passed')).toBeVisible();
+  await expect(delivery.getByText('Delivery target')).toBeVisible();
+  await expect(delivery.getByText('Local main')).toBeVisible();
   await expect(page.getByText(/has not yet been promoted to main/)).toBeVisible();
   await expect(page.getByText('/Users/test/project')).toBeVisible();
   await expect(page.getByText('/tmp/local-integration')).toBeVisible();
