@@ -597,7 +597,11 @@ def _dependency_blockers(conn, task: dict) -> list[int]:
     missing = [item for item in dependency_ids if item not in states]
     if missing:
         return missing
-    blocked_statuses = {"failed", "cancelled", "budget_exhausted", "interrupted", "dependency_failed", "no_progress", "incomplete"}
+    # Budget exhaustion is a recoverable orchestration state. Dependants must
+    # remain queued while the Coordinator decides whether to resume the exhausted
+    # task. If recovery is declined/exhausted, that task is converted to a real
+    # failure and normal dependency failure propagation applies.
+    blocked_statuses = {"failed", "cancelled", "interrupted", "dependency_failed", "no_progress", "incomplete"}
     return [item for item, status in states.items() if status in blocked_statuses]
 
 
