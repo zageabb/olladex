@@ -8,8 +8,8 @@ from ..database import connect, now
 from . import git, ollama, task_queue
 
 
-TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
-ACTIVE_TASK_STATUSES = {"queued", "running", "waiting_for_approval", "waiting_for_input"}
+TERMINAL_STATUSES = task_queue.TERMINAL_TASK_STATUSES
+ACTIVE_TASK_STATUSES = task_queue.ACTIVE_TASK_STATUSES
 
 
 def skill_enabled(project_id: int) -> bool:
@@ -869,7 +869,7 @@ def board_snapshot(
 
     complete = status_counts.get("completed", 0)
     active = sum(status_counts.get(state, 0) for state in ("running", "waiting_for_input", "waiting_for_approval"))
-    failed = sum(status_counts.get(state, 0) for state in ("failed", "dependency_failed", "no_progress", "incomplete"))
+    failed = sum(status_counts.get(state, 0) for state in task_queue.FAILURE_TASK_STATUSES)
     recovery_blockers = [
         {
             "task_id": int(agent["id"]),
@@ -879,7 +879,7 @@ def board_snapshot(
             "recovery": agent.get("recovery"),
         }
         for agent in agent_items
-        if agent.get("status") in {"budget_exhausted", "dependency_failed", "interrupted", "no_progress", "incomplete"}
+        if agent.get("status") in task_queue.RECOVERABLE_TASK_STATUSES | {"dependency_failed"}
     ]
     overall_progress = 0
     if agent_items:
@@ -928,7 +928,7 @@ def board_snapshot(
             "integration_blockers": [
                 (
                     f"#{item['task_id']} needs recovery"
-                    if item["status"] in {"budget_exhausted", "interrupted", "no_progress", "incomplete"}
+                    if item["status"] in task_queue.RECOVERABLE_TASK_STATUSES
                     else f"#{item['task_id']} is blocked by dependencies {item['blocking_dependency_ids']}"
                 )
                 for item in recovery_blockers
