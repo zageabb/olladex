@@ -18,13 +18,17 @@ def client_project(tmp_path, monkeypatch):
         session = client.get(f"/api/projects/{project['id']}/sessions").json()[0]
         yield client, project, session, repo
 
-def wait_for(predicate):
-    deadline = time.monotonic() + 5
+def wait_for(predicate, timeout=10):
+    # Conversation runs execute on background threads. CI runners can be
+    # temporarily CPU/disk constrained, so use a deadline generous enough to
+    # observe durable state transitions without making normal tests slower.
+    deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         value = predicate()
-        if value: return value
+        if value:
+            return value
         time.sleep(.02)
-    raise AssertionError('Timed out')
+    raise AssertionError(f'Timed out after {timeout}s')
 
 def test_auth_and_origin(client_project):
     client, _, _, _ = client_project
