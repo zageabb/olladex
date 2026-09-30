@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from backend.app.config import settings
 from backend.app.database import connect, init_db, now
 from backend.app.services import task_queue
@@ -39,15 +41,16 @@ def test_dependency_waits_until_prerequisite_completes(tmp_path, monkeypatch):
         assert reason == ""
 
 
-def test_budget_exhausted_prerequisite_waits_for_recovery(tmp_path, monkeypatch):
+@pytest.mark.parametrize("status", sorted(task_queue.RECOVERABLE_TASK_STATUSES))
+def test_recoverable_prerequisite_waits_for_recovery(tmp_path, monkeypatch, status):
     project_id, session_id = _seed(tmp_path, monkeypatch)
     first = task_queue.enqueue(project_id, session_id, "First", "first")
     second = task_queue.enqueue(project_id, session_id, "Second", "second", depends_on=[first["id"]])
 
     with connect() as conn:
         conn.execute(
-            "UPDATE background_tasks SET status='budget_exhausted',error='tool-step limit',completed_at=? WHERE id=?",
-            (now(), first["id"]),
+            "UPDATE background_tasks SET status=?,error='recoverable stop',completed_at=? WHERE id=?",
+            (status, now(), first["id"]),
         )
         second_row = dict(conn.execute("SELECT * FROM background_tasks WHERE id=?", (second["id"],)).fetchone())
         ready, reason = task_queue._dependency_state(conn, second_row)
