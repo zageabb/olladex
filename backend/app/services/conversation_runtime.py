@@ -363,6 +363,9 @@ def launch(session_id, content, resume_id=None, recovery_metadata=None):
                         task_queue._mark_recovery_available(refreshed_task, final_error or "Recovery budget exhausted again")
                     elif final_status == "no_progress":
                         task_queue._mark_recovery_available(refreshed_task, final_error)
+                    elif final_status == "completed":
+                        task_queue.auto_retry_recovered_dependants(task_id)
+                        refreshed_task = task_queue.get(task_id)
                     task_queue._finalize_parent(refreshed_task, final_status, result=result["content"] if result else "", error=final_error)
                 _local.resume = None
                 task_queue._local.task_id = None
