@@ -546,7 +546,13 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
     {label:"Integrate",reached:Boolean(swarmBoard.swarm.integration_branch)||["integrating","checks_failed","ready_to_promote","completed"].includes(swarmBoard.swarm.status),done:Boolean(swarmBoard.swarm.integration_branch)&&swarmBoard.swarm.integration_check_status==="passed"},
     {label:"Checks",reached:Boolean(swarmBoard.swarm.integration_branch),done:swarmBoard.swarm.integration_check_status==="passed"||["ready_to_promote","completed"].includes(swarmBoard.swarm.status)},
     {label:"Deliver",reached:Boolean(swarmBoard.swarm.promoted_commit||swarmBoard.swarm.integration_pr_number)||swarmBoard.swarm.status==="completed",done:swarmBoard.swarm.status==="completed"}
-  ]:[];
+  ]:[];  const deliveryStatus=swarmBoard?{
+    assembly: swarmBoard.swarm.integration_branch ? "Integration branch built" : swarmIntegration?.overlaps?.length ? "Overlaps need review" : "Ready to assemble",
+    verification: swarmBoard.swarm.integration_check_status==="passed" ? "Checks passed" : swarmBoard.swarm.integration_check_status==="failed" ? "Checks failed" : "Checks not run",
+    destination: swarmBoard.repository?.has_remote ? (swarmBoard.swarm.integration_pr_number ? `PR #${swarmBoard.swarm.integration_pr_number}` : swarmIntegrationPushed ? "Remote branch pushed" : "Remote delivery") : "Local main",
+    blockers: swarmBoard.summary.integration_blockers||[]
+  }:null;
+
 
   return <section className={styles.panel}>
     <section className="agent-board-shell">
@@ -581,6 +587,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
       </div>}
       {swarmBoard&&!swarmBoard.summary.recovery_available&&(swarmBoard.summary.integration_ready||swarmIntegration)&&<section className="agent-board-integration">
         <header><div><p className="eyebrow">Advanced orchestration integration</p><h4>{swarmIntegration?.branch||"Completed specialist branches are ready"}</h4></div><div className="agent-board-control-actions"><button type="button" onClick={checkSwarmIntegration} disabled={busy}>Check overlaps</button>{!swarmBoard.swarm.integration_branch&&<button type="button" className="primary" onClick={buildSwarmIntegration} disabled={busy}>Build integration</button>}</div></header>
+        {deliveryStatus&&<div className="agent-board-delivery-status"><article><span>Branch assembly</span><strong>{deliveryStatus.assembly}</strong></article><article className={swarmBoard.swarm.integration_check_status==="failed"?"failed":swarmBoard.swarm.integration_check_status==="passed"?"ok":""}><span>Verification</span><strong>{deliveryStatus.verification}</strong></article><article><span>Delivery target</span><strong>{deliveryStatus.destination}</strong></article>{deliveryStatus.blockers.length>0&&<article className="blocked"><span>Blocking issues</span><strong>{deliveryStatus.blockers.length}</strong><small>{deliveryStatus.blockers.join("; ")}</small></article>}</div>}
         {swarmBoard.locations&&<div className="swarm-workspace-locations">
           <article><strong>Main project directory</strong><code>{swarmBoard.locations.main}</code><small>{swarmBoard.swarm.status==="completed"&&swarmBoard.swarm.promoted_commit?`Promoted · ${swarmBoard.swarm.promoted_commit.slice(0,12)}`:"Target worktree"}</small></article>
           <article><strong>Integration worktree</strong><code>{swarmBoard.locations.integration||"Not prepared yet"}</code><small>{swarmBoard.swarm.integration_branch||"No integration branch"}</small></article>
