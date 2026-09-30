@@ -776,3 +776,88 @@ test('advanced orchestration recovers budget-exhausted agents and blocked depend
   await expect(page.getByText(/reviewer · queued/)).toBeVisible({timeout:4000});
   await expect(page.locator('.advanced-recovery-banner')).toHaveCount(0);
 });
+
+test('pending agent budget request suppresses duplicate manual resume controls', async ({ page }) => {
+  await baseRoutes(page, async (route,url) => {
+    const p=url.pathname;
+    const json=(data:unknown)=>route.fulfill({json:data});
+    if (p === '/api/projects/1/skills/swarm') {
+      await json({project_id:1,skill:'swarm',enabled:true});
+      return true;
+    }
+    if (p === '/api/projects/1/swarms') {
+      await json([{id:31,title:'Budget decision',status:'recovery_available',max_agents:4,max_concurrency:2,total_agents_created:1}]);
+      return true;
+    }
+    if (p === '/api/swarms/31/board') {
+      const recovery={
+        task_id:311,status:'budget_exhausted',session_id:91,active_run_id:0,prior_run_id:61,
+        prior_run_status:'budget_exhausted',checkpoint_available:true,checkpoint_bytes:4096,
+        worktree_path:'/tmp/worktrees/31/task-311',worktree_branch:'olladex/task-311',
+        worktree_available:true,branch_available:true,previous_budget:30,resumed_budget:20,
+        max_recovery_attempts:3,recovery_attempt:0,blocking_dependency_ids:[],can_resume:true
+      };
+      await json({
+        swarm:{
+          id:31,title:'Budget decision',status:'recovery_available',
+          coordinator_budget:{used:4,budget:20,remaining:16},
+          agents:[{
+            id:311,title:'Continue implementation',status:'budget_exhausted',
+            agent_role:'backend',task_kind:'backend',progress:70,session_id:91,
+            run_id:61,run_status:'budget_exhausted',recovery
+          }]
+        },
+        summary:{
+          total_agents:1,active_agents:0,completed_agents:0,failed_agents:0,
+          progress:70,max_agents:4,max_concurrency:2,integration_ready:false,
+          recovery_available:true,
+          recovery_blockers:[{task_id:311,title:'Continue implementation',status:'budget_exhausted',blocking_dependency_ids:[],recovery}],
+          integration_blockers:['#311 needs recovery']
+        },
+        budget_requests:[{
+          id:77,swarm_id:31,task_id:311,run_id:61,scope:'agent',status:'pending',
+          requested_amount:25,granted_amount:0,
+          reason:'Coordinator needs your decision before adding more tool steps.',decided_by:''
+        }],
+        events:[],coordinator_events:[],blackboard:[],
+        cursors:{event:0,coordinator_event:0,blackboard:0}
+      });
+      return true;
+    }
+    if (p === '/api/swarm-agents/311') {
+      await json({
+        task:{
+          id:311,title:'Continue implementation',status:'budget_exhausted',
+          agent_role:'backend',task_kind:'backend',progress:70,session_id:91,
+          recovery:{
+            task_id:311,status:'budget_exhausted',session_id:91,active_run_id:0,prior_run_id:61,
+            prior_run_status:'budget_exhausted',checkpoint_available:true,checkpoint_bytes:4096,
+            worktree_path:'/tmp/worktrees/31/task-311',worktree_branch:'olladex/task-311',
+            worktree_available:true,branch_available:true,previous_budget:30,resumed_budget:20,
+            max_recovery_attempts:3,recovery_attempt:0,blocking_dependency_ids:[],can_resume:true
+          }
+        },
+        run:{id:61,session_id:91,task_id:311,status:'budget_exhausted',cancel_requested:0},
+        commands:[],active_pending_commands:[],blackboard:[],changed_files:[],worktree:null
+      });
+      return true;
+    }
+    return false;
+  });
+
+  await page.goto('/');
+  await page.locator('.rail').getByRole('button',{name:'Tasks'}).click();
+
+  const budget=page.locator('.advanced-budget-banner');
+  await expect(budget.getByText('More budget requested')).toBeVisible();
+  await expect(budget.getByText(/Agent #311 needs more budget/)).toBeVisible();
+  await expect(page.getByText('Waiting for budget decision')).toBeVisible();
+  await expect(page.locator('.advanced-recovery-banner').getByRole('button',{name:'Resume from checkpoint'})).toHaveCount(0);
+  await expect(page.locator('.agent-board-preview').getByRole('button',{name:'Resume from checkpoint'})).toHaveCount(0);
+
+  await page.getByText('Continue implementation',{exact:true}).click();
+  const detail=page.locator('.agent-board-detail');
+  await expect(detail.getByText('Waiting for budget decision')).toBeVisible();
+  await expect(detail.getByRole('button',{name:'Resume from checkpoint'})).toHaveCount(0);
+});
+
