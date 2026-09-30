@@ -203,6 +203,10 @@ def recovery_info(task_id: int) -> dict:
             blocking = json.loads(blocking or "[]")
         except (TypeError, json.JSONDecodeError):
             blocking = []
+    recovery_attempt = int(task.get("recovery_attempt") or 0)
+    max_recovery_attempts = int(profile["max_recovery_attempts"] or 2) if profile else 2
+    recovery_limit_reached = recovery_attempt >= max_recovery_attempts
+
     return {
         "task_id": task_id,
         "status": task.get("status"),
@@ -219,11 +223,13 @@ def recovery_info(task_id: int) -> dict:
         "branch_available": branch_available,
         "previous_budget": int(task.get("budget_override") or 0) or (int(profile["agent_tool_budget"] or 0) if profile else 0),
         "resumed_budget": int(profile["resumed_task_tool_budget"] or 20) if profile else 20,
-        "max_recovery_attempts": int(profile["max_recovery_attempts"] or 2) if profile else 2,
-        "recovery_attempt": int(task.get("recovery_attempt") or 0),
+        "max_recovery_attempts": max_recovery_attempts,
+        "recovery_attempt": recovery_attempt,
+        "recovery_limit_reached": recovery_limit_reached,
         "blocking_dependency_ids": [int(item) for item in blocking],
         "can_resume": (
             not active
+            and not recovery_limit_reached
             and task.get("status") in RECOVERABLE_TASK_STATUSES | {"failed"}
             and bool(prior)
             and bool(checkpoint and checkpoint not in {"[]", "null"})
