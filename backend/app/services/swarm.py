@@ -927,7 +927,9 @@ def board_snapshot(
             "recovery_blockers": recovery_blockers,
             "integration_blockers": [
                 (
-                    f"#{item['task_id']} needs recovery"
+                    f"#{item['task_id']} recovery limit reached"
+                    if item["status"] in task_queue.RECOVERABLE_TASK_STATUSES and (item.get("recovery") or {}).get("recovery_limit_reached")
+                    else f"#{item['task_id']} needs recovery"
                     if item["status"] in task_queue.RECOVERABLE_TASK_STATUSES
                     else f"#{item['task_id']} is blocked by dependencies {item['blocking_dependency_ids']}"
                 )
