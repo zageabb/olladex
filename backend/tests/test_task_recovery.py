@@ -249,6 +249,74 @@ def test_dependency_failure_is_structured_and_chain_can_be_retried_topologically
     assert task_queue.get(grandchild["id"])["status"] == "queued"
 
 
+def test_completed_recovery_automatically_requeues_blocked_dependency_chain(tmp_path, monkeypatch):
+    project, session_id, swarm_id, _ = _seed_repo(tmp_path, monkeypatch)
+    root, _ = _exhausted_task(project, session_id, swarm_id)
+    child = task_queue.enqueue(
+        int(project["id"]), session_id, "Child", "after root",
+        swarm_id=swarm_id, source_kind="swarm_specialist",
+        agent_role="tester", task_kind="tester", depends_on=[root["id"]],
+    )
+    grandchild = task_queue.enqueue(
+        int(project["id"]), session_id, "Grandchild", "after child",
+        swarm_id=swarm_id, source_kind="swarm_specialist",
+        agent_role="documentation", task_kind="documentation", depends_on=[child["id"]],
+    )
+    with connect() as conn:
+        conn.execute(
+            "UPDATE background_tasks SET status='failed',error='declined',completed_at=? WHERE id=?",
+            (now(), root["id"]),
+        )
+    assert task_queue._claim_next() is None
+    assert task_queue.get(child["id"])["status"] == "dependency_failed"
+    assert task_queue.get(grandchild["id"])["status"] == "dependency_failed"
+
+    with connect() as conn:
+        conn.execute(
+            "UPDATE background_tasks SET status='completed',recovery_attempt=1,result='Recovered',error='',completed_at=? WHERE id=?",
+            (now(), root["id"]),
+        )
+
+    result = task_queue.auto_retry_recovered_dependants(root["id"])
+
+    assert result["retried_task_ids"] == [child["id"], grandchild["id"]]
+    assert task_queue.get(child["id"])["status"] == "queued"
+    assert task_queue.get(grandchild["id"])["status"] == "queued"
+    assert swarm.get_run(swarm_id)["status"] == "recovering"
+    events = swarm.coordinator_events(swarm_id)
+    assert any(
+        item["kind"] == "dependency_retry_started"
+        and child["id"] in item["payload"]["retried_task_ids"]
+        and grandchild["id"] in item["payload"]["retried_task_ids"]
+        for item in events
+    )
+
+
+def test_normal_completion_does_not_auto_retry_dependency_failures(tmp_path, monkeypatch):
+    project, session_id, swarm_id, _ = _seed_repo(tmp_path, monkeypatch)
+    root = task_queue.enqueue(
+        int(project["id"]), session_id, "Normal", "normal task",
+        swarm_id=swarm_id, source_kind="swarm_specialist",
+        agent_role="backend", task_kind="backend",
+    )
+    child = task_queue.enqueue(
+        int(project["id"]), session_id, "Blocked", "blocked",
+        swarm_id=swarm_id, source_kind="swarm_specialist",
+        agent_role="tester", task_kind="tester", depends_on=[root["id"]],
+    )
+    with connect() as conn:
+        conn.execute("UPDATE background_tasks SET status='completed',completed_at=? WHERE id=?", (now(), root["id"]))
+        conn.execute(
+            "UPDATE background_tasks SET status='dependency_failed',blocking_dependency_ids=?,completed_at=? WHERE id=?",
+            (f"[{root['id']}]", now(), child["id"]),
+        )
+
+    result = task_queue.auto_retry_recovered_dependants(root["id"])
+
+    assert result["retried_task_ids"] == []
+    assert task_queue.get(child["id"])["status"] == "dependency_failed"
+
+
 def test_board_blocks_integration_while_recovery_is_unresolved(tmp_path, monkeypatch):
     project, session_id, swarm_id, _ = _seed_repo(tmp_path, monkeypatch)
     task, _ = _exhausted_task(project, session_id, swarm_id)
