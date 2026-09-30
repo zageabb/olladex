@@ -91,10 +91,12 @@ def _reconcile(swarm_id: int) -> None:
     reviewer = next((item for item in agents if item.get("task_kind") == "reviewer"), None)
     challenger = next((item for item in agents if item.get("task_kind") == "challenger"), None)
 
-    budget_exhausted = [item for item in specialists if item.get("status") == "budget_exhausted"]
-    failed = [item for item in specialists if item.get("status") in {"failed", "interrupted", "no_progress", "incomplete"}]
+    recoverable = [item for item in specialists if item.get("status") in task_queue.RECOVERABLE_TASK_STATUSES]
+    budget_exhausted = [item for item in recoverable if item.get("status") == "budget_exhausted"]
+    non_budget_recoverable = [item for item in recoverable if item.get("status") != "budget_exhausted"]
+    failed = [item for item in specialists if item.get("status") in {"failed", "cancelled"}]
     dependency_blocked = [item for item in specialists if item.get("status") == "dependency_failed"]
-    active = [item for item in specialists if item.get("status") in {"queued", "running", "waiting_for_input", "waiting_for_approval"}]
+    active = [item for item in specialists if item.get("status") in task_queue.ACTIVE_TASK_STATUSES]
     completed = [item for item in specialists if item.get("status") == "completed"]
     recovered_ids = _recovered_failure_ids(completed)
     unresolved_failed = [item for item in failed if int(item["id"]) not in recovered_ids]
@@ -104,6 +106,18 @@ def _reconcile(swarm_id: int) -> None:
             swarm.set_status(swarm_id, "recovery_available")
         if _consider_budget_exhaustion(run, budget_exhausted, completed):
             return
+
+    if non_budget_recoverable:
+        if run.get("status") != "recovery_available":
+            swarm.set_status(swarm_id, "recovery_available")
+        _publish_once(
+            swarm_id,
+            "risk",
+            "specialist-recovery-available",
+            "Advanced orchestration is waiting for recoverable specialist work: "
+            + ", ".join(f"#{item['id']} ({item.get('status')})" for item in non_budget_recoverable),
+        )
+        return
 
     if dependency_blocked and not active:
         if run.get("status") != "recovery_available":
@@ -117,15 +131,35 @@ def _reconcile(swarm_id: int) -> None:
         )
         return
 
-    verification_budget_exhausted = [
+    verification_recoverable = [
         item for item in (challenger, reviewer)
-        if item and item.get("status") == "budget_exhausted"
+        if item and item.get("status") in task_queue.RECOVERABLE_TASK_STATUSES
+    ]
+    verification_budget_exhausted = [
+        item for item in verification_recoverable
+        if item.get("status") == "budget_exhausted"
     ]
     if verification_budget_exhausted:
         if run.get("status") != "recovery_available":
             swarm.set_status(swarm_id, "recovery_available")
         if _consider_budget_exhaustion(run, verification_budget_exhausted, completed):
             return
+
+    verification_non_budget_recoverable = [
+        item for item in verification_recoverable
+        if item.get("status") != "budget_exhausted"
+    ]
+    if verification_non_budget_recoverable:
+        if run.get("status") != "recovery_available":
+            swarm.set_status(swarm_id, "recovery_available")
+        _publish_once(
+            swarm_id,
+            "risk",
+            "verification-recovery-available",
+            "Final verification is waiting for recoverable agent work: "
+            + ", ".join(f"#{item['id']} ({item.get('status')})" for item in verification_non_budget_recoverable),
+        )
+        return
 
     verification_blocked = [
         item for item in (reviewer, challenger)
@@ -163,16 +197,16 @@ def _reconcile(swarm_id: int) -> None:
                 return
             swarm.set_status(swarm_id, "reviewing")
             run["status"] = "reviewing"
-        if challenger and challenger.get("status") in {"queued", "running", "waiting_for_input", "waiting_for_approval"}:
+        if challenger and challenger.get("status") in task_queue.ACTIVE_TASK_STATUSES:
             return
-        if challenger and challenger.get("status") in {"failed", "cancelled", "interrupted"}:
+        if challenger and challenger.get("status") in {"failed", "cancelled"}:
             _publish_once(swarm_id, "risk", "challenger-failed", "The challenger did not complete successfully; final verification is incomplete.")
             if not reviewer:
                 swarm.set_status(swarm_id, "failed")
                 return
-        if reviewer and reviewer.get("status") in {"queued", "running", "waiting_for_input", "waiting_for_approval"}:
+        if reviewer and reviewer.get("status") in task_queue.ACTIVE_TASK_STATUSES:
             return
-        if reviewer and reviewer.get("status") in {"failed", "cancelled", "interrupted"}:
+        if reviewer and reviewer.get("status") in {"failed", "cancelled"}:
             swarm.set_status(swarm_id, "failed")
             return
         if reviewer and reviewer.get("status") == "completed":
