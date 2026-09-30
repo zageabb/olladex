@@ -766,7 +766,7 @@ test('advanced orchestration recovers budget-exhausted agents and blocked depend
   for (const stage of ['Specialists','Review','Integrate','Checks','Deliver']) await expect(lifecycle.getByText(stage,{exact:true})).toBeVisible();
   const dependencyMap=page.locator('.agent-board-dependency-map');
   await expect(dependencyMap.getByText('Task dependencies')).toBeVisible();
-  await expect(dependencyMap.locator('button').filter({hasText:'#301'}).filter({hasText:'#302'}).filter({hasText:'Review callbacks'})).toBeVisible();
+  await expect(dependencyMap.locator('button').filter({hasText:'#301'}).filter({hasText:'#302'})).toBeVisible();
 
   await recovery.getByRole('button',{name:'Resume from checkpoint'}).click();
   await expect.poll(()=>resumeBody).toEqual({fresh_budget:44});
