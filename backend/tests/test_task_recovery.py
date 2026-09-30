@@ -209,7 +209,20 @@ def test_dependency_failure_is_structured_and_chain_can_be_retried_topologically
         priority=140,
     )
 
-    # Claiming scans queued tasks and converts blocked descendants into structured dependency failures.
+    # Budget exhaustion is recoverable: descendants remain queued while the
+    # Coordinator decides whether to resume the prerequisite.
+    assert task_queue._claim_next() is None
+    assert task_queue.get(child["id"])["status"] == "queued"
+    assert task_queue.get(grandchild["id"])["status"] == "queued"
+
+    # Once recovery is explicitly abandoned/declined, the prerequisite becomes
+    # a real failure and structured dependency failure propagation applies.
+    with connect() as conn:
+        conn.execute(
+            "UPDATE background_tasks SET status='failed',error='Additional budget declined',completed_at=? WHERE id=?",
+            (now(), root["id"]),
+        )
+
     assert task_queue._claim_next() is None
     child_state = task_queue.get(child["id"])
     grandchild_state = task_queue.get(grandchild["id"])
