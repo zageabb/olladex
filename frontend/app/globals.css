@@ -531,6 +531,7 @@ button.primary:hover { background: var(--blue-2); }
   font-size: 8px;
   font-weight: 700;
 }
+.agent-board-lifecycle span em { font-style: normal; }
 .agent-board-lifecycle span b {
   width: 16px;
   height: 16px;
