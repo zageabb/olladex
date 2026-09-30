@@ -18,6 +18,11 @@ _lock = threading.Lock()
 _local = threading.local()
 _fallback_project_locks: dict[int, threading.Lock] = {}
 
+ACTIVE_TASK_STATUSES = {"queued", "running", "waiting_for_approval", "waiting_for_input"}
+RECOVERABLE_TASK_STATUSES = {"budget_exhausted", "interrupted", "no_progress", "incomplete"}
+FAILURE_TASK_STATUSES = {"failed", "cancelled", "dependency_failed"}
+TERMINAL_TASK_STATUSES = {"completed", "failed", "cancelled"}
+
 
 def _worker_count() -> int:
     return max(1, min(int(settings.task_workers or 1), 8))
@@ -139,7 +144,7 @@ def list_for_project(project_id: int) -> list[dict]:
         except (TypeError, json.JSONDecodeError):
             item["blocking_dependency_ids"] = []
         item["recovery"] = None
-        if item.get("status") in {"budget_exhausted", "interrupted", "no_progress", "incomplete", "failed"}:
+        if item.get("status") in RECOVERABLE_TASK_STATUSES | {"failed"}:
             try:
                 item["recovery"] = recovery_info(int(item["id"]))
             except Exception:
@@ -219,7 +224,7 @@ def recovery_info(task_id: int) -> dict:
         "blocking_dependency_ids": [int(item) for item in blocking],
         "can_resume": (
             not active
-            and task.get("status") in {"budget_exhausted", "interrupted", "no_progress", "incomplete", "failed"}
+            and task.get("status") in RECOVERABLE_TASK_STATUSES | {"failed"}
             and bool(prior)
             and bool(checkpoint and checkpoint not in {"[]", "null"})
             and (worktree_available or branch_available)
@@ -597,12 +602,11 @@ def _dependency_blockers(conn, task: dict) -> list[int]:
     missing = [item for item in dependency_ids if item not in states]
     if missing:
         return missing
-    # Budget exhaustion is a recoverable orchestration state. Dependants must
-    # remain queued while the Coordinator decides whether to resume the exhausted
-    # task. If recovery is declined/exhausted, that task is converted to a real
-    # failure and normal dependency failure propagation applies.
-    blocked_statuses = {"failed", "cancelled", "interrupted", "dependency_failed", "no_progress", "incomplete"}
-    return [item for item, status in states.items() if status in blocked_statuses]
+    # Recoverable states must not poison downstream dependencies. Dependants
+    # remain queued while recovery is available. Once recovery is abandoned or
+    # exhausted, the prerequisite is converted to a real failure and normal
+    # dependency failure propagation applies.
+    return [item for item, status in states.items() if status in FAILURE_TASK_STATUSES]
 
 
 def _dependency_state(conn, task: dict) -> tuple[bool, str]:
