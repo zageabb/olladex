@@ -497,6 +497,108 @@ def test_challenger_completion_hands_off_to_finalization_instead_of_completing(t
     assert swarm.get_run(swarm_id)["status"] != "completed"
 
 
+def test_reviewer_budget_exhaustion_enters_recovery_instead_of_failing_swarm(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id, max_agents=4, max_concurrency=2)
+
+    specialist = task_queue.enqueue(
+        project_id, session_id, "Done", "done",
+        swarm_id=swarm_id, source_kind="swarm_specialist",
+        agent_role="backend", task_kind="backend",
+    )
+    reviewer = task_queue.enqueue(
+        project_id, session_id, "Final review", "review",
+        swarm_id=swarm_id, source_kind="swarm_reviewer",
+        agent_role="reviewer", task_kind="reviewer",
+        depends_on=[specialist["id"]], priority=300,
+    )
+    stamp = now()
+    with connect() as conn:
+        conn.execute(
+            "UPDATE background_tasks SET status='completed',result='ok',completed_at=? WHERE id=?",
+            (stamp, specialist["id"]),
+        )
+        conn.execute(
+            "UPDATE background_tasks SET status='budget_exhausted' WHERE id=?",
+            (reviewer["id"],),
+        )
+        run_id = int(conn.execute(
+            "INSERT INTO agent_runs(session_id,task_id,status,cancel_requested,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+            (session_id, reviewer["id"], "budget_exhausted", 0, stamp, stamp),
+        ).lastrowid)
+
+    monkeypatch.setattr(
+        swarm_coordinator,
+        "_budget_extension_decision",
+        lambda run, agent, completed: {
+            "action": "ask_user",
+            "amount": 10,
+            "reason": "Reviewer needs more budget to finish verification.",
+        },
+    )
+
+    swarm_coordinator._reconcile(swarm_id)
+
+    current = swarm.get_run(swarm_id)
+    assert current["status"] == "recovery_available"
+    pending = swarm.budget_requests(swarm_id, pending_only=True)
+    assert len(pending) == 1
+    assert pending[0]["scope"] == "agent"
+    assert pending[0]["task_id"] == reviewer["id"]
+    assert pending[0]["run_id"] == run_id
+
+
+def test_challenger_budget_exhaustion_enters_recovery_instead_of_failing_swarm(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id, max_agents=4, max_concurrency=2)
+
+    specialist = task_queue.enqueue(
+        project_id, session_id, "Done", "done",
+        swarm_id=swarm_id, source_kind="swarm_specialist",
+        agent_role="backend", task_kind="backend",
+    )
+    challenger = task_queue.enqueue(
+        project_id, session_id, "Challenge", "challenge",
+        swarm_id=swarm_id, source_kind="swarm_challenger",
+        agent_role="challenger", task_kind="challenger",
+        depends_on=[specialist["id"]], priority=200,
+    )
+    stamp = now()
+    with connect() as conn:
+        conn.execute(
+            "UPDATE background_tasks SET status='completed',result='ok',completed_at=? WHERE id=?",
+            (stamp, specialist["id"]),
+        )
+        conn.execute(
+            "UPDATE background_tasks SET status='budget_exhausted' WHERE id=?",
+            (challenger["id"],),
+        )
+        run_id = int(conn.execute(
+            "INSERT INTO agent_runs(session_id,task_id,status,cancel_requested,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+            (session_id, challenger["id"], "budget_exhausted", 0, stamp, stamp),
+        ).lastrowid)
+
+    monkeypatch.setattr(
+        swarm_coordinator,
+        "_budget_extension_decision",
+        lambda run, agent, completed: {
+            "action": "ask_user",
+            "amount": 10,
+            "reason": "Challenger needs more budget to finish verification.",
+        },
+    )
+
+    swarm_coordinator._reconcile(swarm_id)
+
+    current = swarm.get_run(swarm_id)
+    assert current["status"] == "recovery_available"
+    pending = swarm.budget_requests(swarm_id, pending_only=True)
+    assert len(pending) == 1
+    assert pending[0]["scope"] == "agent"
+    assert pending[0]["task_id"] == challenger["id"]
+    assert pending[0]["run_id"] == run_id
+
+
 def test_challenger_only_profile_fails_when_challenger_fails(tmp_path, monkeypatch):
     project_id, session_id = _seed(tmp_path, monkeypatch)
     swarm_id = _create_swarm(project_id, session_id, max_agents=3, max_concurrency=2)
