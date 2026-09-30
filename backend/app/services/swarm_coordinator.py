@@ -117,6 +117,16 @@ def _reconcile(swarm_id: int) -> None:
         )
         return
 
+    verification_budget_exhausted = [
+        item for item in (challenger, reviewer)
+        if item and item.get("status") == "budget_exhausted"
+    ]
+    if verification_budget_exhausted:
+        if run.get("status") != "recovery_available":
+            swarm.set_status(swarm_id, "recovery_available")
+        if _consider_budget_exhaustion(run, verification_budget_exhausted, completed):
+            return
+
     verification_blocked = [
         item for item in (reviewer, challenger)
         if item and item.get("status") == "dependency_failed"
@@ -155,14 +165,14 @@ def _reconcile(swarm_id: int) -> None:
             run["status"] = "reviewing"
         if challenger and challenger.get("status") in {"queued", "running", "waiting_for_input", "waiting_for_approval"}:
             return
-        if challenger and challenger.get("status") in {"failed", "budget_exhausted", "cancelled", "interrupted"}:
+        if challenger and challenger.get("status") in {"failed", "cancelled", "interrupted"}:
             _publish_once(swarm_id, "risk", "challenger-failed", "The challenger did not complete successfully; final verification is incomplete.")
             if not reviewer:
                 swarm.set_status(swarm_id, "failed")
                 return
         if reviewer and reviewer.get("status") in {"queued", "running", "waiting_for_input", "waiting_for_approval"}:
             return
-        if reviewer and reviewer.get("status") in {"failed", "budget_exhausted", "cancelled", "interrupted"}:
+        if reviewer and reviewer.get("status") in {"failed", "cancelled", "interrupted"}:
             swarm.set_status(swarm_id, "failed")
             return
         if reviewer and reviewer.get("status") == "completed":
