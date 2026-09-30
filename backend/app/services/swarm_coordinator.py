@@ -298,6 +298,20 @@ def _consider_budget_exhaustion(run: dict, exhausted: list[dict], completed: lis
         return True
     task_id = int(target["id"])
     run_id = int(target.get("run_id") or 0)
+    try:
+        recovery = task_queue.recovery_info(task_id)
+    except Exception:
+        recovery = {}
+    if recovery.get("recovery_limit_reached"):
+        _publish_once(
+            swarm_id,
+            "risk",
+            f"recovery-limit-task-{task_id}",
+            f"Agent #{task_id} reached its configured recovery attempt limit "
+            f"({recovery.get('recovery_attempt', 0)}/{recovery.get('max_recovery_attempts', 0)}). "
+            "Automatic budget recovery has stopped; user intervention is required.",
+        )
+        return True
     prior_auto_grants = [
         item for item in swarm.budget_requests(swarm_id)
         if int(item.get("task_id") or 0) == task_id
