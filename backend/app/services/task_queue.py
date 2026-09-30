@@ -491,6 +491,30 @@ def retry_blocked_dependants(task_id: int, *, full_chain: bool = True) -> dict:
     return {"task_id": task_id, "retried_task_ids": reset, "full_chain": full_chain}
 
 
+def auto_retry_recovered_dependants(task_id: int) -> dict:
+    task = get(task_id)
+    if not task:
+        raise ValueError("Background task not found")
+    if task.get("status") != "completed" or int(task.get("recovery_attempt") or 0) <= 0:
+        return {"task_id": task_id, "retried_task_ids": [], "full_chain": True}
+    result = retry_blocked_dependants(task_id, full_chain=True)
+    if result["retried_task_ids"] and task.get("swarm_id"):
+        try:
+            from . import swarm
+            swarm.emit_coordinator_event(
+                int(task["swarm_id"]),
+                "dependency_retry_started",
+                {
+                    "task_id": task_id,
+                    "retried_task_ids": result["retried_task_ids"],
+                    "reason": "Recovered prerequisite completed successfully",
+                },
+            )
+        except Exception:
+            pass
+    return result
+
+
 def current_task() -> dict:
     task_id = current_task_id()
     if not task_id:
