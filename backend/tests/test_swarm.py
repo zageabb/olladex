@@ -1501,6 +1501,93 @@ def test_declining_coordinator_budget_stops_orchestration(tmp_path, monkeypatch)
     assert swarm.get_run(swarm_id)["status"] == "failed"
 
 
+def test_exhausted_coordinator_budget_requests_only_coordinator_extension(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id)
+    task = task_queue.enqueue(
+        project_id, session_id, "Needs budget", "work",
+        swarm_id=swarm_id, source_kind="swarm_specialist",
+        agent_role="backend", task_kind="backend",
+    )
+    stamp = now()
+    with connect() as conn:
+        profile_id = int(conn.execute(
+            "SELECT profile_id FROM swarm_runs WHERE id=?", (swarm_id,)
+        ).fetchone()["profile_id"])
+        conn.execute("UPDATE swarm_profiles SET coordinator_tool_budget=1 WHERE id=?", (profile_id,))
+        conn.execute("UPDATE background_tasks SET status='budget_exhausted' WHERE id=?", (task["id"],))
+        conn.execute(
+            "INSERT INTO agent_runs(session_id,task_id,status,cancel_requested,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+            (session_id, task["id"], "budget_exhausted", 0, stamp, stamp),
+        )
+
+    assert swarm.consume_coordinator_budget(swarm_id, "use-up-budget")["allowed"] is True
+    exhausted = next(item for item in swarm.list_agents(swarm_id) if item["id"] == task["id"])
+
+    handled = swarm_coordinator._consider_budget_exhaustion(
+        swarm.get_run(swarm_id), [exhausted], []
+    )
+
+    assert handled is True
+    pending = swarm.budget_requests(swarm_id, pending_only=True)
+    assert len(pending) == 1
+    assert pending[0]["scope"] == "coordinator"
+    assert pending[0]["task_id"] is None
+    assert "decision budget" in pending[0]["reason"].lower()
+
+
+def test_pending_agent_budget_request_does_not_stall_other_exhausted_agents(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id, max_agents=4)
+    stamp = now()
+    tasks = []
+    for title in ("First exhausted", "Second exhausted"):
+        task = task_queue.enqueue(
+            project_id, session_id, title, "work",
+            swarm_id=swarm_id, source_kind="swarm_specialist",
+            agent_role="backend", task_kind="backend",
+        )
+        with connect() as conn:
+            conn.execute("UPDATE background_tasks SET status='budget_exhausted' WHERE id=?", (task["id"],))
+            run_id = int(conn.execute(
+                "INSERT INTO agent_runs(session_id,task_id,status,cancel_requested,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+                (session_id, task["id"], "budget_exhausted", 0, stamp, stamp),
+            ).lastrowid)
+        tasks.append((task, run_id))
+
+    swarm.ensure_budget_request(
+        swarm_id,
+        scope="agent",
+        task_id=tasks[0][0]["id"],
+        run_id=tasks[0][1],
+        requested_amount=10,
+        reason="First agent needs user decision.",
+    )
+    monkeypatch.setattr(
+        swarm_coordinator,
+        "_budget_extension_decision",
+        lambda run, agent, completed: {
+            "action": "ask_user",
+            "amount": 10,
+            "reason": "Second agent also needs user decision.",
+        },
+    )
+    exhausted = [
+        item for item in swarm.list_agents(swarm_id)
+        if item["id"] in {tasks[0][0]["id"], tasks[1][0]["id"]}
+    ]
+
+    handled = swarm_coordinator._consider_budget_exhaustion(
+        swarm.get_run(swarm_id), exhausted, []
+    )
+
+    assert handled is True
+    pending = swarm.budget_requests(swarm_id, pending_only=True)
+    assert {
+        int(item["task_id"]) for item in pending if item["scope"] == "agent"
+    } == {tasks[0][0]["id"], tasks[1][0]["id"]}
+
+
 def test_repeated_coordinator_auto_grants_escalate_agent_budget_to_user(tmp_path, monkeypatch):
     project_id, session_id = _seed(tmp_path, monkeypatch)
     swarm_id = _create_swarm(project_id, session_id)
