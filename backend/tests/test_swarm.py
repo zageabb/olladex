@@ -599,6 +599,62 @@ def test_challenger_budget_exhaustion_enters_recovery_instead_of_failing_swarm(t
     assert pending[0]["run_id"] == run_id
 
 
+def test_interrupted_specialist_waits_for_checkpoint_recovery_instead_of_spawning_replacement(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id, max_agents=5, max_concurrency=2)
+    task = task_queue.enqueue(
+        project_id, session_id, "Interrupted backend", "continue implementation",
+        swarm_id=swarm_id, source_kind="swarm_specialist",
+        agent_role="backend", task_kind="backend",
+    )
+    with connect() as conn:
+        conn.execute(
+            "UPDATE background_tasks SET status='interrupted',error='Application restarted' WHERE id=?",
+            (task["id"],),
+        )
+
+    before = len(swarm.list_agents(swarm_id))
+    swarm_coordinator._reconcile(swarm_id)
+    after = swarm.list_agents(swarm_id)
+
+    assert swarm.get_run(swarm_id)["status"] == "recovery_available"
+    assert len(after) == before
+    assert not [item for item in after if item.get("source_kind") == "swarm_recovery"]
+    risks = swarm.blackboard(swarm_id, category="risk")
+    assert any("recoverable specialist work" in item["content"] for item in risks)
+
+
+def test_interrupted_reviewer_waits_for_recovery_instead_of_failing_swarm(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    swarm_id = _create_swarm(project_id, session_id, max_agents=4, max_concurrency=2)
+    specialist = task_queue.enqueue(
+        project_id, session_id, "Done", "done",
+        swarm_id=swarm_id, source_kind="swarm_specialist",
+        agent_role="backend", task_kind="backend",
+    )
+    reviewer = task_queue.enqueue(
+        project_id, session_id, "Final review", "review",
+        swarm_id=swarm_id, source_kind="swarm_reviewer",
+        agent_role="reviewer", task_kind="reviewer",
+        depends_on=[specialist["id"]], priority=300,
+    )
+    with connect() as conn:
+        conn.execute(
+            "UPDATE background_tasks SET status='completed',result='ok',completed_at=? WHERE id=?",
+            (now(), specialist["id"]),
+        )
+        conn.execute(
+            "UPDATE background_tasks SET status='interrupted',error='Application restarted' WHERE id=?",
+            (reviewer["id"],),
+        )
+
+    swarm_coordinator._reconcile(swarm_id)
+
+    assert swarm.get_run(swarm_id)["status"] == "recovery_available"
+    risks = swarm.blackboard(swarm_id, category="risk")
+    assert any("Final verification is waiting for recoverable agent work" in item["content"] for item in risks)
+
+
 def test_challenger_only_profile_fails_when_challenger_fails(tmp_path, monkeypatch):
     project_id, session_id = _seed(tmp_path, monkeypatch)
     swarm_id = _create_swarm(project_id, session_id, max_agents=3, max_concurrency=2)
