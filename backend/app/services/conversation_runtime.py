@@ -324,6 +324,10 @@ def launch(session_id, content, resume_id=None, recovery_metadata=None):
                                     (json.dumps(evidence, default=str), evidence["reason"], evidence["reason"], task_id),
                                 )
                             state('no_progress')
+                            # Make recoverability visible atomically with the no-progress state.
+                            # The finalizer repeats this idempotently, but callers polling the run
+                            # must never observe no_progress while the swarm still says recovering.
+                            task_queue._mark_recovery_available(task_queue.get(task_id), evidence["reason"])
                         else:
                             with connect() as conn:
                                 conn.execute(
