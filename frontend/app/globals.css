@@ -498,6 +498,66 @@ button.primary:hover { background: var(--blue-2); }
   text-transform: uppercase;
 }
 .agent-board-metrics strong { color: var(--blue); font-size: 14px; text-transform: none; }
+.agent-board-lifecycle,
+.agent-board-dependency-map {
+  grid-column: 1 / -1;
+  padding: 10px;
+  background: #fbfcfe;
+  border: 1px solid #edf1f6;
+  border-radius: 9px;
+}
+.agent-board-lifecycle header,
+.agent-board-dependency-map header {
+  margin-bottom: 8px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.agent-board-lifecycle header strong,
+.agent-board-dependency-map header strong { font-size: 9px; }
+.agent-board-lifecycle header small,
+.agent-board-dependency-map header small { color: var(--muted); font-size: 8px; }
+.agent-board-lifecycle > div { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.agent-board-lifecycle span {
+  padding: 7px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #7f8da1;
+  background: #f1f4f8;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  font-size: 8px;
+  font-weight: 700;
+}
+.agent-board-lifecycle span b {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  border-radius: 50%;
+  font-size: 7px;
+}
+.agent-board-lifecycle span.active { color: #24528f; background: var(--blue-soft); border-color: #cfe0f8; }
+.agent-board-lifecycle span.done { color: var(--green); background: #e9f7f0; border-color: #cfeadd; }
+.agent-board-dependency-map > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.agent-board-dependency-map button {
+  max-width: 100%;
+  padding: 6px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #526278;
+  background: #fff;
+  border-color: #e3e9f0;
+  font-size: 8px;
+}
+.agent-board-dependency-map button span { color: #24528f; font-weight: 750; }
+.agent-board-dependency-map button strong { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-board-dependency-map button small { color: var(--muted); text-transform: capitalize; }
 .agent-board-preview {
   grid-column: 1 / -1;
   display: grid;
@@ -524,6 +584,8 @@ button.primary:hover { background: var(--blue-2); }
 @media (max-width: 900px) {
   .agent-board-shell { grid-template-columns: 1fr; }
   .agent-board-preview { grid-column: 1; grid-template-columns: 1fr; }
+  .agent-board-lifecycle, .agent-board-dependency-map { grid-column: 1; }
+  .agent-board-lifecycle > div { grid-template-columns: 1fr; }
   .agent-board-metrics { justify-content: flex-start; }
 }
 
