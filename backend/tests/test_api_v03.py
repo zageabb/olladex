@@ -60,7 +60,8 @@ def test_v03_git_terminal_and_summary_workflow(tmp_path, monkeypatch):
         sent = client.post(f"/api/terminal/{run_id}/input", json={"data": "hello\n"})
         assert sent.status_code == 200
         terminal_state = {}
-        for _ in range(40):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
             terminal_state = client.get(f"/api/terminal/{run_id}").json()
             if terminal_state["status"] != "running":
                 break
