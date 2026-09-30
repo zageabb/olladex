@@ -39,6 +39,26 @@ def test_dependency_waits_until_prerequisite_completes(tmp_path, monkeypatch):
         assert reason == ""
 
 
+def test_budget_exhausted_prerequisite_waits_for_recovery(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    first = task_queue.enqueue(project_id, session_id, "First", "first")
+    second = task_queue.enqueue(project_id, session_id, "Second", "second", depends_on=[first["id"]])
+
+    with connect() as conn:
+        conn.execute(
+            "UPDATE background_tasks SET status='budget_exhausted',error='tool-step limit',completed_at=? WHERE id=?",
+            (now(), first["id"]),
+        )
+        second_row = dict(conn.execute("SELECT * FROM background_tasks WHERE id=?", (second["id"],)).fetchone())
+        ready, reason = task_queue._dependency_state(conn, second_row)
+        blockers = task_queue._dependency_blockers(conn, second_row)
+
+    assert ready is False
+    assert reason == ""
+    assert blockers == []
+    assert task_queue.get(second["id"])["status"] == "queued"
+
+
 def test_failed_prerequisite_blocks_dependent_task(tmp_path, monkeypatch):
     project_id, session_id = _seed(tmp_path, monkeypatch)
     first = task_queue.enqueue(project_id, session_id, "First", "first")
