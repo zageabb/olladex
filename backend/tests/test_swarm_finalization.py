@@ -321,6 +321,9 @@ def test_budget_recovery_flows_through_reviewer_to_integration(tmp_path, monkeyp
         )
 
     task_queue.auto_retry_recovered_dependants(specialist["id"])
+    swarm_coordinator._reconcile(swarm_id)
+    assert swarm.get_run(swarm_id)["status"] == "reviewing"
+
     claimed = task_queue._claim_next()
     assert claimed is not None
     assert claimed["id"] == reviewer["id"]
