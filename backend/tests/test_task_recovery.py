@@ -479,6 +479,31 @@ def test_coding_swarm_task_empty_noop_becomes_recoverable_no_progress(tmp_path, 
     assert evidence["validation_commands"] == []
 
 
+def test_tester_role_can_complete_without_code_changes(tmp_path, monkeypatch):
+    project, session_id, swarm_id, _ = _seed_repo(tmp_path, monkeypatch)
+    task = task_queue.enqueue(
+        int(project["id"]),
+        session_id,
+        "Verify implementation",
+        "Inspect the inherited change and report the result.",
+        swarm_id=swarm_id,
+        source_kind="swarm_specialist",
+        agent_role="tester",
+        task_kind="specialist",
+    )
+    monkeypatch.setattr(task_queue, "_handler", lambda task: "Verified inherited implementation.")
+
+    assert task_queue.run_once() is True
+
+    state = task_queue.get(task["id"])
+    assert state["status"] == "completed"
+    evidence = state["completion_evidence"]
+    if isinstance(evidence, str):
+        import json
+        evidence = json.loads(evidence)
+    assert evidence["required"] is False
+
+
 def test_coding_swarm_task_with_generic_success_message_but_no_changes_is_no_progress(tmp_path, monkeypatch):
     project, session_id, swarm_id, _ = _seed_repo(tmp_path, monkeypatch)
     task = task_queue.enqueue(
