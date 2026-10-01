@@ -17,6 +17,7 @@ class TaskResumeRequest(BaseModel):
     fresh_budget: int | None = Field(default=None, ge=1, le=200)
     allow_failed: bool = False
     recreate_missing_worktree: bool = False
+    override_recovery_limit: bool = False
 
 
 class RetryDependantsRequest(BaseModel):
@@ -115,7 +116,16 @@ def resume_task(task_id: int, body: TaskResumeRequest):
             fresh_budget=body.fresh_budget,
             allow_failed=body.allow_failed,
             recreate_missing_worktree=body.recreate_missing_worktree,
+            override_recovery_limit=body.override_recovery_limit,
         )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/{task_id}/recovery/abandon")
+def abandon_task_recovery(task_id: int):
+    try:
+        return task_queue.abandon_recovery(task_id)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 
