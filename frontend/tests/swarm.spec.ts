@@ -246,7 +246,7 @@ test('interaction agent board renders and controls a live swarm', async ({ page 
   await expect.poll(()=>blackboardAfter.includes('3'),{timeout:5000}).toBe(true);
 
   await page.getByPlaceholder('Guide Advanced orchestration…').fill('Prioritise regression tests.');
-  await page.getByRole('button', {name:'Coordinator'}).click();
+  await page.getByRole('button', {name:'Coordinator', exact:true}).click();
   await expect.poll(() => coordinatorGuidance).toBe('Prioritise regression tests.');
 
   await page.getByRole('button', {name:'Pause'}).click();
@@ -776,7 +776,7 @@ test('advanced orchestration recovers budget-exhausted agents and blocked depend
   await expect(dependencyMap.locator('button').filter({hasText:'#301'}).filter({hasText:'#302'})).toBeVisible();
 
   await recovery.getByRole('button',{name:'Resume from checkpoint'}).click();
-  await expect.poll(()=>resumeBody).toEqual({fresh_budget:44});
+  await expect.poll(()=>resumeBody).toEqual({fresh_budget:44,override_recovery_limit:false});
   await expect(page.getByText(/frontend · running/)).toBeVisible({timeout:4000});
   await expect(recovery.getByRole('button',{name:'Resume from checkpoint'})).toHaveCount(0);
 
@@ -879,15 +879,18 @@ test('pending agent budget request suppresses duplicate manual resume controls',
 test('recovery limit offers explicit retry or abandon decisions', async ({ page }) => {
   let resumeBody: Record<string,unknown>|null = null;
   let abandoned = false;
-  await page.route('**/api/**', async route => {
-    const url = new URL(route.request().url());
-    const p = url.pathname;
-    const json = (data: unknown) => route.fulfill({json:data});
-    if (p === '/api/projects') return json([{id:1,name:'Demo',path:'/demo',model:'test',approval_mode:'assisted'}]);
-    if (p === '/api/projects/1/swarm-runs') return json([{id:32,title:'Recovery limit',status:'recovery_available',max_agents:4,max_concurrency:2,total_agents_created:1}]);
-    if (p === '/api/projects/1/tasks') return json([]);
-    if (p === '/api/projects/1/orchestration') return json({nodes:[]});
-    if (p === '/api/projects/1/swarm/profiles') return json([]);
+
+  await baseRoutes(page, async (route,url) => {
+    const p=url.pathname;
+    const json=(data:unknown)=>route.fulfill({json:data});
+    if (p === '/api/projects/1/skills/swarm') {
+      await json({project_id:1,skill:'swarm',enabled:true});
+      return true;
+    }
+    if (p === '/api/projects/1/swarms') {
+      await json([{id:32,title:'Recovery limit',status:abandoned?'failed':'recovery_available',max_agents:4,max_concurrency:2,total_agents_created:1}]);
+      return true;
+    }
     if (p === '/api/swarms/32/board') {
       const recovery = {
         task_id:321,status:abandoned?'failed':'budget_exhausted',session_id:92,active_run_id:0,prior_run_id:62,
@@ -897,9 +900,9 @@ test('recovery limit offers explicit retry or abandon decisions', async ({ page 
         max_recovery_attempts:2,recovery_attempt:2,recovery_limit_reached:true,
         blocking_dependency_ids:[],can_resume:false
       };
-      return json({
+      await json({
         swarm:{
-          id:32,title:'Recovery limit',status:'recovery_available',
+          id:32,title:'Recovery limit',status:abandoned?'failed':'recovery_available',
           agents:[{id:321,title:'Retry me',status:abandoned?'failed':'budget_exhausted',agent_role:'backend',task_kind:'backend',session_id:92,recovery}]
         },
         summary:{
@@ -909,36 +912,46 @@ test('recovery limit offers explicit retry or abandon decisions', async ({ page 
           recovery_blockers:abandoned?[]:[{task_id:321,title:'Retry me',status:'budget_exhausted',blocking_dependency_ids:[],recovery}],
           integration_blockers:abandoned?[]:['#321 recovery limit reached']
         },
-        budget_requests:[],events:[],coordinator_events:[],blackboard:[],cursors:{event:0,coordinator_event:0,blackboard:0}
+        budget_requests:[],events:[],coordinator_events:[],blackboard:[],cursors:{event:0,coordinator_event:0,blackboard:0},
+        repository:{repository:true,has_head:true,remotes:[],has_remote:false,github_remote:'',can_push:false,can_create_pull_request:false},
+        locations:{main:'/demo',integration:'',specialists:[]}
       });
+      return true;
     }
     if (p === '/api/tasks/321/resume') {
       resumeBody = route.request().postDataJSON();
-      return json({run_id:900,prior_run_id:62,fresh_budget:20,worktree_path:'/tmp/wt',worktree_branch:'olladex/task-321',checkpoint_bytes:2048});
+      await json({run_id:900,prior_run_id:62,fresh_budget:20,worktree_path:'/tmp/wt',worktree_branch:'olladex/task-321',checkpoint_bytes:2048});
+      return true;
     }
     if (p === '/api/tasks/321/recovery/abandon') {
       abandoned = true;
-      return json({id:321,status:'failed',error:'Recovery abandoned by user after reviewing saved work'});
+      await json({id:321,status:'failed',error:'Recovery abandoned by user after reviewing saved work'});
+      return true;
     }
-    if (p === '/api/tasks/321/agent-detail') return json({
-      task:{id:321,title:'Retry me',status:'budget_exhausted',agent_role:'backend',task_kind:'backend',session_id:92,recovery:{
-        task_id:321,status:'budget_exhausted',session_id:92,active_run_id:0,prior_run_id:62,
-        prior_run_status:'budget_exhausted',checkpoint_available:true,checkpoint_bytes:2048,
-        worktree_path:'/tmp/wt',worktree_branch:'olladex/task-321',
-        worktree_available:true,branch_available:true,previous_budget:20,resumed_budget:20,
-        max_recovery_attempts:2,recovery_attempt:2,recovery_limit_reached:true,
-        blocking_dependency_ids:[],can_resume:false
-      }},
-      run:null,commands:[],active_pending_commands:[],changed_files:[],blackboard:[]
-    });
-    return json([]);
+    if (p === '/api/tasks/321/agent-detail') {
+      await json({
+        task:{id:321,title:'Retry me',status:'budget_exhausted',agent_role:'backend',task_kind:'backend',session_id:92,recovery:{
+          task_id:321,status:'budget_exhausted',session_id:92,active_run_id:0,prior_run_id:62,
+          prior_run_status:'budget_exhausted',checkpoint_available:true,checkpoint_bytes:2048,
+          worktree_path:'/tmp/wt',worktree_branch:'olladex/task-321',
+          worktree_available:true,branch_available:true,previous_budget:20,resumed_budget:20,
+          max_recovery_attempts:2,recovery_attempt:2,recovery_limit_reached:true,
+          blocking_dependency_ids:[],can_resume:false
+        }},
+        run:null,commands:[],active_pending_commands:[],changed_files:[],blackboard:[]
+      });
+      return true;
+    }
+    return false;
   });
 
   await page.goto('/');
-  await expect(page.getByText('Agent #321 · recovery limit reached')).toBeVisible();
-  await page.getByRole('button',{name:'Allow one more recovery attempt'}).first().click();
+  await page.locator('.rail').getByRole('button',{name:'Tasks'}).click();
+  const recovery=page.locator('.advanced-recovery-banner');
+  await expect(recovery.getByText('Agent #321 · recovery limit reached')).toBeVisible();
+  await recovery.getByRole('button',{name:'Allow one more recovery attempt'}).click();
   await expect.poll(()=>resumeBody).toEqual({fresh_budget:20,override_recovery_limit:true});
 
-  await page.getByRole('button',{name:'Abandon task'}).first().click();
+  await recovery.getByRole('button',{name:'Abandon task'}).click();
   await expect.poll(()=>abandoned).toBe(true);
 });
