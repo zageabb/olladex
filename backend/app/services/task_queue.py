@@ -814,16 +814,21 @@ def _requires_progress_validation(task: dict) -> bool:
 
 def _task_activity_evidence(task_id: int) -> dict:
     with connect() as conn:
-        run = conn.execute(
-            "SELECT id FROM agent_runs WHERE task_id=? ORDER BY id DESC LIMIT 1",
-            (task_id,),
+        runtime_ready = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_runs'"
         ).fetchone()
+        run = None
         rows = []
-        if run:
-            rows = conn.execute(
-                "SELECT activities FROM messages WHERE run_id=? ORDER BY id",
-                (run["id"],),
-            ).fetchall()
+        if runtime_ready:
+            run = conn.execute(
+                "SELECT id FROM agent_runs WHERE task_id=? ORDER BY id DESC LIMIT 1",
+                (task_id,),
+            ).fetchone()
+            if run:
+                rows = conn.execute(
+                    "SELECT activities FROM messages WHERE run_id=? ORDER BY id",
+                    (run["id"],),
+                ).fetchall()
     tools: list[str] = []
     commands: list[str] = []
     for row in rows:
