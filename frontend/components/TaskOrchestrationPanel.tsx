@@ -370,8 +370,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
     try{
       await request(`/tasks/${agent.id}/recovery/abandon`,{method:"POST"});
       setNotice(`Recovery abandoned for agent #${agent.id}; Coordinator can now choose a failure recovery path.`);
-      await loadSwarmBoard();
-      if(selectedSwarmAgentId===agent.id)await loadSwarmAgent(agent.id);
+      await Promise.all([load(), selectedSwarmAgentId===agent.id?refreshSelectedAgent(agent.id):Promise.resolve()]);
     }catch(error){setNotice(error instanceof Error?error.message:String(error));}
     finally{setBusy(false);}
   }
