@@ -390,6 +390,63 @@ def test_recovery_limit_disables_resume_and_blocks_more_automatic_recovery(tmp_p
     assert f"#{task['id']} recovery limit reached" in board["summary"]["integration_blockers"]
 
 
+def test_user_can_explicitly_override_recovery_limit_for_one_more_attempt(tmp_path, monkeypatch):
+    project, session_id, swarm_id, _ = _seed_repo(tmp_path, monkeypatch)
+    task, prior_run_id = _exhausted_task(project, session_id, swarm_id)
+    with connect() as conn:
+        profile_id = conn.execute(
+            "SELECT profile_id FROM swarm_runs WHERE id=?",
+            (swarm_id,),
+        ).fetchone()["profile_id"]
+        conn.execute("UPDATE swarm_profiles SET max_recovery_attempts=1 WHERE id=?", (profile_id,))
+        conn.execute("UPDATE background_tasks SET recovery_attempt=1 WHERE id=?", (task["id"],))
+
+    launched = {}
+    monkeypatch.setattr(
+        conversation_runtime,
+        "launch",
+        lambda session_id, content, resume_id=None, recovery_metadata=None: launched.update(
+            {"session_id": session_id, "resume_id": resume_id, "metadata": recovery_metadata}
+        ) or {"id": 8200, "session_id": session_id, "task_id": task["id"], "status": "running"},
+    )
+
+    with pytest.raises(ValueError, match="maximum recovery attempts"):
+        task_queue.resume_task(task["id"], fresh_budget=20)
+
+    resumed = task_queue.resume_task(
+        task["id"],
+        fresh_budget=20,
+        override_recovery_limit=True,
+    )
+
+    assert resumed["prior_run_id"] == prior_run_id
+    assert task_queue.get(task["id"])["recovery_attempt"] == 2
+    assert launched["metadata"]["recovery_attempt"] == 2
+
+
+def test_user_can_abandon_recovery_and_pending_budget_request_is_closed(tmp_path, monkeypatch):
+    project, session_id, swarm_id, _ = _seed_repo(tmp_path, monkeypatch)
+    task, prior_run_id = _exhausted_task(project, session_id, swarm_id)
+    request = swarm.ensure_budget_request(
+        swarm_id,
+        scope="agent",
+        task_id=task["id"],
+        run_id=prior_run_id,
+        requested_amount=25,
+        reason="Need one more attempt",
+    )
+
+    abandoned = task_queue.abandon_recovery(task["id"])
+
+    assert abandoned["status"] == "failed"
+    assert "abandoned" in abandoned["error"].lower()
+    pending = swarm.budget_requests(swarm_id, pending_only=True)
+    assert not [item for item in pending if item["id"] == request["id"]]
+    decided = next(item for item in swarm.budget_requests(swarm_id) if item["id"] == request["id"])
+    assert decided["status"] == "declined"
+    assert decided["decided_by"] == "user"
+
+
 def _wait_for(predicate, timeout: float = 3.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
