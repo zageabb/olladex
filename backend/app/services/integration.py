@@ -78,8 +78,13 @@ def create(project: dict, lead_task_id: int, branches: list[str], base: str = "m
             raise ValueError(output.strip() or "Could not create integration worktree")
     applied: list[dict] = []
     skipped: list[dict] = []
+    source_heads: dict[str, str] = {}
     try:
         for source_branch in plan["branches"]:
+            code, source_head = worktrees._git(path, "rev-parse", source_branch)
+            if code:
+                raise ValueError(source_head.strip() or f"Could not resolve {source_branch}")
+            source_heads[source_branch] = source_head.strip()
             code, commits = worktrees._git(path, "rev-list", "--reverse", f"{base}..{source_branch}")
             if code:
                 raise ValueError(commits.strip() or f"Could not enumerate commits for {source_branch}")
@@ -99,7 +104,7 @@ def create(project: dict, lead_task_id: int, branches: list[str], base: str = "m
     except Exception:
         # Preserve the integration worktree and branch after safely aborting the current cherry-pick.
         raise
-    return {"path": str(path), "branch": branch, "reused": reused, "applied": applied, "skipped": skipped, **plan, **summary(project, str(path), base)}
+    return {"path": str(path), "branch": branch, "reused": reused, "applied": applied, "skipped": skipped, "source_heads": source_heads, **plan, **summary(project, str(path), base)}
 
 
 def integration_project(project: dict, path: str) -> dict:
