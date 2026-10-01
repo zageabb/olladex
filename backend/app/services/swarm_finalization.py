@@ -234,13 +234,24 @@ def promotion_gate(swarm_id: int, project: dict, base: str = "main") -> dict:
     missing_commits: list[str] = []
     integration_path = Path(path)
     for task in evidence["specialists"]["tasks"]:
-        for sha in task.get("unique_commits") or []:
-            code, _ = worktrees._git(integration_path, "merge-base", "--is-ancestor", str(sha), "HEAD")
-            if code != 0:
-                missing_commits.append(f"#{task['task_id']} {str(sha)[:12]}")
+        branch = str(task.get("branch") or "").strip()
+        unique_commits = {str(sha) for sha in task.get("unique_commits") or []}
+        if not branch or not unique_commits:
+            continue
+        code, cherry = worktrees._git(integration_path, "cherry", "HEAD", branch)
+        if code:
+            raise ValueError(cherry.strip() or f"Could not compare specialist task #{task['task_id']} with integration")
+        present = {
+            line[2:].strip()
+            for line in cherry.splitlines()
+            if line.startswith("- ")
+        }
+        for sha in unique_commits:
+            if sha not in present:
+                missing_commits.append(f"#{task['task_id']} {sha[:12]}")
     if missing_commits:
         raise ValueError(
-            "Integration branch is stale and does not contain the latest specialist commit(s): "
+            "Integration branch is stale and does not contain the latest specialist change(s): "
             + ", ".join(missing_commits)
             + ". Rebuild the integration branch and rerun combined checks."
         )
