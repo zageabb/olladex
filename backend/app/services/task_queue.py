@@ -882,17 +882,11 @@ def _coding_completion_evidence(task: dict, result: str, starting_head: str) -> 
         if code == 0:
             diff_files = [line.strip() for line in output.splitlines() if line.strip()]
 
-    no_progress = (
-        not response
-        and not activity["write_tools"]
-        and not head_changed
-        and not diff_files
-        and not worktree_changes
-        and not activity["validation_commands"]
-    )
+    meaningful_change = bool(head_changed or diff_files or worktree_changes)
+    no_progress = not meaningful_change
     reason = (
-        "Coding task produced no final response, file edits, committed or working-tree changes, "
-        "or validation evidence."
+        "Coding task completed without a committed or working-tree change. "
+        "A final response, tool call, or validation command alone is not implementation evidence."
         if no_progress else ""
     )
     return {
@@ -900,6 +894,7 @@ def _coding_completion_evidence(task: dict, result: str, starting_head: str) -> 
         "ok": not no_progress,
         "reason": reason,
         "response_nonempty": bool(response),
+        "meaningful_change": meaningful_change,
         "write_tools": activity["write_tools"],
         "validation_commands": activity["validation_commands"],
         "starting_head": starting_head,
