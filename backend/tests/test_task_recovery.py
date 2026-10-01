@@ -465,7 +465,7 @@ def test_coding_swarm_task_empty_noop_becomes_recoverable_no_progress(tmp_path, 
 
     state = task_queue.get(task["id"])
     assert state["status"] == "no_progress"
-    assert "no final response" in state["no_progress_reason"].lower()
+    assert "without a committed or working-tree change" in state["no_progress_reason"].lower()
     assert swarm.get_run(swarm_id)["status"] == "recovery_available"
     evidence = state["completion_evidence"]
     if isinstance(evidence, str):
@@ -477,6 +477,34 @@ def test_coding_swarm_task_empty_noop_becomes_recoverable_no_progress(tmp_path, 
     assert evidence["diff_files"] == []
     assert evidence["write_tools"] == []
     assert evidence["validation_commands"] == []
+
+
+def test_coding_swarm_task_with_generic_success_message_but_no_changes_is_no_progress(tmp_path, monkeypatch):
+    project, session_id, swarm_id, _ = _seed_repo(tmp_path, monkeypatch)
+    task = task_queue.enqueue(
+        int(project["id"]),
+        session_id,
+        "Implement missing feature",
+        "Change the code and run validation.",
+        swarm_id=swarm_id,
+        source_kind="swarm_specialist",
+        agent_role="backend",
+        task_kind="backend",
+    )
+    monkeypatch.setattr(task_queue, "_handler", lambda task: "Implemented successfully.")
+
+    assert task_queue.run_once() is True
+
+    state = task_queue.get(task["id"])
+    assert state["status"] == "no_progress"
+    assert "without a committed or working-tree change" in state["no_progress_reason"].lower()
+    evidence = state["completion_evidence"]
+    if isinstance(evidence, str):
+        import json
+        evidence = json.loads(evidence)
+    assert evidence["response_nonempty"] is True
+    assert evidence["meaningful_change"] is False
+    assert evidence["ok"] is False
 
 
 def test_coding_swarm_task_with_workspace_change_can_complete(tmp_path, monkeypatch):
