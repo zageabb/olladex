@@ -323,11 +323,11 @@ def launch(session_id, content, resume_id=None, recovery_metadata=None):
                                     "UPDATE background_tasks SET completion_evidence=?,no_progress_reason=?,status='no_progress',error=? WHERE id=?",
                                     (json.dumps(evidence, default=str), evidence["reason"], evidence["reason"], task_id),
                                 )
-                            state('no_progress')
-                            # Make recoverability visible atomically with the no-progress state.
-                            # The finalizer repeats this idempotently, but callers polling the run
-                            # must never observe no_progress while the swarm still says recovering.
+                            # Make recovery availability visible before publishing the
+                            # terminal no-progress run state. Pollers must never observe a
+                            # no-progress run while the swarm still reports recovering.
                             task_queue._mark_recovery_available(task_queue.get(task_id), evidence["reason"])
+                            state('no_progress')
                         else:
                             with connect() as conn:
                                 conn.execute(
