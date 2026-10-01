@@ -554,6 +554,7 @@ def test_no_progress_resumed_run_stays_recoverable_and_preserves_checkpoint(tmp_
     with connect() as conn:
         old_checkpoint = conn.execute("SELECT checkpoint FROM agent_runs WHERE id=?", (prior_run_id,)).fetchone()["checkpoint"]
     assert old_checkpoint == prior_checkpoint
+    _wait_for(lambda: run_id not in conversation_runtime._threads)
 
 
 def test_failed_resume_startup_preserves_previous_recovery_state(tmp_path, monkeypatch):
