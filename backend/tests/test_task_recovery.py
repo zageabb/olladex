@@ -532,6 +532,93 @@ def test_coding_swarm_task_with_generic_success_message_but_no_changes_is_no_pro
     assert evidence["ok"] is False
 
 
+def test_coding_swarm_task_with_changes_but_missing_requested_validation_is_incomplete(tmp_path, monkeypatch):
+    project, session_id, swarm_id, _ = _seed_repo(tmp_path, monkeypatch)
+    task = task_queue.enqueue(
+        int(project["id"]),
+        session_id,
+        "Implement and validate feature",
+        "Change the code and run validation.",
+        swarm_id=swarm_id,
+        source_kind="swarm_specialist",
+        agent_role="backend",
+        task_kind="backend",
+    )
+
+    def handler(claimed):
+        target = Path(claimed["worktree_path"]) / "feature.py"
+        target.write_text("value = 1\n", encoding="utf-8")
+        return "Implemented."
+
+    monkeypatch.setattr(task_queue, "_handler", handler)
+
+    assert task_queue.run_once() is True
+
+    state = task_queue.get(task["id"])
+    assert state["status"] == "incomplete"
+    assert "did not run the validation requested" in state["no_progress_reason"].lower()
+    assert swarm.get_run(swarm_id)["status"] == "recovery_available"
+    evidence = state["completion_evidence"]
+    if isinstance(evidence, str):
+        import json
+        evidence = json.loads(evidence)
+    assert evidence["meaningful_change"] is True
+    assert evidence["validation_required"] is True
+    assert evidence["validation_present"] is False
+    assert evidence["failure_status"] == "incomplete"
+
+
+def test_coding_swarm_task_with_changes_and_requested_validation_can_complete(tmp_path, monkeypatch):
+    project, session_id, swarm_id, _ = _seed_repo(tmp_path, monkeypatch)
+    task = task_queue.enqueue(
+        int(project["id"]),
+        session_id,
+        "Implement and validate feature",
+        "Change the code and run validation.",
+        swarm_id=swarm_id,
+        source_kind="swarm_specialist",
+        agent_role="backend",
+        task_kind="backend",
+    )
+
+    def handler(claimed):
+        target = Path(claimed["worktree_path"]) / "feature.py"
+        target.write_text("value = 1\n", encoding="utf-8")
+        stamp = now()
+        with connect() as conn:
+            run_id = int(conn.execute(
+                "INSERT INTO agent_runs(session_id,task_id,status,checkpoint,cancel_requested,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (session_id, claimed["id"], "running", "[]", 0, stamp, stamp),
+            ).lastrowid)
+            conn.execute(
+                "INSERT INTO messages(session_id,role,content,activities,created_at,run_id) VALUES(?,?,?,?,?,?)",
+                (
+                    session_id,
+                    "assistant",
+                    "Validation complete",
+                    '[{"tool":"run_command","arguments":{"command":"pytest -q"}}]',
+                    stamp,
+                    run_id,
+                ),
+            )
+        return "Implemented and validated."
+
+    monkeypatch.setattr(task_queue, "_handler", handler)
+
+    assert task_queue.run_once() is True
+
+    state = task_queue.get(task["id"])
+    assert state["status"] == "completed"
+    evidence = state["completion_evidence"]
+    if isinstance(evidence, str):
+        import json
+        evidence = json.loads(evidence)
+    assert evidence["validation_required"] is True
+    assert evidence["validation_present"] is True
+    assert evidence["validation_commands"] == ["pytest -q"]
+
+
 def test_coding_swarm_task_with_workspace_change_can_complete(tmp_path, monkeypatch):
     project, session_id, swarm_id, _ = _seed_repo(tmp_path, monkeypatch)
     task = task_queue.enqueue(
