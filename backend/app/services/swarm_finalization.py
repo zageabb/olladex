@@ -151,6 +151,21 @@ def specialist_evidence(swarm_id: int, project: dict, base: str = "main") -> dic
         unique = _unique_task_changes(task, tasks_by_id, base)
         changed_by_task[int(task["id"])] = unique["files"]
 
+        completion_evidence = {}
+        try:
+            completion_evidence = json.loads(str(task.get("completion_evidence") or "{}"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            completion_evidence = {}
+        recorded_head = str(completion_evidence.get("ending_head") or "").strip()
+        if completion_evidence.get("required") and recorded_head:
+            current_head = str(state.get("head") or "").strip()
+            if current_head and current_head != recorded_head:
+                raise ValueError(
+                    f"Specialist task #{task['id']} branch changed after task completion "
+                    f"({recorded_head[:12]} -> {current_head[:12]}). Reviewer evidence is stale; "
+                    "rerun the specialist/reviewer flow before integration."
+                )
+
         if task.get("source_kind") == "swarm_recovery" and not unique["files"]:
             raise ValueError(f"Recovery task #{task['id']} completed without a meaningful committed diff")
         role = str(task.get("task_kind") or task.get("agent_role") or "worker")
