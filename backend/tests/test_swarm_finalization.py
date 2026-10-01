@@ -347,3 +347,40 @@ def test_budget_recovery_flows_through_reviewer_to_integration(tmp_path, monkeyp
     assert Path(run["integration_path"], "recovered.py").read_text(encoding="utf-8") == "print('recovered')\n"
     assert not (repo / "recovered.py").exists()
     assert swarm.board_snapshot(swarm_id)["summary"]["recovery_available"] is False
+
+
+def test_promotion_blocks_when_specialist_branch_advanced_after_checks(tmp_path, monkeypatch):
+    project, session_id, swarm_id, _ = _seed(tmp_path, monkeypatch, objective="Create main.py")
+    specialist = _complete_specialist(project, session_id, swarm_id, filename="main.py")
+    _complete_reviewer(
+        project,
+        session_id,
+        swarm_id,
+        "Reviewer verified the committed specialist implementation and supplied sufficient final evidence for integration.",
+    )
+
+    swarm_coordinator._prepare_finalization(swarm.get_run(swarm_id))
+    checks = swarm_routes.run_swarm_integration_checks(
+        swarm_id,
+        swarm_routes.SwarmIntegrationChecksRequest(command="test -f main.py"),
+    )
+    assert checks["passed"] is True
+    assert swarm.get_run(swarm_id)["status"] == "ready_to_promote"
+
+    specialist_path = Path(specialist["worktree_path"])
+    (specialist_path / "main.py").write_text("print('newer specialist work')\n", encoding="utf-8")
+    worktrees.commit_all(project, str(specialist_path), "Advance specialist after integration checks")
+
+    with pytest.raises(ValueError, match="Integration branch is stale"):
+        swarm_finalization.promotion_gate(swarm_id, project)
+
+    with pytest.raises(Exception) as exc:
+        swarm_routes.promote_swarm_integration(
+            swarm_id,
+            swarm_routes.SwarmPromotionRequest(target_branch="main"),
+        )
+    assert "stale" in str(exc.value).lower()
+    run = swarm.get_run(swarm_id)
+    assert run["status"] == "ready_to_promote"
+    assert run["promotion_status"] == "blocked"
+    assert "rebuild the integration branch" in run["promotion_output"].lower()
