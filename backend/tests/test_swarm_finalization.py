@@ -384,3 +384,36 @@ def test_promotion_blocks_when_specialist_branch_advanced_after_checks(tmp_path,
     assert run["status"] == "ready_to_promote"
     assert run["promotion_status"] == "blocked"
     assert "rebuild the integration branch" in run["promotion_output"].lower()
+
+
+def test_review_gate_blocks_branch_changed_after_task_completion(tmp_path, monkeypatch):
+    project, session_id, swarm_id, _ = _seed(tmp_path, monkeypatch, objective="Create main.py")
+    specialist = _complete_specialist(project, session_id, swarm_id, filename="main.py")
+    specialist_path = Path(specialist["worktree_path"])
+    completed_head = _git(specialist_path, "rev-parse", "HEAD")
+    with connect() as conn:
+        conn.execute(
+            "UPDATE background_tasks SET completion_evidence=? WHERE id=?",
+            (
+                '{"required":true,"ok":true,"ending_head":"' + completed_head + '"}',
+                specialist["id"],
+            ),
+        )
+
+    _complete_reviewer(
+        project,
+        session_id,
+        swarm_id,
+        "Reviewer inspected the completed specialist branch and supplied enough evidence for finalization.",
+    )
+
+    (specialist_path / "main.py").write_text("print('changed after completion')\n", encoding="utf-8")
+    worktrees.commit_all(project, str(specialist_path), "Mutate specialist after completion")
+
+    with pytest.raises(ValueError, match="branch changed after task completion"):
+        swarm_finalization.review_gate(swarm_id, project)
+
+    swarm_coordinator._prepare_finalization(swarm.get_run(swarm_id))
+    run = swarm.get_run(swarm_id)
+    assert run["status"] == "failed"
+    assert not run["integration_path"]
