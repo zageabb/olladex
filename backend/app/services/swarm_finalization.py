@@ -209,12 +209,27 @@ def prepare_integration(swarm_id: int, project: dict, base: str = "main") -> dic
 
 def promotion_gate(swarm_id: int, project: dict, base: str = "main") -> dict:
     run = _run(swarm_id)
-    reviewer = reviewer_report(swarm_id)
+    evidence = review_gate(swarm_id, project, base)
     if run.get("integration_check_status") != "passed":
         raise ValueError("Configured combined checks have not passed")
     path = str(run.get("integration_path") or "").strip()
     if not path:
         raise ValueError("Integration worktree has not been prepared")
+
+    missing_commits: list[str] = []
+    integration_path = Path(path)
+    for task in evidence["specialists"]["tasks"]:
+        for sha in task.get("unique_commits") or []:
+            code, _ = worktrees._git(integration_path, "merge-base", "--is-ancestor", str(sha), "HEAD")
+            if code != 0:
+                missing_commits.append(f"#{task['task_id']} {str(sha)[:12]}")
+    if missing_commits:
+        raise ValueError(
+            "Integration branch is stale and does not contain the latest specialist commit(s): "
+            + ", ".join(missing_commits)
+            + ". Rebuild the integration branch and rerun combined checks."
+        )
+
     ready = integration.verify_integration_ready(
         project,
         path,
@@ -222,7 +237,8 @@ def promotion_gate(swarm_id: int, project: dict, base: str = "main") -> dict:
     )
     return {
         "swarm_id": swarm_id,
-        "reviewer": reviewer,
+        "reviewer": evidence["reviewer"],
+        "specialists": evidence["specialists"],
         "integration": ready,
     }
 
