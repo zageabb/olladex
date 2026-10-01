@@ -220,3 +220,131 @@ def test_missing_expected_file_changes_checks_to_failed_state(tmp_path, monkeypa
     run = swarm.get_run(swarm_id)
     assert run["status"] == "checks_failed"
     assert run["status"] != "completed"
+
+
+def test_budget_recovery_flows_through_reviewer_to_integration(tmp_path, monkeypatch):
+    project, session_id, swarm_id, repo = _seed(tmp_path, monkeypatch, objective="Create recovered.py")
+    with connect() as conn:
+        conn.execute("UPDATE swarm_runs SET status='recovery_available' WHERE id=?", (swarm_id,))
+
+    specialist = task_queue.enqueue(
+        int(project["id"]),
+        session_id,
+        "Recover implementation",
+        "Create recovered.py and validate it.",
+        swarm_id=swarm_id,
+        source_kind="swarm_specialist",
+        agent_role="backend",
+        task_kind="backend",
+    )
+    isolated = worktrees.create_for_task(project, specialist["id"])
+    task_queue.set_worktree(specialist["id"], isolated["path"], isolated["branch"])
+    stamp = now()
+    with connect() as conn:
+        conn.execute(
+            "UPDATE background_tasks SET status='budget_exhausted',error='tool budget exhausted',completed_at=? WHERE id=?",
+            (stamp, specialist["id"]),
+        )
+        prior_run_id = int(conn.execute(
+            "INSERT INTO agent_runs(session_id,task_id,status,checkpoint,cancel_requested,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (
+                session_id,
+                specialist["id"],
+                "budget_exhausted",
+                '[{"role":"user","content":"Create recovered.py"},{"role":"assistant","content":"Working"}]',
+                0,
+                stamp,
+                stamp,
+            ),
+        ).lastrowid)
+
+    reviewer_session = int(connect().execute(
+        "SELECT id FROM sessions WHERE id=?",
+        (session_id,),
+    ).fetchone()["id"])
+    reviewer = task_queue.enqueue(
+        int(project["id"]),
+        reviewer_session,
+        "Final review",
+        "Review recovered implementation",
+        swarm_id=swarm_id,
+        source_kind="swarm_reviewer",
+        agent_role="reviewer",
+        task_kind="reviewer",
+        priority=300,
+        depends_on=[specialist["id"]],
+    )
+
+    launched = {}
+    monkeypatch.setattr(
+        conversation_runtime,
+        "launch",
+        lambda session_id, content, resume_id=None, recovery_metadata=None: launched.update(
+            {
+                "session_id": session_id,
+                "resume_id": resume_id,
+                "metadata": recovery_metadata,
+            }
+        ) or {
+            "id": 9100,
+            "session_id": session_id,
+            "task_id": specialist["id"],
+            "status": "running",
+        },
+    )
+
+    request = swarm.ensure_budget_request(
+        swarm_id,
+        scope="agent",
+        task_id=specialist["id"],
+        run_id=prior_run_id,
+        requested_amount=25,
+        reason="Implementation is close to completion.",
+    )
+    decision = swarm.decide_budget_request(
+        request["id"],
+        accepted=True,
+        amount=25,
+        decided_by="coordinator",
+    )
+
+    assert decision["status"] == "granted"
+    assert launched["resume_id"] == prior_run_id
+    assert launched["metadata"]["recovery_attempt"] == 1
+    assert task_queue.get(specialist["id"])["recovery_attempt"] == 1
+    assert swarm.get_run(swarm_id)["status"] == "recovering"
+
+    worktree = Path(task_queue.get(specialist["id"])["worktree_path"])
+    (worktree / "recovered.py").write_text("print('recovered')\n", encoding="utf-8")
+    worktrees.commit_all(project, str(worktree), "Complete recovered implementation")
+    with connect() as conn:
+        conn.execute(
+            "UPDATE background_tasks SET status='completed',result=?,error='',completed_at=? WHERE id=?",
+            ("Recovered implementation completed with validation evidence.", now(), specialist["id"]),
+        )
+
+    task_queue.auto_retry_recovered_dependants(specialist["id"])
+    claimed = task_queue._claim_next()
+    assert claimed is not None
+    assert claimed["id"] == reviewer["id"]
+
+    reviewer_report = (
+        "Reviewer inspected the recovered committed implementation, confirmed the requested file exists, "
+        "and found the recovery evidence sufficient for deterministic integration."
+    )
+    with connect() as conn:
+        conn.execute(
+            "UPDATE background_tasks SET status='completed',result=?,completed_at=? WHERE id=?",
+            (reviewer_report, now(), reviewer["id"]),
+        )
+
+    swarm_coordinator._reconcile(swarm_id)
+    run = swarm.get_run(swarm_id)
+
+    assert run["status"] == "integrating"
+    assert run["integration_path"]
+    assert run["integration_branch"].startswith("olladex/integration-swarm-")
+    assert Path(run["integration_path"], "recovered.py").read_text(encoding="utf-8") == "print('recovered')\n"
+    assert not (repo / "recovered.py").exists()
+    assert swarm.board_snapshot(swarm_id)["summary"]["recovery_available"] is False
