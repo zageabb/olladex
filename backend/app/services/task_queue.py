@@ -1037,6 +1037,20 @@ def run_once() -> bool:
                 commit_sha = _auto_commit_specialist(task)
                 if commit_sha:
                     result = f"{result}\n\nTask branch auto-committed as {commit_sha[:12]}."
+                if completion_evidence.get("required") and task.get("worktree_path"):
+                    try:
+                        from . import worktrees
+                        final_summary = worktrees.summary(_project_for_task(task), task["worktree_path"])
+                        completion_evidence["ending_head"] = str(final_summary.get("head") or "")
+                        completion_evidence["worktree_changes"] = final_summary.get("changes") or []
+                        completion_evidence["auto_commit_sha"] = commit_sha or ""
+                        completion_evidence["head_changed"] = bool(
+                            completion_evidence.get("starting_head")
+                            and completion_evidence.get("ending_head")
+                            and completion_evidence["starting_head"] != completion_evidence["ending_head"]
+                        )
+                    except Exception:
+                        pass
             with connect() as conn:
                 conn.execute(
                     "UPDATE background_tasks SET status=?,result=?,progress=?,current_activity=?,completion_evidence=?,completed_at=? WHERE id=?",
