@@ -505,6 +505,12 @@ def test_coding_swarm_task_with_workspace_change_can_complete(tmp_path, monkeypa
     assert state["status"] == "completed"
     assert state["worktree_branch"]
     assert _git(Path(state["worktree_path"]), "show", "--name-only", "--pretty=format:", "HEAD") == "feature.py"
+    evidence = state["completion_evidence"]
+    if isinstance(evidence, str):
+        import json
+        evidence = json.loads(evidence)
+    assert evidence["ending_head"] == _git(Path(state["worktree_path"]), "rev-parse", "HEAD")
+    assert evidence["auto_commit_sha"] == evidence["ending_head"]
 
 
 def _wait_for(predicate, timeout: float = 3.0):
