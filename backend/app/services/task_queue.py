@@ -266,6 +266,7 @@ def resume_task(
     fresh_budget: int | None = None,
     allow_failed: bool = False,
     recreate_missing_worktree: bool = False,
+    override_recovery_limit: bool = False,
 ) -> dict:
     from . import conversation_runtime, worktrees
     task = get(task_id)
@@ -327,7 +328,7 @@ def resume_task(
     current_attempt = int(task.get("recovery_attempt") or 0)
     max_attempts = int(profile["max_recovery_attempts"] or 2) if profile else 2
     attempt = current_attempt + 1
-    if attempt > max_attempts:
+    if attempt > max_attempts and not override_recovery_limit:
         raise ValueError(f"Task has reached the maximum recovery attempts ({max_attempts})")
     default_budget = int(profile["resumed_task_tool_budget"] or 20) if profile else 20
     budget = max(1, min(int(fresh_budget or default_budget), 200))
@@ -438,6 +439,29 @@ def resume_task(
         "starting_head": summary.get("head") or "",
         "dirty_work_preserved": bool(summary.get("changes")),
     }
+
+
+def abandon_recovery(task_id: int) -> dict:
+    task = get(task_id)
+    if not task:
+        raise ValueError("Background task not found")
+    if task.get("status") not in RECOVERABLE_TASK_STATUSES:
+        raise ValueError(f"Task status '{task.get('status')}' is not awaiting recovery")
+    stamp = now()
+    reason = "Recovery abandoned by user after reviewing saved work"
+    with connect() as conn:
+        conn.execute(
+            "UPDATE background_tasks SET status='failed',error=?,completed_at=?,current_activity=? WHERE id=?",
+            (reason, stamp, "Recovery abandoned", task_id),
+        )
+        if task.get("swarm_id"):
+            conn.execute(
+                "UPDATE swarm_budget_requests SET status='declined',granted_amount=0,decided_by='user',updated_at=? "
+                "WHERE swarm_id=? AND task_id=? AND status='pending'",
+                (stamp, task["swarm_id"], task_id),
+            )
+    _wake.set()
+    return get(task_id)
 
 
 def blocked_descendants(task_id: int) -> list[dict]:
