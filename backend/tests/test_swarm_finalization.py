@@ -360,6 +360,12 @@ def test_promotion_blocks_when_specialist_branch_advanced_after_checks(tmp_path,
     )
 
     swarm_coordinator._prepare_finalization(swarm.get_run(swarm_id))
+    prepared = swarm.get_run(swarm_id)
+    import json
+    source_heads = json.loads(prepared["integration_source_heads"])
+    assert source_heads[specialist["worktree_branch"]] == _git(
+        Path(specialist["worktree_path"]), "rev-parse", "HEAD"
+    )
     checks = swarm_routes.run_swarm_integration_checks(
         swarm_id,
         swarm_routes.SwarmIntegrationChecksRequest(command="test -f main.py"),
