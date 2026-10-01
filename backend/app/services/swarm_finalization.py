@@ -231,28 +231,27 @@ def promotion_gate(swarm_id: int, project: dict, base: str = "main") -> dict:
     if not path:
         raise ValueError("Integration worktree has not been prepared")
 
-    missing_commits: list[str] = []
-    integration_path = Path(path)
+    try:
+        source_heads = json.loads(str(run.get("integration_source_heads") or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        source_heads = {}
+
+    stale_sources: list[str] = []
     for task in evidence["specialists"]["tasks"]:
         branch = str(task.get("branch") or "").strip()
-        unique_commits = {str(sha) for sha in task.get("unique_commits") or []}
-        if not branch or not unique_commits:
+        if not branch:
             continue
-        code, cherry = worktrees._git(integration_path, "cherry", "HEAD", branch)
-        if code:
-            raise ValueError(cherry.strip() or f"Could not compare specialist task #{task['task_id']} with integration")
-        present = {
-            line[2:].strip()
-            for line in cherry.splitlines()
-            if line.startswith("- ")
-        }
-        for sha in unique_commits:
-            if sha not in present:
-                missing_commits.append(f"#{task['task_id']} {sha[:12]}")
-    if missing_commits:
+        recorded_head = str(source_heads.get(branch) or "").strip()
+        current_head = str(task.get("head") or "").strip()
+        if recorded_head and current_head and recorded_head != current_head:
+            stale_sources.append(
+                f"#{task['task_id']} {branch} {recorded_head[:12]} -> {current_head[:12]}"
+            )
+
+    if stale_sources:
         raise ValueError(
-            "Integration branch is stale and does not contain the latest specialist change(s): "
-            + ", ".join(missing_commits)
+            "Integration branch is stale because specialist branch heads changed after integration was prepared: "
+            + ", ".join(stale_sources)
             + ". Rebuild the integration branch and rerun combined checks."
         )
 
