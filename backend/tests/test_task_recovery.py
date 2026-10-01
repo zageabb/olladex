@@ -447,6 +447,66 @@ def test_user_can_abandon_recovery_and_pending_budget_request_is_closed(tmp_path
     assert decided["decided_by"] == "user"
 
 
+def test_coding_swarm_task_empty_noop_becomes_recoverable_no_progress(tmp_path, monkeypatch):
+    project, session_id, swarm_id, _ = _seed_repo(tmp_path, monkeypatch)
+    task = task_queue.enqueue(
+        int(project["id"]),
+        session_id,
+        "Implement missing feature",
+        "Change the code and run validation.",
+        swarm_id=swarm_id,
+        source_kind="swarm_specialist",
+        agent_role="backend",
+        task_kind="backend",
+    )
+    monkeypatch.setattr(task_queue, "_handler", lambda task: "")
+
+    assert task_queue.run_once() is True
+
+    state = task_queue.get(task["id"])
+    assert state["status"] == "no_progress"
+    assert "no final response" in state["no_progress_reason"].lower()
+    assert swarm.get_run(swarm_id)["status"] == "recovery_available"
+    evidence = state["completion_evidence"]
+    if isinstance(evidence, str):
+        import json
+        evidence = json.loads(evidence)
+    assert evidence["required"] is True
+    assert evidence["ok"] is False
+    assert evidence["head_changed"] is False
+    assert evidence["diff_files"] == []
+    assert evidence["write_tools"] == []
+    assert evidence["validation_commands"] == []
+
+
+def test_coding_swarm_task_with_workspace_change_can_complete(tmp_path, monkeypatch):
+    project, session_id, swarm_id, _ = _seed_repo(tmp_path, monkeypatch)
+    task = task_queue.enqueue(
+        int(project["id"]),
+        session_id,
+        "Implement real feature",
+        "Change the code.",
+        swarm_id=swarm_id,
+        source_kind="swarm_specialist",
+        agent_role="backend",
+        task_kind="backend",
+    )
+
+    def handler(claimed):
+        target = Path(claimed["worktree_path"]) / "feature.py"
+        target.write_text("value = 1\n", encoding="utf-8")
+        return ""
+
+    monkeypatch.setattr(task_queue, "_handler", handler)
+
+    assert task_queue.run_once() is True
+
+    state = task_queue.get(task["id"])
+    assert state["status"] == "completed"
+    assert state["worktree_branch"]
+    assert _git(Path(state["worktree_path"]), "show", "--name-only", "--pretty=format:", "HEAD") == "feature.py"
+
+
 def _wait_for(predicate, timeout: float = 3.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
