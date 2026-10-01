@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 
 from fastapi import APIRouter, HTTPException
@@ -517,7 +518,7 @@ def create_swarm_integration(swarm_id: int, body: SwarmIntegrationSelectionReque
             "integration_check_command='',integration_check_status='',integration_check_output='',"
             "integration_source_heads=?,integration_pushed=0,integration_pr_number=0,integration_pr_url='',integration_pr_state='',"
             "promotion_status='',promoted_commit='',promotion_output='' WHERE id=?",
-            (result["path"], result["branch"], __import__("json").dumps(result.get("source_heads") or {}, sort_keys=True), swarm_id),
+            (result["path"], result["branch"], json.dumps(result.get("source_heads") or {}, sort_keys=True), swarm_id),
         )
     swarm_service.emit_coordinator_event(
         swarm_id,
