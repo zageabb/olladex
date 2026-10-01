@@ -175,7 +175,7 @@ def recovery_info(task_id: int) -> dict:
             (task_id,),
         ).fetchone()
         prior = conn.execute(
-            "SELECT * FROM agent_runs WHERE task_id=? AND status IN ('budget_exhausted','interrupted','failed','cancelled','no_progress') ORDER BY id DESC LIMIT 1",
+            "SELECT * FROM agent_runs WHERE task_id=? AND status IN ('budget_exhausted','interrupted','failed','cancelled','no_progress','incomplete') ORDER BY id DESC LIMIT 1",
             (task_id,),
         ).fetchone()
         profile = conn.execute(
@@ -815,6 +815,27 @@ def _requires_progress_validation(task: dict) -> bool:
     return task_kind not in no_change_roles and agent_role not in no_change_roles
 
 
+def _requests_validation(task: dict) -> bool:
+    text = " ".join([
+        str(task.get("title") or ""),
+        str(task.get("prompt") or ""),
+    ]).lower()
+    return any(token in text for token in (
+        "run tests",
+        "run the tests",
+        "run validation",
+        "validate",
+        "validation",
+        "verify by",
+        "pytest",
+        "npm test",
+        "npm run build",
+        "typecheck",
+        "type-check",
+        "lint",
+    ))
+
+
 def _task_activity_evidence(task_id: int) -> dict:
     with connect() as conn:
         runtime_ready = conn.execute(
@@ -886,18 +907,27 @@ def _coding_completion_evidence(task: dict, result: str, starting_head: str) -> 
             diff_files = [line.strip() for line in output.splitlines() if line.strip()]
 
     meaningful_change = bool(head_changed or diff_files or worktree_changes)
+    validation_required = bool(task.get("_validation_required"))
+    validation_present = bool(activity["validation_commands"])
     no_progress = not meaningful_change
+    missing_validation = meaningful_change and validation_required and not validation_present
     reason = (
         "Coding task completed without a committed or working-tree change. "
         "A final response, tool call, or validation command alone is not implementation evidence."
-        if no_progress else ""
+        if no_progress else
+        "Coding task changed the repository but did not run the validation requested by the task."
+        if missing_validation else ""
     )
+    failure_status = "no_progress" if no_progress else "incomplete" if missing_validation else ""
     return {
         "required": True,
-        "ok": not no_progress,
+        "ok": not (no_progress or missing_validation),
+        "failure_status": failure_status,
         "reason": reason,
         "response_nonempty": bool(response),
         "meaningful_change": meaningful_change,
+        "validation_required": validation_required,
+        "validation_present": validation_present,
         "write_tools": activity["write_tools"],
         "validation_commands": activity["validation_commands"],
         "starting_head": starting_head,
@@ -992,6 +1022,7 @@ def run_once() -> bool:
                 starting_head = str(worktrees.summary(_project_for_task(task), task["worktree_path"]).get("head") or "")
             except Exception:
                 starting_head = ""
+        task["_validation_required"] = _requests_validation(task)
         if cancel_requested():
             with connect() as conn:
                 conn.execute("UPDATE background_tasks SET status='cancelled',completed_at=? WHERE id=?", (now(), task["id"]))
@@ -1006,13 +1037,14 @@ def run_once() -> bool:
             final_status = "cancelled" if current and current["cancel_requested"] else "completed"
         completion_evidence = _coding_completion_evidence(task, result, starting_head)
         if final_status == "completed" and completion_evidence.get("required") and not completion_evidence.get("ok"):
-            final_status = "no_progress"
-            reason = str(completion_evidence.get("reason") or "Coding task made no meaningful progress")
+            final_status = str(completion_evidence.get("failure_status") or "no_progress")
+            reason = str(completion_evidence.get("reason") or "Coding task did not produce sufficient completion evidence")
             with connect() as conn:
                 conn.execute(
-                    "UPDATE background_tasks SET status='no_progress',result=?,error=?,no_progress_reason=?,"
+                    "UPDATE background_tasks SET status=?,result=?,error=?,no_progress_reason=?,"
                     "completion_evidence=?,progress=?,current_activity=?,completed_at=? WHERE id=?",
                     (
+                        final_status,
                         result,
                         reason,
                         reason,
@@ -1026,8 +1058,8 @@ def run_once() -> bool:
                 run_id = int(completion_evidence.get("run_id") or 0)
                 if run_id:
                     conn.execute(
-                        "UPDATE agent_runs SET status='no_progress',completion_evidence=?,no_progress_reason=?,updated_at=? WHERE id=?",
-                        (json.dumps(completion_evidence, default=str), reason, now(), run_id),
+                        "UPDATE agent_runs SET status=?,completion_evidence=?,no_progress_reason=?,updated_at=? WHERE id=?",
+                        (final_status, json.dumps(completion_evidence, default=str), reason, now(), run_id),
                     )
             _mark_recovery_available(task, reason)
         else:
@@ -1062,8 +1094,8 @@ def run_once() -> bool:
                         task["id"],
                     ),
                 )
-        if final_status == "no_progress":
-            _finalize_parent(task, final_status, result=result, error=str(completion_evidence.get("reason") or "Coding task made no meaningful progress"))
+        if final_status in {"no_progress", "incomplete"}:
+            _finalize_parent(task, final_status, result=result, error=str(completion_evidence.get("reason") or "Coding task did not produce sufficient completion evidence"))
         else:
             _finalize_parent(task, final_status, result=result, error="Lead consolidation task was cancelled")
         _finalize_swarm(task, final_status, result=result, error="Swarm reviewer was cancelled")
