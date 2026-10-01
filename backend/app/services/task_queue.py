@@ -809,7 +809,10 @@ def _requires_progress_validation(task: dict) -> bool:
     source_kind = str(task.get("source_kind") or "")
     if source_kind != "lead_specialist" and not source_kind.startswith("swarm_"):
         return False
-    return str(task.get("task_kind") or "") not in {"reviewer", "challenger", "researcher", "tester"}
+    task_kind = str(task.get("task_kind") or "")
+    agent_role = str(task.get("agent_role") or "")
+    no_change_roles = {"reviewer", "challenger", "researcher", "tester"}
+    return task_kind not in no_change_roles and agent_role not in no_change_roles
 
 
 def _task_activity_evidence(task_id: int) -> dict:
