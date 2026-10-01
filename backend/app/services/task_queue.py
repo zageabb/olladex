@@ -805,6 +805,107 @@ def _prepare_isolation(task: dict) -> threading.Lock | None:
         return fallback
 
 
+def _requires_progress_validation(task: dict) -> bool:
+    source_kind = str(task.get("source_kind") or "")
+    if source_kind != "lead_specialist" and not source_kind.startswith("swarm_"):
+        return False
+    return str(task.get("task_kind") or "") not in {"reviewer", "challenger", "researcher", "tester"}
+
+
+def _task_activity_evidence(task_id: int) -> dict:
+    with connect() as conn:
+        run = conn.execute(
+            "SELECT id FROM agent_runs WHERE task_id=? ORDER BY id DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        rows = []
+        if run:
+            rows = conn.execute(
+                "SELECT activities FROM messages WHERE run_id=? ORDER BY id",
+                (run["id"],),
+            ).fetchall()
+    tools: list[str] = []
+    commands: list[str] = []
+    for row in rows:
+        try:
+            activities = json.loads(row["activities"] or "[]")
+        except (TypeError, json.JSONDecodeError):
+            activities = []
+        for activity in activities if isinstance(activities, list) else []:
+            if not isinstance(activity, dict):
+                continue
+            tool = str(activity.get("tool") or "")
+            if tool:
+                tools.append(tool)
+            if tool == "run_command":
+                args = activity.get("arguments") or {}
+                if isinstance(args, dict):
+                    commands.append(str(args.get("command") or ""))
+    write_tools = [tool for tool in tools if tool in {"task_write_file", "write_file", "apply_patch"}]
+    validation_commands = [
+        command for command in commands
+        if any(token in command.lower() for token in (
+            "pytest", "unittest", "npm test", "npm run test", "npm run build", "tsc",
+            "lint", "cargo test", "go test", "dotnet test", "mvn test", "gradle test",
+        ))
+    ]
+    return {
+        "run_id": int(run["id"]) if run else 0,
+        "tools": tools,
+        "write_tools": write_tools,
+        "commands": commands,
+        "validation_commands": validation_commands,
+    }
+
+
+def _coding_completion_evidence(task: dict, result: str, starting_head: str) -> dict:
+    if not _requires_progress_validation(task):
+        return {"required": False, "ok": True, "reason": ""}
+
+    project = _project_for_task(task)
+    from . import worktrees
+    summary = worktrees.summary(project, task.get("worktree_path") or "") if task.get("worktree_path") else {}
+    ending_head = str(summary.get("head") or "")
+    activity = _task_activity_evidence(int(task["id"]))
+    response = str(result or "").strip()
+    worktree_changes = summary.get("changes") or []
+    head_changed = bool(starting_head and ending_head and starting_head != ending_head)
+
+    diff_files: list[str] = []
+    if task.get("worktree_path") and starting_head:
+        code, output = worktrees._git(Path(task["worktree_path"]), "diff", "--name-only", starting_head)
+        if code == 0:
+            diff_files = [line.strip() for line in output.splitlines() if line.strip()]
+
+    no_progress = (
+        not response
+        and not activity["write_tools"]
+        and not head_changed
+        and not diff_files
+        and not worktree_changes
+        and not activity["validation_commands"]
+    )
+    reason = (
+        "Coding task produced no final response, file edits, committed or working-tree changes, "
+        "or validation evidence."
+        if no_progress else ""
+    )
+    return {
+        "required": True,
+        "ok": not no_progress,
+        "reason": reason,
+        "response_nonempty": bool(response),
+        "write_tools": activity["write_tools"],
+        "validation_commands": activity["validation_commands"],
+        "starting_head": starting_head,
+        "ending_head": ending_head,
+        "head_changed": head_changed,
+        "diff_files": diff_files,
+        "worktree_changes": worktree_changes,
+        "run_id": activity["run_id"],
+    }
+
+
 def _auto_commit_specialist(task: dict) -> str:
     if task.get("task_kind") in {"reviewer", "challenger"}:
         return ""
@@ -881,6 +982,13 @@ def run_once() -> bool:
     fallback_lock: threading.Lock | None = None
     try:
         fallback_lock = _prepare_isolation(task)
+        starting_head = ""
+        if _requires_progress_validation(task) and task.get("worktree_path"):
+            try:
+                from . import worktrees
+                starting_head = str(worktrees.summary(_project_for_task(task), task["worktree_path"]).get("head") or "")
+            except Exception:
+                starting_head = ""
         if cancel_requested():
             with connect() as conn:
                 conn.execute("UPDATE background_tasks SET status='cancelled',completed_at=? WHERE id=?", (now(), task["id"]))
@@ -893,13 +1001,54 @@ def run_once() -> bool:
         with connect() as conn:
             current = conn.execute("SELECT cancel_requested FROM background_tasks WHERE id=?", (task["id"],)).fetchone()
             final_status = "cancelled" if current and current["cancel_requested"] else "completed"
-        if final_status == "completed":
-            commit_sha = _auto_commit_specialist(task)
-            if commit_sha:
-                result = f"{result}\n\nTask branch auto-committed as {commit_sha[:12]}."
-        with connect() as conn:
-            conn.execute("UPDATE background_tasks SET status=?,result=?,progress=?,current_activity=?,completed_at=? WHERE id=?", (final_status, result, 100 if final_status == "completed" else int(task.get("progress") or 0), "Completed" if final_status == "completed" else str(task.get("current_activity") or ""), now(), task["id"]))
-        _finalize_parent(task, final_status, result=result, error="Lead consolidation task was cancelled")
+        completion_evidence = _coding_completion_evidence(task, result, starting_head)
+        if final_status == "completed" and completion_evidence.get("required") and not completion_evidence.get("ok"):
+            final_status = "no_progress"
+            reason = str(completion_evidence.get("reason") or "Coding task made no meaningful progress")
+            with connect() as conn:
+                conn.execute(
+                    "UPDATE background_tasks SET status='no_progress',result=?,error=?,no_progress_reason=?,"
+                    "completion_evidence=?,progress=?,current_activity=?,completed_at=? WHERE id=?",
+                    (
+                        result,
+                        reason,
+                        reason,
+                        json.dumps(completion_evidence, default=str),
+                        int(task.get("progress") or 0),
+                        "Recovery available",
+                        now(),
+                        task["id"],
+                    ),
+                )
+                run_id = int(completion_evidence.get("run_id") or 0)
+                if run_id:
+                    conn.execute(
+                        "UPDATE agent_runs SET status='no_progress',completion_evidence=?,no_progress_reason=?,updated_at=? WHERE id=?",
+                        (json.dumps(completion_evidence, default=str), reason, now(), run_id),
+                    )
+            _mark_recovery_available(task, reason)
+        else:
+            if final_status == "completed":
+                commit_sha = _auto_commit_specialist(task)
+                if commit_sha:
+                    result = f"{result}\n\nTask branch auto-committed as {commit_sha[:12]}."
+            with connect() as conn:
+                conn.execute(
+                    "UPDATE background_tasks SET status=?,result=?,progress=?,current_activity=?,completion_evidence=?,completed_at=? WHERE id=?",
+                    (
+                        final_status,
+                        result,
+                        100 if final_status == "completed" else int(task.get("progress") or 0),
+                        "Completed" if final_status == "completed" else str(task.get("current_activity") or ""),
+                        json.dumps(completion_evidence, default=str),
+                        now(),
+                        task["id"],
+                    ),
+                )
+        if final_status == "no_progress":
+            _finalize_parent(task, final_status, result=result, error=str(completion_evidence.get("reason") or "Coding task made no meaningful progress"))
+        else:
+            _finalize_parent(task, final_status, result=result, error="Lead consolidation task was cancelled")
         _finalize_swarm(task, final_status, result=result, error="Swarm reviewer was cancelled")
     except Exception as exc:
         from .ollama import AgentCancelled
