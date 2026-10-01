@@ -874,3 +874,71 @@ test('pending agent budget request suppresses duplicate manual resume controls',
   await expect(detail.getByRole('button',{name:'Resume from checkpoint'})).toHaveCount(0);
 });
 
+
+
+test('recovery limit offers explicit retry or abandon decisions', async ({ page }) => {
+  let resumeBody: Record<string,unknown>|null = null;
+  let abandoned = false;
+  await page.route('**/api/**', async route => {
+    const url = new URL(route.request().url());
+    const p = url.pathname;
+    const json = (data: unknown) => route.fulfill({json:data});
+    if (p === '/api/projects') return json([{id:1,name:'Demo',path:'/demo',model:'test',approval_mode:'assisted'}]);
+    if (p === '/api/projects/1/swarm-runs') return json([{id:32,title:'Recovery limit',status:'recovery_available',max_agents:4,max_concurrency:2,total_agents_created:1}]);
+    if (p === '/api/projects/1/tasks') return json([]);
+    if (p === '/api/projects/1/orchestration') return json({nodes:[]});
+    if (p === '/api/projects/1/swarm/profiles') return json([]);
+    if (p === '/api/swarms/32/board') {
+      const recovery = {
+        task_id:321,status:abandoned?'failed':'budget_exhausted',session_id:92,active_run_id:0,prior_run_id:62,
+        prior_run_status:'budget_exhausted',checkpoint_available:true,checkpoint_bytes:2048,
+        worktree_path:'/tmp/wt',worktree_branch:'olladex/task-321',
+        worktree_available:true,branch_available:true,previous_budget:20,resumed_budget:20,
+        max_recovery_attempts:2,recovery_attempt:2,recovery_limit_reached:true,
+        blocking_dependency_ids:[],can_resume:false
+      };
+      return json({
+        swarm:{
+          id:32,title:'Recovery limit',status:'recovery_available',
+          agents:[{id:321,title:'Retry me',status:abandoned?'failed':'budget_exhausted',agent_role:'backend',task_kind:'backend',session_id:92,recovery}]
+        },
+        summary:{
+          total_agents:1,active_agents:0,completed_agents:0,failed_agents:abandoned?1:0,
+          progress:25,max_agents:4,max_concurrency:2,integration_ready:false,
+          recovery_available:!abandoned,
+          recovery_blockers:abandoned?[]:[{task_id:321,title:'Retry me',status:'budget_exhausted',blocking_dependency_ids:[],recovery}],
+          integration_blockers:abandoned?[]:['#321 recovery limit reached']
+        },
+        budget_requests:[],events:[],coordinator_events:[],blackboard:[],cursors:{event:0,coordinator_event:0,blackboard:0}
+      });
+    }
+    if (p === '/api/tasks/321/resume') {
+      resumeBody = route.request().postDataJSON();
+      return json({run_id:900,prior_run_id:62,fresh_budget:20,worktree_path:'/tmp/wt',worktree_branch:'olladex/task-321',checkpoint_bytes:2048});
+    }
+    if (p === '/api/tasks/321/recovery/abandon') {
+      abandoned = true;
+      return json({id:321,status:'failed',error:'Recovery abandoned by user after reviewing saved work'});
+    }
+    if (p === '/api/tasks/321/agent-detail') return json({
+      task:{id:321,title:'Retry me',status:'budget_exhausted',agent_role:'backend',task_kind:'backend',session_id:92,recovery:{
+        task_id:321,status:'budget_exhausted',session_id:92,active_run_id:0,prior_run_id:62,
+        prior_run_status:'budget_exhausted',checkpoint_available:true,checkpoint_bytes:2048,
+        worktree_path:'/tmp/wt',worktree_branch:'olladex/task-321',
+        worktree_available:true,branch_available:true,previous_budget:20,resumed_budget:20,
+        max_recovery_attempts:2,recovery_attempt:2,recovery_limit_reached:true,
+        blocking_dependency_ids:[],can_resume:false
+      }},
+      run:null,commands:[],active_pending_commands:[],changed_files:[],blackboard:[]
+    });
+    return json([]);
+  });
+
+  await page.goto('/');
+  await expect(page.getByText('Agent #321 · recovery limit reached')).toBeVisible();
+  await page.getByRole('button',{name:'Allow one more recovery attempt'}).first().click();
+  await expect.poll(()=>resumeBody).toEqual({fresh_budget:20,override_recovery_limit:true});
+
+  await page.getByRole('button',{name:'Abandon task'}).first().click();
+  await expect.poll(()=>abandoned).toBe(true);
+});
