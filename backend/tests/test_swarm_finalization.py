@@ -259,13 +259,9 @@ def test_budget_recovery_flows_through_reviewer_to_integration(tmp_path, monkeyp
             ),
         ).lastrowid)
 
-    reviewer_session = int(connect().execute(
-        "SELECT id FROM sessions WHERE id=?",
-        (session_id,),
-    ).fetchone()["id"])
     reviewer = task_queue.enqueue(
         int(project["id"]),
-        reviewer_session,
+        session_id,
         "Final review",
         "Review recovered implementation",
         swarm_id=swarm_id,
