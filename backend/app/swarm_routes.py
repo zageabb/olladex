@@ -671,6 +671,13 @@ def promote_swarm_integration(swarm_id: int, body: SwarmPromotionRequest):
             )
         swarm_service.emit_coordinator_event(swarm_id, "promotion_blocked", {"reason": str(exc)})
         raise HTTPException(409, str(exc)) from exc
+    with connect() as conn:
+        conn.execute(
+            "UPDATE swarm_runs SET status='completed',completed_at=?,promotion_status='promoted',"
+            "promoted_commit=?,promotion_output=? WHERE id=?",
+            (now(), result["main_commit"], result.get("output") or "", swarm_id),
+        )
+
     post_merge = None
     post_merge_error = ""
     development_item_key = str(run.get("development_item_key") or "").strip()
@@ -686,12 +693,9 @@ def promote_swarm_integration(swarm_id: int, body: SwarmPromotionRequest):
             post_merge_error = str(exc)
     with connect() as conn:
         conn.execute(
-            "UPDATE swarm_runs SET status='completed',completed_at=?,promotion_status=?,"
-            "promoted_commit=?,promotion_output=?,state_sync_commit=?,post_merge_verification=? WHERE id=?",
+            "UPDATE swarm_runs SET promotion_status=?,promotion_output=?,state_sync_commit=?,post_merge_verification=? WHERE id=?",
             (
-                now(),
                 "promoted" if not post_merge_error else "promoted_state_sync_pending",
-                result["main_commit"],
                 (result.get("output") or "") + (
                     "\n\nDevelopment-state sync pending: " + post_merge_error if post_merge_error else ""
                 ),
