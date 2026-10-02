@@ -94,6 +94,18 @@ def enqueue(
         for item in (acceptance_criteria or [])
         if str(item).strip()
     ]
+    prompt_parts = [str(prompt or "").strip()]
+    if ownership:
+        prompt_parts.append(
+            "Assigned ownership for this task:\n- " + "\n- ".join(ownership)
+            + "\nDo not expand into another active agent's ownership without Coordinator replanning."
+        )
+    if criteria:
+        prompt_parts.append(
+            "Acceptance criteria for this task:\n- " + "\n- ".join(criteria)
+            + "\nDo not claim completion until these criteria are supported by repository/test evidence."
+        )
+    prompt = "\n\n".join(part for part in prompt_parts if part)
     with connect() as conn:
         if parent_task_id is not None:
             parent = conn.execute("SELECT id,project_id FROM background_tasks WHERE id=?", (parent_task_id,)).fetchone()
