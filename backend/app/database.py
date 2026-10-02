@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS projects (
   git_author_name TEXT NOT NULL DEFAULT 'Olladex User',
   git_author_email TEXT NOT NULL DEFAULT 'olladex@local',
   model_profile_id INTEGER REFERENCES model_profiles(id) ON DELETE SET NULL,
+  development_mode TEXT NOT NULL DEFAULT 'build',
   created_at TEXT NOT NULL,
   last_opened_at TEXT NOT NULL
 );
@@ -289,6 +290,7 @@ ADDITIVE_COLUMNS = {
         "git_author_name": "TEXT NOT NULL DEFAULT 'Olladex User'",
         "git_author_email": "TEXT NOT NULL DEFAULT 'olladex@local'",
         "model_profile_id": "INTEGER REFERENCES model_profiles(id) ON DELETE SET NULL",
+        "development_mode": "TEXT NOT NULL DEFAULT 'build'",
     },
     "model_profiles": {"context_tokens": "INTEGER NOT NULL DEFAULT 16384","is_builtin": "INTEGER NOT NULL DEFAULT 0"},
     "messages": {"run_id": "INTEGER"},
