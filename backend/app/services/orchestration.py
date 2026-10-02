@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from ..config import settings
-from . import ollama, workspace
+from . import development_state, ollama, workspace
 
 
 ALLOWED_ROLES = {"worker", "frontend", "backend", "tester", "reviewer", "researcher", "architect", "coder", "documentation"}
@@ -15,6 +15,7 @@ def decompose(project: dict, objective: str, max_tasks: int = 6, *, swarm_mode: 
         raise ValueError("Lead objective is required")
     max_tasks = max(2, min(int(max_tasks or 6), 16))
     intelligence = workspace.repository_intelligence(project)
+    persistent_state = development_state.orchestration_context(project)
     if swarm_mode:
         role_text = "architect|backend|frontend|coder|tester|researcher|documentation|worker"
         verification_rule = (
@@ -34,7 +35,7 @@ Rules:
 {verification_rule}
 - do not create a final consolidation task; Olladex adds that automatically.
 
-Objective:\n{objective.strip()}\n\nRepository intelligence:\n{json.dumps(intelligence, default=str)[:16000]}"""
+Objective:\n{objective.strip()}\n\nPersistent repository development state:\n{persistent_state or "No AGENTS.md/DEVELOPMENT.md state found."}\n\nRepository intelligence:\n{json.dumps(intelligence, default=str)[:16000]}"""
     model = project.get("profile_chat_model") or project.get("model") or settings.ollama_model
     with ollama.client(120) as http:
         response = http.post("/api/chat", json={
