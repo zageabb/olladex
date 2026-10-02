@@ -40,6 +40,45 @@ function baseRoutes(page:any, extra:(route:any,url:URL)=>Promise<boolean>|boolea
   });
 }
 
+test('persistent development state drives mode and continue action', async ({ page }) => {
+  let selectedMode = 'build';
+  let continueCalled = false;
+
+  await baseRoutes(page, async (route,url) => {
+    const p=url.pathname;
+    const json=(data:unknown)=>route.fulfill({json:data});
+    if (p === '/api/projects/1/development-mode' && route.request().method() === 'PUT') {
+      selectedMode=String(route.request().postDataJSON().mode||'');
+      await json({project_id:1,development_mode:selectedMode,description:'mode'});
+      return true;
+    }
+    if (p === '/api/projects/1/development-actions/continue' && route.request().method() === 'POST') {
+      continueCalled=true;
+      await json({
+        action:'continue',
+        current_objective:'Advanced orchestration reliability',
+        current_item:{key:'DEV-001',title:'Verified Development',status:'IN PROGRESS',priority:'HIGH',body:'Continue verified development.'},
+        execution:{mode:'autonomous',objective:'Verified Development',dev_item:'DEV-001'}
+      });
+      return true;
+    }
+    return false;
+  });
+
+  await page.goto('/');
+  await page.locator('.rail').getByRole('button', {name:'Tasks'}).click();
+
+  await expect(page.getByText('Persistent development state')).toBeVisible();
+  await expect(page.getByText(/DEV-001 · Verified Development/)).toBeVisible();
+
+  await page.getByRole('combobox', {name:'Development mode'}).selectOption('autonomous');
+  await expect.poll(()=>selectedMode).toBe('autonomous');
+
+  await page.getByRole('button', {name:'Continue', exact:true}).click();
+  await expect.poll(()=>continueCalled).toBe(true);
+  await expect(page.getByPlaceholder('Describe the larger outcome for Advanced orchestration…')).toHaveValue(/DEV-001/);
+});
+
 test('interaction layer can enable, preflight and start a swarm', async ({ page }) => {
   let swarmEnabled = false;
   let createdObjective = '';
