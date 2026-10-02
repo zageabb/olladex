@@ -44,7 +44,7 @@ def development_action(session_id: int, body: Turn):
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 
-    if action == "continue" and development_state.normalise_mode(project.get("development_mode") or "build") == "autonomous":
+    if action == "continue" and development_state.normalise_mode(project.get("development_mode") or "build") in {"build", "autonomous", "recover", "release"}:
         with connect() as conn:
             profile = conn.execute(
                 "SELECT id FROM swarm_profiles WHERE enabled=1 ORDER BY CASE WHEN name='Development' THEN 0 ELSE 1 END,is_builtin DESC,name LIMIT 1"
