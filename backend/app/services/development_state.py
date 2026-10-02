@@ -387,7 +387,7 @@ def recovery_report(project: dict) -> dict:
     with connect() as conn:
         rows = [
             dict(row) for row in conn.execute(
-                "SELECT id,title,status,recovery_attempt,max(0,0) AS placeholder,root_cause_analysis,"
+                "SELECT id,title,status,recovery_attempt,root_cause_analysis,"
                 "worktree_branch,current_activity,error FROM background_tasks "
                 "WHERE project_id=? AND status IN ('budget_exhausted','interrupted','no_progress','incomplete','dependency_failed','failed') "
                 "ORDER BY id DESC LIMIT 50",
@@ -396,7 +396,6 @@ def recovery_report(project: dict) -> dict:
         ]
     for item in rows:
         attempt = int(item.get("recovery_attempt") or 0)
-        item.pop("placeholder", None)
         item["root_cause_required"] = attempt >= 2 and not bool(str(item.get("root_cause_analysis") or "").strip())
         item["root_cause_recorded"] = bool(str(item.get("root_cause_analysis") or "").strip())
     return {
