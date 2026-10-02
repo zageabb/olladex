@@ -326,6 +326,24 @@ def _meaningful_git_changes(git_state: dict) -> list[dict]:
     ]
 
 
+def _criteria_require_ci(criteria: list[dict]) -> bool:
+    return any(
+        re.search(r"\b(?:CI|continuous integration|GitHub Actions)\b", str(item.get("text") or ""), re.I)
+        for item in criteria
+    )
+
+
+def _criteria_require_delivery(criteria: list[dict]) -> bool:
+    return any(
+        re.search(
+            r"\b(?:merge|merged|post[- ]merge|intended branch|promotion|promoted|delivery)\b",
+            str(item.get("text") or ""),
+            re.I,
+        )
+        for item in criteria
+    )
+
+
 def evidence_report(project: dict, item_key: str = "") -> dict:
     from ..database import connect
     from . import git
@@ -386,12 +404,19 @@ def evidence_report(project: dict, item_key: str = "") -> dict:
     no_known_incomplete = task_summary["incomplete"] == 0
     repository_clean = not bool(_meaningful_git_changes(git_state))
 
-    delivery_complete = True
-    if effective_key and latest_swarm:
+    ci_required = _criteria_require_ci(criteria)
+    ci = ci_report(project) if ci_required else None
+    ci_verified = not ci_required or bool(ci and ci.get("status") == "passed")
+
+    delivery_required = _criteria_require_delivery(criteria)
+    delivery_complete = not delivery_required
+    if delivery_required and effective_key and latest_swarm:
         delivery_complete = (
             latest_swarm.get("status") == "completed"
             and bool(str(latest_swarm.get("promoted_commit") or "").strip())
         )
+    elif delivery_required:
+        delivery_complete = str(git_state.get("branch") or "") == "main"
 
     evidence_complete = bool(
         current
@@ -399,6 +424,7 @@ def evidence_report(project: dict, item_key: str = "") -> dict:
         and no_active_work
         and no_known_incomplete
         and repository_clean
+        and ci_verified
         and delivery_complete
     )
     result = "VERIFIED COMPLETE" if evidence_complete else "INCOMPLETE"
@@ -417,6 +443,10 @@ def evidence_report(project: dict, item_key: str = "") -> dict:
             "active_tasks": task_summary["active"],
             "incomplete_tasks": task_summary["incomplete"],
             "latest_swarm": latest_swarm,
+            "ci_required": ci_required,
+            "ci_verified": ci_verified,
+            "ci": ci,
+            "delivery_required": delivery_required,
             "delivery_complete": delivery_complete,
         },
         "acceptance": {
@@ -468,12 +498,42 @@ def ci_report(project: dict) -> dict:
         None,
     )
     if not pull_request:
+        try:
+            checks = github_service.commit_checks(project)
+        except ValueError as exc:
+            return {
+                "status": "unavailable",
+                "branch": branch,
+                "pull_request": None,
+                "checks": [],
+                "reason": str(exc),
+            }
+        normalized: list[dict] = []
+        failing = pending = 0
+        for item in checks:
+            name = str(item.get("name") or "check")
+            status_value = str(item.get("status") or "").upper()
+            conclusion = str(item.get("conclusion") or "").upper()
+            effective = conclusion or status_value
+            if effective in {"FAILURE", "FAILED", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"}:
+                failing += 1
+            elif effective not in {"SUCCESS", "PASSED", "NEUTRAL", "SKIPPED"}:
+                pending += 1
+            normalized.append({
+                "name": name,
+                "conclusion": conclusion,
+                "status": status_value,
+                "url": str(item.get("url") or ""),
+            })
+        status = "failed" if failing else "pending" if pending or not normalized else "passed"
         return {
-            "status": "no_pull_request",
+            "status": status,
             "branch": branch,
             "pull_request": None,
-            "checks": [],
-            "reason": "No open pull request matches the current branch.",
+            "checks": normalized,
+            "failing": failing,
+            "pending": pending,
+            "reason": "" if normalized else "No GitHub checks are recorded for the current commit.",
         }
     checks = list(pull_request.get("statusCheckRollup") or [])
     normalized: list[dict] = []
