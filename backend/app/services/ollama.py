@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 
 from ..config import settings
-from . import task_queue, workspace, conversation_runtime as runtime
+from . import development_state, task_queue, workspace, conversation_runtime as runtime
 from .context_engine import format_context
 from .repository_index import ranked_context
 from .terminal import requires_approval, run as run_command
@@ -383,6 +383,7 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
         max_files=task_profile.get("context_files") or project.get("profile_context_files") or 8,
         max_chars=task_profile.get("context_chars") or project.get("profile_context_chars") or 32000,
     )
+    persistent_state = development_state.orchestration_context(project)
     task_context = ""
     if task_queue.current_task_id():
         task_context = (
@@ -408,6 +409,7 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
         + "\n\nOriginal conversation objective:\n" + next((m["content"] for m in history if m.get("role") == "user"), request)[:4000]
         + "\n\n" + workspace.project_summary(project)
         + ("\n\nProject instructions:\n" + project.get("instructions", "") if project.get("instructions", "").strip() else "")
+        + ("\n\nPersistent repository development state:\n" + persistent_state if persistent_state else "")
         + "\n\nRepository intelligence:\n" + json.dumps(intelligence, default=str)[:20_000]
         + ("\n\nPersistent session summary:\n" + session_summary if session_summary else "")
         + "\n\nAutomatically ranked repository context:\n" + format_context(selected_context)
