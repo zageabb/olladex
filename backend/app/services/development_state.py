@@ -196,6 +196,100 @@ def orchestration_context(project: dict, *, max_chars: int = 14000) -> str:
     return text
 
 
+def action_report(project: dict, action: str) -> dict:
+    from . import git
+
+    action = str(action or "").strip().lower().lstrip("/")
+    resolved = resolve_action(project, action)
+    current = resolved.get("current_item") or {}
+    response = {
+        **resolved,
+        "git": git.summary(project),
+        "execution": {
+            "mode": resolved.get("mode") or "plan",
+            "objective": current.get("title") or resolved.get("current_objective") or "",
+            "dev_item": current.get("key") or "",
+        },
+    }
+    if action in {"verify", "evidence"}:
+        response["evidence"] = evidence_report(project)
+    elif action == "ci":
+        response["ci"] = ci_report(project)
+    elif action == "review":
+        response["review"] = review_report(project)
+    elif action == "recover":
+        response["recovery"] = recovery_report(project)
+    elif action == "merge":
+        response["merge"] = merge_report(project)
+    elif action == "sync-state":
+        response["sync"] = sync_development(project)
+        refreshed = snapshot(project)
+        response["current_objective"] = refreshed.get("current_objective") or ""
+        response["current_item"] = refreshed.get("current_item")
+    return response
+
+
+def format_action_report(report: dict) -> str:
+    action = str(report.get("action") or "status")
+    current = report.get("current_item") or {}
+    git_state = report.get("git") or {}
+    lines = [
+        f"Development action: /{action}",
+        f"Objective: {report.get('current_objective') or 'Not declared'}",
+    ]
+    if current:
+        lines.append(
+            f"Current item: {current.get('key')} — {current.get('title')} "
+            f"({current.get('status')}, {current.get('priority')})"
+        )
+        total = int(current.get("criteria_total") or 0)
+        if total:
+            lines.append(
+                f"Acceptance criteria: {int(current.get('criteria_completed') or 0)}/{total}"
+            )
+    lines.append(
+        f"Git: {git_state.get('branch') or 'unknown branch'}"
+        + (" · clean" if not _meaningful_git_changes(git_state) else " · changes present")
+    )
+    if report.get("evidence"):
+        evidence = report["evidence"]
+        lines.append(f"Verification: {evidence.get('result') or 'INCOMPLETE'}")
+        validation = evidence.get("validation") or {}
+        lines.append(
+            f"Tasks: {validation.get('active_tasks', 0)} active · "
+            f"{validation.get('incomplete_tasks', 0)} incomplete/failed"
+        )
+    if report.get("ci"):
+        ci = report["ci"]
+        lines.append(f"CI: {ci.get('status') or 'unknown'}")
+        if ci.get("reason"):
+            lines.append(f"CI detail: {ci['reason']}")
+    if report.get("review"):
+        review = report["review"]
+        blockers = review.get("blockers") or []
+        lines.append(
+            "Review: ready" if review.get("ready_for_release_review")
+            else f"Review: blocked ({'; '.join(blockers) if blockers else 'evidence incomplete'})"
+        )
+    if report.get("recovery"):
+        recovery = report["recovery"]
+        lines.append(f"Recovery: {recovery.get('count', 0)} stopped/recoverable task(s)")
+        if recovery.get("requires_root_cause"):
+            lines.append(
+                "Root-cause analysis required for: "
+                + ", ".join(f"#{item}" for item in recovery["requires_root_cause"])
+            )
+    if report.get("merge"):
+        merge = report["merge"]
+        lines.append("Merge gate: ready" if merge.get("ready") else "Merge gate: blocked")
+        for blocker in merge.get("blockers") or []:
+            lines.append(f"- {blocker}")
+    if report.get("sync"):
+        sync = report["sync"]
+        lines.append(f"State sync: {sync.get('reason') or ('updated' if sync.get('changed') else 'unchanged')}")
+    return "\n".join(lines)
+
+
 def resolve_action(project: dict, action: str) -> dict:
     state = snapshot(project)
     action = action.strip().lower().lstrip("/")
