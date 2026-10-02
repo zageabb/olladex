@@ -18,6 +18,7 @@ def test_task_and_pr_review_routes_are_mounted():
     assert "/api/projects/{project_id}/github/pull-requests/{number}/reviews" in paths
     assert "/api/projects/{project_id}/development-state" in paths
     assert "/api/projects/{project_id}/development-actions/{action}" in paths
+    assert "/api/projects/{project_id}/development-mode" in paths
     assert "/api/projects/{project_id}/orchestration" in paths
     assert "/api/projects/{project_id}/orchestration/tasks" in paths
     assert "/api/projects/{project_id}/orchestration/lead" in paths
