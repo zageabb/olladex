@@ -409,12 +409,37 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
     )
     persistent_state = development_state.orchestration_context(project)
     task_context = ""
-    if task_queue.current_task_id():
+    current_task = task_queue.current_task()
+    if current_task:
+        ownership = current_task.get("ownership_scope") or []
+        criteria = current_task.get("acceptance_criteria") or []
+        if isinstance(ownership, str):
+            try:
+                ownership = json.loads(ownership)
+            except (TypeError, json.JSONDecodeError):
+                ownership = []
+        if isinstance(criteria, str):
+            try:
+                criteria = json.loads(criteria)
+            except (TypeError, json.JSONDecodeError):
+                criteria = []
         task_context = (
             "\n\nBackground task mode: you are working inside an isolated Git worktree. "
             "When changes are requested, use write_file to apply them directly in this task worktree. "
             "You may edit multiple files and run appropriate checks. Do not merely describe edits that should be made."
         )
+        if ownership:
+            task_context += (
+                "\nTask ownership scope: " + ", ".join(str(item) for item in ownership)
+                + "\nStay within this ownership unless a dependency/blocker requires a tightly related change; "
+                "capture unrelated work as a follow-up instead of expanding scope."
+            )
+        if criteria:
+            task_context += (
+                "\nTask acceptance criteria:\n- "
+                + "\n- ".join(str(item) for item in criteria)
+                + "\nBefore finishing, verify these criteria against repository/tool evidence and address them explicitly in the handoff."
+            )
     system = (
         "You are Olladex, a thoughtful conversational coding collaborator. "
         "For greetings, discussion and questions, respond naturally; do not interpret every message as an instruction to edit. "
