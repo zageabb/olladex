@@ -77,8 +77,10 @@ Read both files automatically.
     assert state["current_item"]["key"] == "DEV-010"
 
 
-def test_orchestration_context_is_empty_when_state_files_are_absent(tmp_path):
-    assert development_state.orchestration_context(_project(tmp_path)) == ""
+def test_orchestration_context_still_declares_mode_when_state_files_are_absent(tmp_path):
+    context = development_state.orchestration_context(_project(tmp_path))
+    assert "Development mode: build" in context
+    assert "Repository agent contract" not in context
 
 
 def test_resolve_action_returns_structured_repository_state(tmp_path):
