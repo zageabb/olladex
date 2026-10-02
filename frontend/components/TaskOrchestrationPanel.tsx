@@ -38,6 +38,9 @@ type ModelProfile = { id:number; name:string; chat_model:string };
 type SwarmPreflight = { ready:boolean; checks:{name:string;ok:boolean;detail:string}[]; max_agents:number; max_concurrency:number; git:GitCapabilities };
 type SwarmModelSelfTest = { ready:boolean; models:{model:string;roles:string[];ok:boolean;latency_ms:number;response:string;error?:string}[] };
 type SwarmIntegrationPlan = { task_ids?:number[]; branches:string[]; overlaps:{path:string;branches:string[]}[]; files_by_branch?:Record<string,string[]>; path?:string; branch?:string; check_status?:string; check_output?:string };
+type DevelopmentItem = { key:string; title:string; status:string; priority:string; body:string };
+type DevelopmentState = { project_id:number; current_objective:string; current_item?:DevelopmentItem|null; items:DevelopmentItem[]; agents_present:boolean; development_present:boolean; development_mode:string; available_modes:Record<string,string>; git:{repository:boolean;branch:string;changes:{status:string;path:string}[];ahead:number;behind:number} };
+type DevelopmentAction = { action:string; current_objective:string; current_item?:DevelopmentItem|null; execution:{mode:string;objective:string;dev_item:string} };
 
 export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversation }: { projectId:number; onCreated:()=>void; onOpenConversation?:(sessionId:number)=>void }) {
   const [graph,setGraph]=useState<Graph>({project_id:projectId,nodes:[]});
@@ -76,6 +79,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
   const [swarmIntegrationPushed,setSwarmIntegrationPushed]=useState(false);
   const [budgetGrantAmounts,setBudgetGrantAmounts]=useState<Record<number,string>>({});
   const swarmCursors=useRef({event:0,coordinator_event:0,blackboard:0});
+  const [developmentState,setDevelopmentState]=useState<DevelopmentState|null>(null);
 
   useEffect(()=>{
     swarmCursors.current={event:0,coordinator_event:0,blackboard:0};
@@ -86,12 +90,14 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
   },[projectId,selectedSwarmId]);
   async function load(){
     try{
-      const [nextGraph,swarmRuns]=await Promise.all([
+      const [nextGraph,swarmRuns,nextDevelopmentState]=await Promise.all([
         request<Graph>(`/projects/${projectId}/orchestration`),
-        request<SwarmListItem[]>(`/projects/${projectId}/swarms`)
+        request<SwarmListItem[]>(`/projects/${projectId}/swarms`),
+        request<DevelopmentState>(`/projects/${projectId}/development-state`)
       ]);
       setGraph(nextGraph);
       setSwarmRuns(swarmRuns);
+      setDevelopmentState(nextDevelopmentState);
       const selectedSwarm=(selectedSwarmId?swarmRuns.find(item=>item.id===selectedSwarmId):null)
         ||swarmRuns.find(item=>!["completed","failed","cancelled"].includes(item.status))
         ||swarmRuns[0];
@@ -150,6 +156,52 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
         setSwarmConcurrency(preferred.max_concurrency);
       }
     }catch(error){ setNotice(error instanceof Error?error.message:String(error)); }
+  }
+
+  async function updateDevelopmentMode(mode:string){
+    setBusy(true);
+    try{
+      await request(`/projects/${projectId}/development-mode`,{
+        method:"PUT",body:JSON.stringify({mode})
+      });
+      setDevelopmentState(current=>current?{...current,development_mode:mode}:current);
+      setNotice(`Development mode set to ${mode}`);
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
+  }
+
+  async function runDevelopmentAction(action:"status"|"next"|"continue"|"verify"|"evidence"|"sync-state"){
+    setBusy(true);
+    try{
+      const result=await request<DevelopmentAction>(`/projects/${projectId}/development-actions/${action}`,{method:"POST"});
+      if((action==="continue"||action==="next")&&result.current_item){
+        const objective=[
+          result.current_objective,
+          `Current development item: ${result.current_item.key} — ${result.current_item.title}`,
+          result.current_item.body
+        ].filter(Boolean).join("\n\n");
+        setSwarmObjective(objective);
+        setSwarmTitle(`${result.current_item.key}: ${result.current_item.title}`);
+      }
+      if(action==="verify"||action==="evidence"){
+        setNotice(result.current_item
+          ? `${action==="verify"?"Verification":"Evidence"} target: ${result.current_item.key} — ${result.current_item.title}`
+          : "No incomplete development item was found.");
+      }else if(action==="sync-state"){
+        setNotice("Repository development state refreshed from DEVELOPMENT.md, AGENTS.md and Git.");
+      }else if(action==="status"){
+        setNotice(result.current_item
+          ? `${result.current_item.key} · ${result.current_item.status} · ${result.current_item.priority}`
+          : "No incomplete development item was found.");
+      }else if(action==="continue"||action==="next"){
+        setNotice(result.current_item
+          ? `Loaded ${result.current_item.key} into Advanced orchestration.`
+          : "No incomplete development item was found.");
+      }
+      const refreshed=await request<DevelopmentState>(`/projects/${projectId}/development-state`);
+      setDevelopmentState(refreshed);
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusy(false);}
   }
 
   async function toggleSwarmSkill(){
@@ -567,6 +619,35 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
 
 
   return <section className={styles.panel}>
+    {developmentState&&<section className="development-state-panel">
+      <header>
+        <div>
+          <p className="eyebrow">Persistent development state</p>
+          <h3>{developmentState.current_item?developmentState.current_item.key+" · "+developmentState.current_item.title:"No incomplete development item"}</h3>
+          <p>{developmentState.current_objective||"No current objective declared in DEVELOPMENT.md."}</p>
+        </div>
+        <div className="development-state-meta">
+          <span>{developmentState.current_item?.status||"complete"}</span>
+          {developmentState.current_item&&<span>{developmentState.current_item.priority}</span>}
+          <span>{developmentState.git.branch||"no git branch"}</span>
+        </div>
+      </header>
+      <div className="development-state-controls">
+        <label>Development mode
+          <select value={developmentState.development_mode} onChange={event=>updateDevelopmentMode(event.target.value)} disabled={busy}>
+            {Object.entries(developmentState.available_modes||{}).map(([mode,description])=><option key={mode} value={mode}>{mode} · {description}</option>)}
+          </select>
+        </label>
+        <div>
+          <button type="button" onClick={()=>runDevelopmentAction("status")} disabled={busy}>Status</button>
+          <button type="button" className="primary" onClick={()=>runDevelopmentAction("continue")} disabled={busy||!developmentState.current_item}>Continue</button>
+          <button type="button" onClick={()=>runDevelopmentAction("verify")} disabled={busy}>Verify</button>
+          <button type="button" onClick={()=>runDevelopmentAction("evidence")} disabled={busy}>Evidence</button>
+          <button type="button" onClick={()=>runDevelopmentAction("sync-state")} disabled={busy}>Sync state</button>
+        </div>
+      </div>
+      <small>AGENTS.md {developmentState.agents_present?"loaded":"missing"} · DEVELOPMENT.md {developmentState.development_present?"loaded":"missing"} · Git changes {developmentState.git.changes?.length||0}</small>
+    </section>}
     <section className="agent-board-shell">
       <div><p className="eyebrow">Advanced orchestration</p><h3>{swarmBoard?swarmBoard.swarm.title:"Agent board"}</h3><p>{swarmBoard?`Advanced orchestration #${swarmBoard.swarm.id} · ${swarmBoard.swarm.status.replaceAll("_"," ")} · ${swarmBoard.summary.progress}% ${swarmBoard.swarm.status==="completed"?"complete":"agent work"}`:"Normal tasks stay simple. Expand this view when you want to inspect specialist agents, roles and execution state."}</p>{swarmRuns.length>1&&<label className="agent-board-run-select">Run<select value={selectedSwarmId||""} onChange={event=>{swarmCursors.current={event:0,coordinator_event:0,blackboard:0};setSelectedSwarmAgentId(null);setSwarmIntegration(null);setSelectedSwarmId(Number(event.target.value));}}>{swarmRuns.map(run=><option key={run.id} value={run.id}>#{run.id} {run.title} · {run.status}</option>)}</select></label>}</div>
       <div className="agent-board-metrics"><span><strong>{boardTotal}</strong> agents</span><span><strong>{boardActive}</strong> active</span><span><strong>{boardCompleted}</strong> complete</span>{swarmBoard?.summary.integration_ready&&<span><strong>✓</strong> integrate</span>}</div>
