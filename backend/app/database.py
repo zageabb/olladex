@@ -341,6 +341,7 @@ ADDITIVE_COLUMNS = {
         "recovery_attempt": "INTEGER NOT NULL DEFAULT 0",
         "no_progress_reason": "TEXT NOT NULL DEFAULT ''",
         "completion_evidence": "TEXT NOT NULL DEFAULT '{}'",
+        "root_cause_analysis": "TEXT NOT NULL DEFAULT ''",
     },
 }
 
