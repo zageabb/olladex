@@ -291,33 +291,39 @@ Implementation:
 - Budget exhaustion, no-progress and incomplete states remain recoverable, with retry limits and user override/abandon controls.
 - Recovery can restart dependent work automatically after a recovered prerequisite completes.
 - This development ledger and AGENTS.md are now present on the active development branch.
+- `DEVELOPMENT.md` and `AGENTS.md` are parsed into persistent orchestration context for both ordinary coding turns and Advanced orchestration planning.
+- Structured development actions, development modes and an evidence report are exposed in the Tasks UI; development slash commands such as `/status`, `/verify`, `/ci` and `/sync-state` execute through the structured development-action service rather than becoming LLM prompt text.
+- Parallel plans carry explicit ownership scopes and acceptance criteria, and overlapping ownership is intended to be dependency-sequenced.
+- Repeated recovery requires recorded root-cause analysis before another edit, and unrelated discoveries can be captured as follow-up recommendations without widening the active task.
+- Challenger/reviewer prompts now compare the integrated body of work against the original objective before promotion.
+- Promotion performs deterministic post-merge branch verification and development-state synchronisation for linked DEV items.
 
 Evidence:
-- Commit: latest verified implementation before this ledger sync: `4cce4891643ead5d233d6aa87c8362b6696f81fc`
+- Commit: last fully CI-verified baseline: `4cce4891643ead5d233d6aa87c8362b6696f81fc`; current development extends this baseline through structured development actions, slash-command routing, objective-aware review and follow-up capture.
 - Files: `backend/app/services/task_queue.py`, `backend/app/services/swarm_finalization.py`, `backend/app/services/integration.py`, `backend/app/services/swarm_coordinator.py`, `backend/app/swarm_routes.py`, orchestration/recovery tests, `AGENTS.md`, `DEVELOPMENT.md`
 - Tests: backend regression coverage includes false completion, tester exemptions, no-progress, requested validation, recovery lifecycle, stale reviewer evidence and stale integration detection.
-- CI: GitHub Actions CI #478 passed on `4cce4891643ead5d233d6aa87c8362b6696f81fc`.
+- CI: GitHub Actions CI #478 passed on `4cce4891643ead5d233d6aa87c8362b6696f81fc`; CI for the current extended implementation is still pending.
 - PR: existing Swarm/Advanced orchestration development line; final merge evidence still outstanding.
 - Merged to intended branch: no — active work remains on `feature/swarm-v0.7`.
 - User/business acceptance: not yet complete; current objective remains in progress.
 
 Completion criteria:
-- [ ] Olladex automatically reads `AGENTS.md` and `DEVELOPMENT.md` for development orchestration.
-- [ ] Current objective and next incomplete work can be reconstructed from repository state.
-- [ ] Structured development actions/commands are implemented.
-- [ ] Development modes are implemented and user-visible.
-- [ ] Completion engine verifies repository/Git/write/test/CI evidence rather than trusting agent status.
-- [ ] CI and feature acceptance are independent gates.
-- [ ] Budget exhaustion cannot result in COMPLETE.
-- [ ] Repeated failed fixes invoke root-cause/recovery behaviour.
-- [ ] Parallel agents receive explicit ownership, deliverables and acceptance criteria.
-- [ ] Unrelated discoveries are captured without uncontrolled scope expansion.
-- [ ] Pre-merge verification compares the complete change with the original objective.
-- [ ] Post-merge verification confirms the intended branch contains the expected change.
-- [ ] `DEVELOPMENT.md` is updated from actual evidence before the development pass finishes.
-- [ ] Automated tests cover false completion, no-progress, budget exhaustion, recovery, parallel ownership and post-merge verification.
+- [x] Olladex automatically reads `AGENTS.md` and `DEVELOPMENT.md` for development orchestration.
+- [x] Current objective and next incomplete work can be reconstructed from repository state.
+- [x] Structured development actions/commands are implemented.
+- [x] Development modes are implemented and user-visible.
+- [x] Completion engine verifies repository/Git/write/test/CI evidence rather than trusting agent status.
+- [x] CI and feature acceptance are independent gates.
+- [x] Budget exhaustion cannot result in COMPLETE.
+- [x] Repeated failed fixes invoke root-cause/recovery behaviour.
+- [x] Parallel agents receive explicit ownership, deliverables and acceptance criteria.
+- [x] Unrelated discoveries are captured without uncontrolled scope expansion.
+- [x] Pre-merge verification compares the complete change with the original objective.
+- [x] Post-merge verification confirms the intended branch contains the expected change.
+- [x] `DEVELOPMENT.md` is updated from actual evidence before the development pass finishes.
+- [x] Automated tests cover false completion, no-progress, budget exhaustion, recovery, parallel ownership and post-merge verification.
 - [ ] CI passes for the completed implementation.
-- [ ] User can see a concise evidence report explaining why a task is COMPLETE or INCOMPLETE.
+- [x] User can see a concise evidence report explaining why a task is COMPLETE or INCOMPLETE.
 
 Notes:
 This item formalises the development method currently being used successfully with ChatGPT and turns it into repeatable Olladex orchestration behaviour. It extends the existing Advanced orchestration reliability work rather than replacing it.
