@@ -41,14 +41,19 @@ class DevelopmentItem:
     status: str
     priority: str
     body: str
+    criteria: tuple[dict, ...]
 
     def as_dict(self) -> dict:
+        completed = sum(1 for item in self.criteria if item["complete"])
         return {
             "key": self.key,
             "title": self.title,
             "status": self.status,
             "priority": self.priority,
             "body": self.body,
+            "criteria": list(self.criteria),
+            "criteria_completed": completed,
+            "criteria_total": len(self.criteria),
         }
 
 
@@ -93,6 +98,13 @@ def parse_development(markdown: str) -> dict:
         start = match.end()
         end = item_matches[index + 1].start() if index + 1 < len(item_matches) else len(markdown)
         body = markdown[start:end].strip()
+        criteria = tuple(
+            {
+                "complete": marker.strip().lower() == "x",
+                "text": text.strip(),
+            }
+            for marker, text in re.findall(r"(?m)^\s*-\s*\[([ xX])\]\s+(.+?)\s*$", body)
+        )
         items.append(
             DevelopmentItem(
                 key=match.group(1).strip(),
@@ -100,6 +112,7 @@ def parse_development(markdown: str) -> dict:
                 status=_normalise_status(_field(body, "Status", "PLANNED")),
                 priority=_normalise_priority(_field(body, "Priority", "MEDIUM")),
                 body=body,
+                criteria=criteria,
             )
         )
 
