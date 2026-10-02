@@ -206,3 +206,50 @@ test('project AI model selectors show every detected Ollama model', async ({ pag
     expect(effectiveOptions).toContain(model);
   }
 });
+
+
+test('development slash command executes structured action without starting an LLM run', async ({ page }) => {
+  const project = { id:1,name:'Demo',path:'/demo',model:'test',approval_mode:'assisted' };
+  let runStarted = false;
+  let actionCalled = false;
+
+  await page.route('**/api/**', async route => {
+    const p = new URL(route.request().url()).pathname;
+    const json = (data: unknown) => route.fulfill({json:data});
+    if (p === '/api/projects') return json([project]);
+    if (p === '/api/status') return json({version:'test',ollama:{connected:true,models:['test']}});
+    if (p === '/api/projects/1/sessions') return json([{id:1,project_id:1,title:'Chat'}]);
+    if (p === '/api/sessions/1/messages') return json([]);
+    if (p === '/api/sessions/1/runs' && route.request().method() === 'POST') {
+      runStarted = true;
+      return json({id:99,status:'running'});
+    }
+    if (p === '/api/sessions/1/runs') return json([]);
+    if (p === '/api/sessions/1/development-action') {
+      actionCalled = true;
+      return json({
+        action:'status',
+        report:{},
+        messages:[
+          {id:10,session_id:1,role:'user',content:'/status',activities:[]},
+          {id:11,session_id:1,role:'assistant',content:'Development action: /status\nCurrent item: DEV-001 — Verified Development',activities:[]},
+        ],
+      });
+    }
+    if (p === '/api/sessions/1/memory') return json({content:''});
+    if (p === '/api/projects/1/tree') return json([]);
+    if (p.endsWith('/git/diff')) return json({diff:''});
+    if (p.endsWith('/git')) return json({changes:[],branches:[],remotes:[]});
+    if (p.endsWith('/changes')) return json([]);
+    return json([]);
+  });
+
+  await page.goto('/');
+  await page.getByRole('textbox', {name:'Message Olladex'}).fill('/status');
+  await page.getByRole('button', {name:'Send', exact:true}).click();
+
+  await expect.poll(() => actionCalled).toBe(true);
+  await expect.poll(() => runStarted).toBe(false);
+  await expect(page.getByText('Development action: /status', {exact:false})).toBeVisible();
+  await expect(page.getByText('DEV-001 — Verified Development', {exact:false})).toBeVisible();
+});
