@@ -94,3 +94,19 @@ Priority: High
     assert action["action"] == "continue"
     assert action["current_objective"] == "Objective from repository."
     assert action["current_item"]["key"] == "DEV-100"
+
+
+def test_development_mode_is_explicit_and_injected_into_context(tmp_path):
+    project = _project(tmp_path)
+    project["development_mode"] = "autonomous"
+    context = development_state.orchestration_context(project)
+
+    assert "Development mode: autonomous" in context
+    assert "Continue until the objective is verified complete" in context
+
+
+def test_invalid_development_mode_is_rejected():
+    import pytest
+
+    with pytest.raises(ValueError):
+        development_state.normalise_mode("reckless")
