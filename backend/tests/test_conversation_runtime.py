@@ -345,3 +345,47 @@ Completion criteria:
     assert messages[-2]["content"] == "/status"
     assert "Development action: /status" in messages[-1]["content"]
 
+
+
+def test_autonomous_continue_slash_action_starts_advanced_orchestration(client_project, monkeypatch):
+    client, project, session, repo = client_project
+    (repo / "AGENTS.md").write_text("# AGENTS.md\nUse repository evidence.\n", encoding="utf-8")
+    (repo / "DEVELOPMENT.md").write_text(
+        """# Development Status
+
+## Current objective
+
+Finish current development.
+
+### DEV-200 — Continue autonomously
+
+Status: 🔨 IN PROGRESS
+Priority: High
+""",
+        encoding="utf-8",
+    )
+    with connect() as conn:
+        conn.execute("UPDATE projects SET development_mode='autonomous' WHERE id=?", (project["id"],))
+        profile_id = int(conn.execute("SELECT id FROM swarm_profiles WHERE name='Development'").fetchone()["id"])
+
+    from backend.app import development_routes
+    seen = {}
+
+    def fake_start(project_id, body):
+        seen["project_id"] = project_id
+        seen["profile_id"] = body.profile_id
+        return {"swarm": {"id": 77}}
+
+    monkeypatch.setattr(development_routes, "start_current_development_item", fake_start)
+
+    response = client.post(
+        f"/api/sessions/{session['id']}/development-action",
+        json={"content": "/continue"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert seen == {"project_id": project["id"], "profile_id": profile_id}
+    assert payload["report"]["execution_started"]["swarm_id"] == 77
+    assert "Execution started: Advanced orchestration #77" in payload["messages"][1]["content"]
+
