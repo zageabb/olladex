@@ -33,6 +33,7 @@ for tool_name, description, properties in [
     ("swarm_publish_decision", "Publish a meaningful engineering decision to the current swarm blackboard.", {"content": {"type":"string"}, "key": {"type":"string"}}),
     ("swarm_publish_risk", "Publish an identified risk or uncertainty to the current swarm blackboard.", {"content": {"type":"string"}, "key": {"type":"string"}}),
     ("swarm_publish_handoff", "Publish the final concise hand-off from this specialist to the coordinator and downstream agents.", {"content": {"type":"string"}, "key": {"type":"string"}}),
+    ("swarm_publish_followup", "Capture an unrelated improvement, technical-debt item, or product idea for later without expanding the current task scope.", {"content": {"type":"string"}, "key": {"type":"string"}}),
     ("swarm_request_help", "Request one additional bounded specialist from the Swarm Coordinator when another role would materially help. The Coordinator decides whether to spawn it.", {"content": {"type":"string"}, "key": {"type":"string"}}),
 ]:
     TOOLS.append({"type":"function", "function": {"name":tool_name, "description":description,
@@ -194,7 +195,7 @@ def _execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
             raise ValueError("This agent is not running inside a swarm")
         from . import swarm as swarm_service
         result = swarm_service.blackboard(swarm_id, category=str(args.get("category") or ""))
-    elif name in {"swarm_publish_finding", "swarm_publish_decision", "swarm_publish_risk", "swarm_publish_handoff", "swarm_request_help"}:
+    elif name in {"swarm_publish_finding", "swarm_publish_decision", "swarm_publish_risk", "swarm_publish_handoff", "swarm_publish_followup", "swarm_request_help"}:
         swarm_id = task_queue.current_swarm_id()
         task_id = task_queue.current_task_id()
         if not swarm_id or not task_id:
@@ -205,6 +206,7 @@ def _execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
             "swarm_publish_decision": "decision",
             "swarm_publish_risk": "risk",
             "swarm_publish_handoff": "handoff",
+            "swarm_publish_followup": "recommendation",
             "swarm_request_help": "question",
         }[name]
         result = swarm_service.publish(
@@ -427,6 +429,7 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
         "When running inside a swarm, use update_plan before meaningful groups of work, use update_progress after completing meaningful plan steps, publish important evidence-backed findings, engineering decisions and risks to the shared blackboard, "
         "Use swarm_request_help only when one additional bounded specialist would materially improve the outcome; you cannot spawn agents yourself. "
         "Publish one concise swarm handoff before finishing that states the outcome, changed files, checks run, remaining risks and what downstream agents should know. "
+        "If you discover an unrelated improvement, technical-debt item, or product idea, do not expand the current scope; capture it with swarm_publish_followup for later. "
         "Read the blackboard when dependency context or another specialist's findings would materially help your task.\n\n"
         + "\n\nOriginal conversation objective:\n" + next((m["content"] for m in history if m.get("role") == "user"), request)[:4000]
         + "\n\n" + workspace.project_summary(project)
