@@ -182,8 +182,28 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
           `Current development item: ${result.current_item.key} — ${result.current_item.title}`,
           result.current_item.body
         ].filter(Boolean).join("\n\n");
-        setSwarmObjective(objective);
-        setSwarmTitle(`${result.current_item.key}: ${result.current_item.title}`);
+        if(
+          action==="continue"
+          && developmentState?.development_mode==="autonomous"
+          && swarmSkill?.enabled
+          && swarmProfileId
+        ){
+          const started=await request<{swarm:{id:number}}>(`/projects/${projectId}/development-actions/continue/start`,{
+            method:"POST",
+            body:JSON.stringify({
+              profile_id:Number(swarmProfileId),
+              max_agents:swarmMaxAgents,
+              max_concurrency:swarmConcurrency
+            })
+          });
+          setSelectedSwarmId(started.swarm.id);
+          setNotice(`Advanced orchestration #${started.swarm.id} started from ${result.current_item.key}`);
+          await load();
+          onCreated();
+        }else{
+          setSwarmObjective(objective);
+          setSwarmTitle(`${result.current_item.key}: ${result.current_item.title}`);
+        }
       }
       if(action==="verify"||action==="evidence"){
         setDevelopmentEvidence(result.evidence||null);
@@ -197,9 +217,11 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
           ? `${result.current_item.key} · ${result.current_item.status} · ${result.current_item.priority}`
           : "No incomplete development item was found.");
       }else if(action==="continue"||action==="next"){
-        setNotice(result.current_item
-          ? `Loaded ${result.current_item.key} into Advanced orchestration.`
-          : "No incomplete development item was found.");
+        if(!(action==="continue"&&developmentState?.development_mode==="autonomous"&&swarmSkill?.enabled&&swarmProfileId)){
+          setNotice(result.current_item
+            ? `Loaded ${result.current_item.key} into Advanced orchestration.`
+            : "No incomplete development item was found.");
+        }
       }
       const refreshed=await request<DevelopmentState>(`/projects/${projectId}/development-state`);
       setDevelopmentState(refreshed);
