@@ -94,6 +94,8 @@ def create_autonomous_lead(project_id: int, body: LeadOrchestrationRequest):
                 project_id, session_id, item["title"], item["prompt"],
                 source_kind="lead_specialist", source_ref=f"lead:{lead_id}", parent_task_id=lead_id,
                 depends_on=dependency_ids, agent_role=item["role"],
+                ownership_scope=item.get("ownership") or [],
+                acceptance_criteria=item.get("acceptance_criteria") or [],
             )
             child_ids.append(child["id"])
             created.append(child)
