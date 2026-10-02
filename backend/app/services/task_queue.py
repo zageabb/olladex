@@ -286,7 +286,7 @@ def resume_task(
         if active:
             raise ValueError(f"Task already has an active run #{active['id']} ({active['status']})")
         prior = conn.execute(
-            "SELECT * FROM agent_runs WHERE task_id=? AND status IN ('budget_exhausted','interrupted','failed','cancelled','no_progress') ORDER BY id DESC LIMIT 1",
+            "SELECT * FROM agent_runs WHERE task_id=? AND status IN ('budget_exhausted','interrupted','failed','cancelled','no_progress','incomplete') ORDER BY id DESC LIMIT 1",
             (task_id,),
         ).fetchone()
         profile = conn.execute(
