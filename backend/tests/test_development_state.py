@@ -30,6 +30,10 @@ Priority: High
 Requirement:
 Now.
 
+Completion criteria:
+- [x] Parser exists.
+- [ ] Objective is verified.
+
 ### DEV-003 — Done work
 
 Status: ✅ COMPLETE
@@ -41,6 +45,8 @@ Priority: High
     assert state["current_item"]["key"] == "DEV-002"
     assert state["current_item"]["status"] == "IN PROGRESS"
     assert state["current_item"]["priority"] == "HIGH"
+    assert state["current_item"]["criteria_completed"] == 1
+    assert state["current_item"]["criteria_total"] == 2
 
 
 def test_snapshot_reads_agents_and_development_from_repository(tmp_path):
