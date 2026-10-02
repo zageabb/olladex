@@ -11,6 +11,7 @@ from .services import orchestration as orchestration_service
 from .services import swarm as swarm_service
 from .services import task_queue, integration, swarm_finalization, worktrees, git
 from .services import github as github_service
+from .services import development_state
 
 
 router = APIRouter(prefix="/api", tags=["swarm"])
@@ -670,11 +671,40 @@ def promote_swarm_integration(swarm_id: int, body: SwarmPromotionRequest):
             )
         swarm_service.emit_coordinator_event(swarm_id, "promotion_blocked", {"reason": str(exc)})
         raise HTTPException(409, str(exc)) from exc
+    post_merge = None
+    post_merge_error = ""
+    development_item_key = str(run.get("development_item_key") or "").strip()
+    if development_item_key:
+        try:
+            post_merge = development_state.finalize_post_merge_state(
+                project,
+                development_item_key,
+                target_branch=body.target_branch,
+                promoted_commit=result["main_commit"],
+            )
+        except ValueError as exc:
+            post_merge_error = str(exc)
     with connect() as conn:
         conn.execute(
-            "UPDATE swarm_runs SET status='completed',completed_at=?,promotion_status='promoted',"
-            "promoted_commit=?,promotion_output=? WHERE id=?",
-            (now(), result["main_commit"], result.get("output") or "", swarm_id),
+            "UPDATE swarm_runs SET status='completed',completed_at=?,promotion_status=?,"
+            "promoted_commit=?,promotion_output=?,state_sync_commit=?,post_merge_verification=? WHERE id=?",
+            (
+                now(),
+                "promoted" if not post_merge_error else "promoted_state_sync_pending",
+                result["main_commit"],
+                (result.get("output") or "") + (
+                    "\n\nDevelopment-state sync pending: " + post_merge_error if post_merge_error else ""
+                ),
+                str((post_merge or {}).get("state_sync_commit") or ""),
+                json.dumps(post_merge or {"verified": False, "reason": post_merge_error}, default=str),
+                swarm_id,
+            ),
+        )
+    if post_merge_error:
+        swarm_service.emit_coordinator_event(
+            swarm_id,
+            "development_state_sync_pending",
+            {"development_item_key": development_item_key, "reason": post_merge_error},
         )
     swarm_service.emit_coordinator_event(
         swarm_id,
@@ -687,7 +717,14 @@ def promote_swarm_integration(swarm_id: int, body: SwarmPromotionRequest):
             "deliverables": delivered,
         },
     )
-    return {"swarm_id": swarm_id, "status": "completed", "promotion": result, "evidence": gate, "deliverables": delivered}
+    return {
+        "swarm_id": swarm_id,
+        "status": "completed",
+        "promotion": result,
+        "evidence": gate,
+        "deliverables": delivered,
+        "post_merge_verification": post_merge or {"verified": False, "reason": post_merge_error},
+    }
 
 
 @router.get("/swarms/{swarm_id}/blackboard")
