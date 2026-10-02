@@ -392,15 +392,15 @@ def evidence_report(project: dict, item_key: str = "") -> dict:
             and bool(str(latest_swarm.get("promoted_commit") or "").strip())
         )
 
-    result = "VERIFIED COMPLETE" if (
+    evidence_complete = bool(
         current
-        and declared_complete
         and criteria_complete
         and no_active_work
         and no_known_incomplete
         and repository_clean
         and delivery_complete
-    ) else "INCOMPLETE"
+    )
+    result = "VERIFIED COMPLETE" if evidence_complete else "INCOMPLETE"
 
     return {
         "result": result,
@@ -423,6 +423,13 @@ def evidence_report(project: dict, item_key: str = "") -> dict:
             "criteria_total": current.get("criteria_total", 0) if current else 0,
             "all_declared_criteria_complete": criteria_complete,
             "ledger_status": current.get("status") if current else "",
+            "ledger_matches_evidence": bool(
+                current
+                and (
+                    (evidence_complete and declared_complete)
+                    or (not evidence_complete and not declared_complete)
+                )
+            ),
         },
         "tasks": tasks,
         "swarms": swarms,
@@ -673,15 +680,31 @@ def sync_development(project: dict, item_key: str = "") -> dict:
         count=1,
     )
 
-    if current["status"] == "PLANNED" and (
+    target_status = current["status"]
+    if report["result"] == "VERIFIED COMPLETE":
+        target_status = "COMPLETE"
+    elif current["status"] == "COMPLETE":
+        target_status = "IN PROGRESS"
+    elif current["status"] == "PLANNED" and (
         report["implementation"]["recent_completed_tasks"] > 0
         or report["validation"]["active_tasks"] > 0
         or report["validation"]["latest_swarm"]
     ):
+        target_status = "IN PROGRESS"
+
+    if target_status != current["status"]:
+        display = {
+            "COMPLETE": "✅ COMPLETE  ",
+            "IN PROGRESS": "🔨 IN PROGRESS  ",
+            "PLANNED": "🔵 PLANNED  ",
+            "BLOCKED": "🚫 BLOCKED  ",
+            "AWAITING ACCEPTANCE": "⏳ AWAITING ACCEPTANCE  ",
+            "DEFERRED": "💤 DEFERRED  ",
+        }[target_status]
         pattern = (
             rf"(?ms)(^###\s+{re.escape(current['key'])}\s+[—-]\s+.*?$.*?^Status:\s*)[^\n]+"
         )
-        updated = re.sub(pattern, rf"\1🔨 IN PROGRESS  ", updated, count=1)
+        updated = re.sub(pattern, rf"\1{display}", updated, count=1)
 
     marker_start = f"<!-- OLLADEX:EVIDENCE:{current['key']}:START -->"
     marker_end = f"<!-- OLLADEX:EVIDENCE:{current['key']}:END -->"
@@ -720,6 +743,7 @@ def sync_development(project: dict, item_key: str = "") -> dict:
     return {
         "changed": changed,
         "current_item": current,
+        "target_status": target_status,
         "evidence": report,
         "reason": "DEVELOPMENT.md reconciled from repository evidence" if changed else "DEVELOPMENT.md already matches repository evidence",
     }
