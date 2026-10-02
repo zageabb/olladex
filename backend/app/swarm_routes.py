@@ -239,6 +239,8 @@ def create_swarm(project_id: int, body: SwarmCreateRequest):
                 task_kind=role,
                 priority=100,
                 depth=1,
+                ownership_scope=item.get("ownership") or [],
+                acceptance_criteria=item.get("acceptance_criteria") or [],
             )
             child_ids.append(task["id"])
             created.append(task)
