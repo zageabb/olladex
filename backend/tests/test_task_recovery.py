@@ -619,7 +619,7 @@ def test_coding_swarm_task_with_changes_and_requested_validation_can_complete(tm
     assert evidence["validation_commands"] == ["pytest -q"]
 
 
-def test_coding_swarm_task_with_workspace_change_can_complete(tmp_path, monkeypatch):
+def test_coding_swarm_task_with_changes_but_empty_handoff_is_incomplete(tmp_path, monkeypatch):
     project, session_id, swarm_id, _ = _seed_repo(tmp_path, monkeypatch)
     task = task_queue.enqueue(
         int(project["id"]),
@@ -636,6 +636,40 @@ def test_coding_swarm_task_with_workspace_change_can_complete(tmp_path, monkeypa
         target = Path(claimed["worktree_path"]) / "feature.py"
         target.write_text("value = 1\n", encoding="utf-8")
         return ""
+
+    monkeypatch.setattr(task_queue, "_handler", handler)
+
+    assert task_queue.run_once() is True
+
+    state = task_queue.get(task["id"])
+    assert state["status"] == "incomplete"
+    assert "returned no final hand-off" in state["no_progress_reason"].lower()
+    evidence = state["completion_evidence"]
+    if isinstance(evidence, str):
+        import json
+        evidence = json.loads(evidence)
+    assert evidence["meaningful_change"] is True
+    assert evidence["handoff_present"] is False
+    assert evidence["failure_status"] == "incomplete"
+
+
+def test_coding_swarm_task_with_workspace_change_can_complete(tmp_path, monkeypatch):
+    project, session_id, swarm_id, _ = _seed_repo(tmp_path, monkeypatch)
+    task = task_queue.enqueue(
+        int(project["id"]),
+        session_id,
+        "Implement real feature",
+        "Change the code.",
+        swarm_id=swarm_id,
+        source_kind="swarm_specialist",
+        agent_role="backend",
+        task_kind="backend",
+    )
+
+    def handler(claimed):
+        target = Path(claimed["worktree_path"]) / "feature.py"
+        target.write_text("value = 1\n", encoding="utf-8")
+        return "Implemented feature.py."
 
     monkeypatch.setattr(task_queue, "_handler", handler)
 
