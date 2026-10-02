@@ -3,8 +3,9 @@ import json
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from .database import connect
+from .database import connect, now
 from .services import conversation_runtime as runtime
+from .services import development_state
 
 router = APIRouter()
 
@@ -18,6 +19,52 @@ class Decision(BaseModel):
 @router.post('/api/sessions/{session_id}/runs')
 def start(session_id: int, body: Turn):
     return runtime.launch(session_id, body.content, body.resume_id)
+
+@router.post('/api/sessions/{session_id}/development-action')
+def development_action(session_id: int, body: Turn):
+    action = body.content.strip().lower().lstrip("/")
+    if action not in development_state.DEVELOPMENT_ACTIONS:
+        raise HTTPException(400, f"Unsupported development action: {body.content}")
+    with connect() as conn:
+        session = conn.execute(
+            "SELECT s.id,s.project_id FROM sessions s WHERE s.id=?",
+            (session_id,),
+        ).fetchone()
+        if not session:
+            raise HTTPException(404, "Session not found")
+        project_row = conn.execute(
+            "SELECT * FROM projects WHERE id=?",
+            (session["project_id"],),
+        ).fetchone()
+    if not project_row:
+        raise HTTPException(404, "Project not found")
+    project = dict(project_row)
+    try:
+        report = development_state.action_report(project, action)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    content = development_state.format_action_report(report)
+    stamp = now()
+    with connect() as conn:
+        user_id = int(conn.execute(
+            "INSERT INTO messages(session_id,role,content,activities,created_at) VALUES(?,?,?,?,?)",
+            (session_id, "user", body.content.strip(), "[]", stamp),
+        ).lastrowid)
+        assistant_id = int(conn.execute(
+            "INSERT INTO messages(session_id,role,content,activities,created_at) VALUES(?,?,?,?,?)",
+            (session_id, "assistant", content, "[]", stamp),
+        ).lastrowid)
+        conn.execute("UPDATE sessions SET updated_at=? WHERE id=?", (stamp, session_id))
+    return {
+        "action": action,
+        "report": report,
+        "messages": [
+            {"id": user_id, "session_id": session_id, "role": "user", "content": body.content.strip(), "activities": []},
+            {"id": assistant_id, "session_id": session_id, "role": "assistant", "content": content, "activities": []},
+        ],
+    }
+
+
 
 @router.get('/api/sessions/{session_id}/runs')
 def runs(session_id: int):
