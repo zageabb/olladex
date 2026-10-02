@@ -12,6 +12,13 @@ function baseRoutes(page:any, extra:(route:any,url:URL)=>Promise<boolean>|boolea
     if (p === '/api/status') return json({ version:'test',ollama:{connected:true,models:['test']} });
     if (p === '/api/projects/1/sessions') return json([{id:1,project_id:1,title:'Chat',updated_at:new Date().toISOString()}]);
     if (p === '/api/projects/1/orchestration') return json({project_id:1,nodes:[]});
+    if (p === '/api/projects/1/development-state') return json({
+      project_id:1,current_objective:'Advanced orchestration reliability',
+      current_item:{key:'DEV-001',title:'Verified Development',status:'IN PROGRESS',priority:'HIGH',body:'Continue verified development.'},
+      items:[],agents_present:true,development_present:true,development_mode:'build',
+      available_modes:{explore:'Discuss only',plan:'Plan',build:'Build',autonomous:'Continue autonomously',verify:'Verify',recover:'Recover',release:'Release'},
+      git:{repository:true,branch:'feature/swarm-v0.7',changes:[],ahead:1,behind:0}
+    });
     if (p === '/api/projects/1/swarms') return json([]);
     if (p === '/api/swarm-profiles') return json([{
       id:1,name:'Development',max_agents:5,max_concurrency:3,max_depth:1,dynamic_size:1,
