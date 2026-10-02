@@ -118,3 +118,119 @@ def test_invalid_development_mode_is_rejected():
 
     with pytest.raises(ValueError):
         development_state.normalise_mode("reckless")
+
+
+
+def test_all_structured_development_actions_have_execution_modes(tmp_path):
+    actions = {
+        "status": "plan",
+        "continue": "autonomous",
+        "verify": "verify",
+        "evidence": "verify",
+        "ci": "verify",
+        "review": "verify",
+        "recover": "recover",
+        "next": "plan",
+        "merge": "release",
+        "sync-state": "plan",
+    }
+    for action, mode in actions.items():
+        resolved = development_state.resolve_action(_project(tmp_path), action)
+        assert resolved["action"] == action
+        assert resolved["mode"] == mode
+
+
+def test_ci_report_matches_current_branch_pull_request(tmp_path, monkeypatch):
+    from backend.app.services import git as git_service
+    from backend.app.services import github as github_service
+
+    monkeypatch.setattr(git_service, "summary", lambda project: {"branch": "feature/test"})
+    monkeypatch.setattr(
+        github_service,
+        "status",
+        lambda project: {"available": True, "authenticated": True, "repository": "owner/repo", "error": ""},
+    )
+    monkeypatch.setattr(
+        github_service,
+        "pull_requests",
+        lambda project, state="open": [{
+            "number": 7,
+            "title": "Feature",
+            "url": "https://example.invalid/pull/7",
+            "headRefName": "feature/test",
+            "isDraft": False,
+            "reviewDecision": "APPROVED",
+            "statusCheckRollup": [
+                {"name": "Backend", "conclusion": "SUCCESS"},
+                {"name": "Frontend", "conclusion": "SUCCESS"},
+            ],
+        }],
+    )
+
+    report = development_state.ci_report(_project(tmp_path))
+
+    assert report["status"] == "passed"
+    assert report["pull_request"]["number"] == 7
+    assert len(report["checks"]) == 2
+
+
+def test_sync_development_records_repository_evidence_without_claiming_completion(tmp_path, monkeypatch):
+    path = tmp_path / "DEVELOPMENT.md"
+    path.write_text(
+        """# Development Status
+Last reviewed: 2026-01-01
+
+## Current objective
+
+Build persistent state.
+
+### DEV-100 — Persistent state
+
+Status: 🔵 PLANNED
+Priority: High
+
+Completion criteria:
+- [x] Parser exists.
+- [ ] CI is verified.
+
+## Maintenance rule
+
+Keep this current.
+""",
+        encoding="utf-8",
+    )
+    project = _project(tmp_path)
+    monkeypatch.setattr(
+        development_state,
+        "evidence_report",
+        lambda project: {
+            "result": "INCOMPLETE",
+            "implementation": {
+                "git_branch": "feature/test",
+                "working_tree_clean": True,
+                "recent_completed_tasks": 2,
+            },
+            "validation": {
+                "active_tasks": 0,
+                "incomplete_tasks": 0,
+                "latest_swarm": {"id": 4, "status": "running"},
+            },
+            "acceptance": {
+                "criteria_completed": 1,
+                "criteria_total": 2,
+            },
+        },
+    )
+
+    result = development_state.sync_development(project)
+    updated = path.read_text(encoding="utf-8")
+
+    assert result["changed"] is True
+    assert "Status: 🔨 IN PROGRESS" in updated
+    assert "OLLADEX:EVIDENCE:DEV-100:START" in updated
+    assert "Verification result: INCOMPLETE" in updated
+    assert "Status: ✅ COMPLETE" not in updated
+
+    second = development_state.sync_development(project)
+    assert updated == path.read_text(encoding="utf-8")
+    assert second["changed"] is False
