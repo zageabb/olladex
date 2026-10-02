@@ -458,11 +458,14 @@ def merge_report(project: dict) -> dict:
         blockers.append("Working tree contains uncommitted changes")
 
     remote_present = bool(git_state.get("remotes"))
-    if remote_present:
+    warnings: list[str] = []
+    if ci.get("pull_request"):
         if ci["status"] == "failed":
             blockers.append("CI has failing checks")
         elif ci["status"] != "passed":
             blockers.append("CI is not verified as passed")
+    elif remote_present and ci["status"] == "unavailable":
+        warnings.append("GitHub CI could not be inspected; no PR-specific CI gate was applied")
 
     criteria = current.get("criteria") or []
     post_merge_pattern = re.compile(
@@ -505,6 +508,7 @@ def merge_report(project: dict) -> dict:
         "ci": ci,
         "linked_swarm": linked_swarm,
         "pre_merge_unchecked": pre_merge_unchecked,
+        "warnings": warnings,
     }
 
 
