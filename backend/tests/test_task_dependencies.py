@@ -177,3 +177,43 @@ def test_overlapping_ownership_is_allowed_when_explicitly_sequenced(tmp_path, mo
     assert second["acceptance_criteria"] == ["Follow-up behaviour is verified."]
     assert "Assigned ownership for this task" in second["prompt"]
     assert "Acceptance criteria for this task" in second["prompt"]
+
+
+def test_dependency_context_includes_acceptance_and_completion_evidence(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    first = task_queue.enqueue(
+        project_id,
+        session_id,
+        "Implement endpoint",
+        "Implement it.",
+        source_kind="lead_specialist",
+        agent_role="backend",
+        ownership_scope=["backend/app/api.py"],
+        acceptance_criteria=["Health endpoint returns 200."],
+    )
+    second = task_queue.enqueue(
+        project_id,
+        session_id,
+        "Review endpoint",
+        "Review it.",
+        source_kind="lead_specialist",
+        agent_role="reviewer",
+        depends_on=[first["id"]],
+    )
+    with connect() as conn:
+        conn.execute(
+            "UPDATE background_tasks SET status='completed',result=?,completion_evidence=?,completed_at=? WHERE id=?",
+            (
+                "Implemented the endpoint and ran pytest.",
+                '{"required":true,"ok":true,"validation_commands":["pytest -q"],"head_changed":true}',
+                now(),
+                first["id"],
+            ),
+        )
+
+    context = task_queue._dependency_context(task_queue.get(second["id"]))
+
+    assert "Health endpoint returns 200." in context
+    assert "Completion evidence:" in context
+    assert "pytest -q" in context
+    assert "Implemented the endpoint" in context
