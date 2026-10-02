@@ -298,3 +298,105 @@ def test_finalize_post_merge_state_commits_only_synced_development_evidence(tmp_
         text=True,
     ).stdout
     assert status == ""
+
+
+def test_sync_development_promotes_status_only_when_evidence_is_verified(tmp_path, monkeypatch):
+    path = tmp_path / "DEVELOPMENT.md"
+    path.write_text(
+        """# Development Status
+Last reviewed: 2026-01-01
+
+## Current objective
+
+Finish verified workflow.
+
+### DEV-300 — Verified workflow
+
+Status: 🔨 IN PROGRESS
+Priority: High
+
+Completion criteria:
+- [x] Implementation exists.
+- [x] CI passes.
+""",
+        encoding="utf-8",
+    )
+    project = _project(tmp_path)
+    monkeypatch.setattr(
+        development_state,
+        "evidence_report",
+        lambda project, item_key="": {
+            "result": "VERIFIED COMPLETE",
+            "implementation": {
+                "git_branch": "feature/test",
+                "working_tree_clean": True,
+                "recent_completed_tasks": 3,
+            },
+            "validation": {
+                "active_tasks": 0,
+                "incomplete_tasks": 0,
+                "latest_swarm": {"id": 9, "status": "completed"},
+            },
+            "acceptance": {
+                "criteria_completed": 2,
+                "criteria_total": 2,
+            },
+        },
+    )
+
+    result = development_state.sync_development(project)
+
+    assert result["target_status"] == "COMPLETE"
+    assert "Status: ✅ COMPLETE" in path.read_text(encoding="utf-8")
+
+
+def test_sync_development_downgrades_false_complete_claim(tmp_path, monkeypatch):
+    path = tmp_path / "DEVELOPMENT.md"
+    path.write_text(
+        """# Development Status
+Last reviewed: 2026-01-01
+
+## Current objective
+
+Keep status truthful.
+
+### DEV-301 — False completion
+
+Status: ✅ COMPLETE
+Priority: High
+
+Completion criteria:
+- [x] Implementation exists.
+- [ ] CI passes.
+""",
+        encoding="utf-8",
+    )
+    project = _project(tmp_path)
+    monkeypatch.setattr(
+        development_state,
+        "evidence_report",
+        lambda project, item_key="": {
+            "result": "INCOMPLETE",
+            "implementation": {
+                "git_branch": "feature/test",
+                "working_tree_clean": True,
+                "recent_completed_tasks": 1,
+            },
+            "validation": {
+                "active_tasks": 0,
+                "incomplete_tasks": 0,
+                "latest_swarm": None,
+            },
+            "acceptance": {
+                "criteria_completed": 1,
+                "criteria_total": 2,
+            },
+        },
+    )
+
+    result = development_state.sync_development(project)
+
+    assert result["target_status"] == "IN PROGRESS"
+    assert "Status: 🔨 IN PROGRESS" in path.read_text(encoding="utf-8")
+    assert "Status: ✅ COMPLETE" not in path.read_text(encoding="utf-8")
+
