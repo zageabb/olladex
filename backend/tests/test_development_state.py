@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 
 from backend.app.services import development_state
 
@@ -234,3 +235,66 @@ Keep this current.
     second = development_state.sync_development(project)
     assert updated == path.read_text(encoding="utf-8")
     assert second["changed"] is False
+
+
+
+def test_finalize_post_merge_state_commits_only_synced_development_evidence(tmp_path, monkeypatch):
+    project = {
+        "id": 1,
+        "name": "demo",
+        "path": str(tmp_path),
+        "git_author_name": "Olladex Test",
+        "git_author_email": "olladex-test@example.invalid",
+    }
+    (tmp_path / "DEVELOPMENT.md").write_text("# Development Status\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "add", "DEVELOPMENT.md"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "baseline"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    promoted = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    def sync(project_arg, item_key):
+        (tmp_path / "DEVELOPMENT.md").write_text(
+            "# Development Status\n\nRepository evidence snapshot\n",
+            encoding="utf-8",
+        )
+        return {"changed": True, "current_item": {"key": item_key}, "evidence": {"result": "VERIFIED COMPLETE"}}
+
+    monkeypatch.setattr(development_state, "sync_development", sync)
+    monkeypatch.setattr(
+        development_state,
+        "evidence_report",
+        lambda project_arg, item_key="": {"result": "VERIFIED COMPLETE"},
+    )
+
+    result = development_state.finalize_post_merge_state(
+        project,
+        "DEV-100",
+        target_branch="main",
+        promoted_commit=promoted,
+    )
+
+    assert result["verified"] is True
+    assert result["state_sync_commit"]
+    assert result["final_head"] == result["state_sync_commit"]
+    assert result["final_head"] != promoted
+    assert result["development_result"] == "VERIFIED COMPLETE"
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert status == ""
