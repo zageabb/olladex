@@ -37,7 +37,7 @@ def test_swarm_decomposition_keeps_specialist_roles_and_rejects_reviewer(monkeyp
         "message": {
             "content": json.dumps({
                 "tasks": [
-                    {"title": "Architecture", "role": "architect", "prompt": "Map the architecture", "depends_on": []},
+                    {"title": "Architecture", "role": "architect", "prompt": "Map the architecture", "depends_on": [], "ownership": ["backend/app"], "acceptance_criteria": ["Architecture boundary is documented."]},
                     {"title": "Duplicate reviewer", "role": "reviewer", "prompt": "Review too early", "depends_on": [0]},
                 ]
             })
@@ -56,3 +56,6 @@ def test_swarm_decomposition_keeps_specialist_roles_and_rejects_reviewer(monkeyp
     assert tasks[0]["role"] == "architect"
     assert tasks[1]["role"] == "worker"
     assert tasks[1]["depends_on"] == [0]
+    assert tasks[0]["ownership"] == ["backend/app"]
+    assert tasks[0]["acceptance_criteria"] == ["Architecture boundary is documented."]
+    assert tasks[1]["acceptance_criteria"] == ["Requested implementation exists and relevant validation passes."]
