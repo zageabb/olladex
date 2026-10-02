@@ -1107,3 +1107,50 @@ button.primary:hover { background: var(--blue-2); }
 .agent-recovery-detail code{padding:5px 6px;border-radius:5px;background:#fff;overflow:auto;white-space:nowrap;font-size:8px}
 .agent-recovery-detail>div,.task-recovery-card>div{display:flex;gap:6px;flex-wrap:wrap}
 @media(max-width:900px){.advanced-recovery-banner article{grid-template-columns:1fr}}
+
+
+.development-state-panel {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+}
+.development-state-panel header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+.development-state-panel h3 {
+  margin: 2px 0 6px;
+}
+.development-state-panel p {
+  margin: 0;
+}
+.development-state-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.development-state-meta span {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.development-state-controls {
+  display: grid;
+  gap: 10px;
+}
+.development-state-controls label {
+  display: grid;
+  gap: 6px;
+}
+.development-state-controls > div {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
