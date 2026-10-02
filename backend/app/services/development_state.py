@@ -100,7 +100,7 @@ def _normalise_priority(value: str) -> str:
 
 def parse_development(markdown: str) -> dict:
     objective_match = re.search(
-        r"(?ims)^##\s+Current objective\s*$\s*(.+?)(?=^##\s+|\Z)",
+        r"(?ims)^##\s+Current objective\s*$\s*(.+?)(?=^#{2,3}\s+|\Z)",
         markdown,
     )
     objective = objective_match.group(1).strip() if objective_match else ""
@@ -144,6 +144,29 @@ def parse_development(markdown: str) -> dict:
         "items": [item.as_dict() for item in items],
         "current_item": current.as_dict() if current else None,
     }
+
+
+def _selected_item(state: dict, requested_key: str = "") -> dict:
+    requested_key = str(requested_key or "").strip()
+    if requested_key:
+        return next(
+            (item for item in state.get("items") or [] if item.get("key") == requested_key),
+            {},
+        )
+    current = state.get("current_item")
+    if current:
+        return current
+    items = list(state.get("items") or [])
+    if not items:
+        return {}
+    return min(
+        items,
+        key=lambda item: (
+            PRIORITY_ORDER.get(str(item.get("priority") or "MEDIUM"), 1),
+            STATUS_ORDER.get(str(item.get("status") or "COMPLETE"), 9),
+            items.index(item),
+        ),
+    )
 
 
 def snapshot(project: dict) -> dict:
@@ -350,11 +373,7 @@ def evidence_report(project: dict, item_key: str = "") -> dict:
 
     state = snapshot(project)
     requested_key = str(item_key or "").strip()
-    current = next(
-        (item for item in state.get("items") or [] if item.get("key") == requested_key),
-        None,
-    ) if requested_key else state.get("current_item")
-    current = current or {}
+    current = _selected_item(state, requested_key)
     effective_key = requested_key or str(current.get("key") or "")
     with connect() as conn:
         linked_swarm = None
@@ -722,10 +741,7 @@ def sync_development(project: dict, item_key: str = "") -> dict:
 
     state = snapshot(project)
     requested_key = str(item_key or "").strip()
-    current = next(
-        (item for item in state.get("items") or [] if item.get("key") == requested_key),
-        None,
-    ) if requested_key else state.get("current_item")
+    current = _selected_item(state, requested_key)
     if not state["development_present"]:
         raise ValueError("DEVELOPMENT.md is not present")
     if not current:
