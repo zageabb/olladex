@@ -212,6 +212,14 @@ def resolve_action(project: dict, action: str) -> dict:
     raise ValueError(f"Unsupported development action: {action}")
 
 
+def _meaningful_git_changes(git_state: dict) -> list[dict]:
+    return [
+        item for item in (git_state.get("changes") or [])
+        if not str(item.get("path") or "").startswith(".olladex/")
+        and str(item.get("path") or "") != ".olladex"
+    ]
+
+
 def evidence_report(project: dict, item_key: str = "") -> dict:
     from ..database import connect
     from . import git
@@ -269,7 +277,7 @@ def evidence_report(project: dict, item_key: str = "") -> dict:
     declared_complete = current.get("status") == "COMPLETE" if current else True
     no_active_work = task_summary["active"] == 0
     no_known_incomplete = task_summary["incomplete"] == 0
-    repository_clean = not bool(git_state.get("changes"))
+    repository_clean = not bool(_meaningful_git_changes(git_state))
 
     result = "VERIFIED COMPLETE" if (
         current
@@ -432,7 +440,7 @@ def merge_report(project: dict) -> dict:
     current = state.get("current_item") or {}
     blockers = list(review["blockers"])
     git_state = review["git"]
-    if git_state.get("changes"):
+    if _meaningful_git_changes(git_state):
         blockers.append("Working tree contains uncommitted changes")
     if ci["status"] == "failed":
         blockers.append("CI has failing checks")
@@ -523,4 +531,76 @@ def sync_development(project: dict, item_key: str = "") -> dict:
         "current_item": current,
         "evidence": report,
         "reason": "DEVELOPMENT.md reconciled from repository evidence" if changed else "DEVELOPMENT.md already matches repository evidence",
+    }
+
+
+
+def finalize_post_merge_state(
+    project: dict,
+    item_key: str,
+    *,
+    target_branch: str,
+    promoted_commit: str,
+) -> dict:
+    from . import git
+
+    item_key = str(item_key or "").strip()
+    if not item_key:
+        return {
+            "verified": False,
+            "state_sync_commit": "",
+            "final_head": "",
+            "reason": "No linked development item was recorded for this orchestration run.",
+        }
+
+    before = git.summary(project)
+    if before.get("branch") != target_branch:
+        raise ValueError(
+            f"Post-merge verification requires target branch '{target_branch}' in the configured project worktree"
+        )
+    meaningful_before = _meaningful_git_changes(before)
+    if meaningful_before:
+        raise ValueError("Post-merge development-state sync requires a clean target worktree")
+
+    code, _ = git._git(project, "merge-base", "--is-ancestor", promoted_commit, "HEAD")
+    if code != 0:
+        raise ValueError("Target branch does not contain the promoted integration commit")
+
+    sync = sync_development(project, item_key)
+    state_sync_commit = ""
+    if sync["changed"]:
+        after_sync = git.summary(project)
+        unexpected = [
+            item for item in _meaningful_git_changes(after_sync)
+            if str(item.get("path") or "") != "DEVELOPMENT.md"
+        ]
+        if unexpected:
+            raise ValueError(
+                "Post-merge sync produced unexpected repository changes: "
+                + ", ".join(str(item.get("path") or "") for item in unexpected)
+            )
+        git.stage(project, ["DEVELOPMENT.md"])
+        committed = git.commit(project, f"docs: sync {item_key} development evidence")
+        state_sync_commit = str(committed.get("sha") or "")
+
+    final = git.summary(project)
+    if _meaningful_git_changes(final):
+        raise ValueError("Target worktree is not clean after development-state synchronisation")
+    code, final_head = git._git(project, "rev-parse", "HEAD")
+    if code:
+        raise ValueError(final_head.strip() or "Could not resolve post-merge target HEAD")
+    code, _ = git._git(project, "merge-base", "--is-ancestor", promoted_commit, "HEAD")
+    if code != 0:
+        raise ValueError("Promoted integration commit is missing after development-state synchronisation")
+
+    evidence = evidence_report(project, item_key)
+    return {
+        "verified": True,
+        "target_branch": target_branch,
+        "promoted_commit": promoted_commit,
+        "state_sync_commit": state_sync_commit,
+        "final_head": final_head.strip(),
+        "development_result": evidence["result"],
+        "evidence": evidence,
+        "sync": sync,
     }
