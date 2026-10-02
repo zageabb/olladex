@@ -79,9 +79,14 @@ Completion criteria:
 
 ### DEV-001 — Verified Development & Persistent Project State
 
-Status: 🔵 PLANNED  
+Status: 🔨 IN PROGRESS  
 Priority: High  
-Target: v0.8 — Verified Development & Persistent Project State
+Target: v0.8 — Verified Development & Persistent Project State  
+Owner/Agent: Advanced orchestration development  
+Branch: `feature/swarm-v0.7`  
+Depends on: existing task queue, agent runtime, worktree and integration services  
+Can run in parallel with: UI polish that does not alter orchestration state semantics  
+Integration status: isolated development branch; CI-backed implementation evidence exists but merge/post-merge verification is outstanding
 
 Requirement:
 Turn the development workflow proven through ChatGPT and Olladex usage into native Olladex behaviour so the user does not need to repeatedly prompt agents to read project state, continue correctly, prove completion, recover from failed work, or verify CI and merges.
@@ -278,16 +283,23 @@ Result: INCOMPLETE
 ```
 
 Implementation:
-Not started.
+- False-completion validation now rejects implementation tasks that return without durable repository changes.
+- Requested validation is tracked separately; changed code without requested validation becomes recoverable `incomplete`, not complete.
+- Completion evidence records starting/final branch heads and auto-commit SHA.
+- Reviewer evidence is invalidated if a specialist branch changes after task completion.
+- Integration records specialist branch heads at preparation time and blocks promotion if those heads later change.
+- Budget exhaustion, no-progress and incomplete states remain recoverable, with retry limits and user override/abandon controls.
+- Recovery can restart dependent work automatically after a recovered prerequisite completes.
+- This development ledger and AGENTS.md are now present on the active development branch.
 
 Evidence:
-- Commit:
-- PR:
-- Files:
-- Tests:
-- CI:
-- Merged to intended branch:
-- User/business acceptance:
+- Commit: latest verified implementation before this ledger sync: `4cce4891643ead5d233d6aa87c8362b6696f81fc`
+- Files: `backend/app/services/task_queue.py`, `backend/app/services/swarm_finalization.py`, `backend/app/services/integration.py`, `backend/app/services/swarm_coordinator.py`, `backend/app/swarm_routes.py`, orchestration/recovery tests, `AGENTS.md`, `DEVELOPMENT.md`
+- Tests: backend regression coverage includes false completion, tester exemptions, no-progress, requested validation, recovery lifecycle, stale reviewer evidence and stale integration detection.
+- CI: GitHub Actions CI #478 passed on `4cce4891643ead5d233d6aa87c8362b6696f81fc`.
+- PR: existing Swarm/Advanced orchestration development line; final merge evidence still outstanding.
+- Merged to intended branch: no — active work remains on `feature/swarm-v0.7`.
+- User/business acceptance: not yet complete; current objective remains in progress.
 
 Completion criteria:
 - [ ] Olladex automatically reads `AGENTS.md` and `DEVELOPMENT.md` for development orchestration.
