@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
 from .database import connect
 from .services import development_state, git
 
 
 router = APIRouter(prefix="/api", tags=["development"])
+
+
+class DevelopmentModeRequest(BaseModel):
+    mode: str = Field(min_length=1, max_length=32)
 
 
 def _project(project_id: int) -> dict:
@@ -46,6 +51,8 @@ def get_development_state(project_id: int):
         "items": state.get("items") or [],
         "agents_present": state["agents_present"],
         "development_present": state["development_present"],
+        "development_mode": development_state.normalise_mode(project.get("development_mode") or "build"),
+        "available_modes": development_state.DEVELOPMENT_MODES,
         "git": git.summary(project),
     }
 
@@ -57,3 +64,19 @@ def run_development_action(project_id: int, action: str):
         return _response(project, action.strip().lower().lstrip("/"))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@router.put("/projects/{project_id}/development-mode")
+def update_development_mode(project_id: int, body: DevelopmentModeRequest):
+    project = _project(project_id)
+    try:
+        mode = development_state.normalise_mode(body.mode)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    with connect() as conn:
+        conn.execute("UPDATE projects SET development_mode=? WHERE id=?", (mode, project_id))
+    return {
+        "project_id": project_id,
+        "development_mode": mode,
+        "description": development_state.DEVELOPMENT_MODES[mode],
+    }
