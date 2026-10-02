@@ -79,9 +79,21 @@ def enqueue(
     task_kind: str = "specialist",
     priority: int = 100,
     depth: int = 0,
+    ownership_scope: list[str] | None = None,
+    acceptance_criteria: list[str] | None = None,
 ) -> dict:
     stamp = now()
     dependency_ids = [int(item) for item in (depends_on or []) if int(item) > 0]
+    ownership = sorted({
+        str(item).strip()
+        for item in (ownership_scope or [])
+        if str(item).strip()
+    })
+    criteria = [
+        str(item).strip()
+        for item in (acceptance_criteria or [])
+        if str(item).strip()
+    ]
     with connect() as conn:
         if parent_task_id is not None:
             parent = conn.execute("SELECT id,project_id FROM background_tasks WHERE id=?", (parent_task_id,)).fetchone()
@@ -99,12 +111,34 @@ def enqueue(
                 raise ValueError("Cannot add tasks to a finished swarm")
             if int(swarm["total_agents_created"] or 0) >= int(swarm["max_agents"] or 1):
                 raise ValueError("Swarm has reached its maximum agent count")
+            if ownership:
+                for existing in conn.execute(
+                    "SELECT id,status,ownership_scope FROM background_tasks "
+                    "WHERE swarm_id=? AND status IN ('queued','running','waiting_for_input','waiting_for_approval')",
+                    (swarm_id,),
+                ):
+                    try:
+                        existing_scope = {
+                            str(item).strip()
+                            for item in json.loads(existing["ownership_scope"] or "[]")
+                            if str(item).strip()
+                        }
+                    except (TypeError, json.JSONDecodeError):
+                        existing_scope = set()
+                    overlap = sorted(set(ownership) & existing_scope)
+                    if overlap and int(existing["id"]) not in dependency_ids:
+                        raise ValueError(
+                            "Parallel ownership conflict with task "
+                            f"#{existing['id']}: {', '.join(overlap)}. "
+                            "Add a dependency or assign non-overlapping ownership."
+                        )
         cursor = conn.execute(
-            "INSERT INTO background_tasks(project_id,session_id,title,prompt,source_kind,source_ref,status,parent_task_id,depends_on,agent_role,swarm_id,model_profile_id,assigned_model,task_kind,priority,depth,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO background_tasks(project_id,session_id,title,prompt,source_kind,source_ref,status,parent_task_id,depends_on,agent_role,swarm_id,model_profile_id,assigned_model,task_kind,priority,depth,ownership_scope,acceptance_criteria,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 project_id, session_id, title, prompt, source_kind, source_ref, "queued",
                 parent_task_id, json.dumps(dependency_ids), agent_role or "worker", swarm_id,
-                model_profile_id, assigned_model, task_kind or "specialist", int(priority), int(depth), stamp,
+                model_profile_id, assigned_model, task_kind or "specialist", int(priority), int(depth),
+                json.dumps(ownership), json.dumps(criteria), stamp,
             ),
         )
         if swarm_id is not None:
@@ -128,6 +162,11 @@ def get(task_id: int) -> dict:
         result["blocking_dependency_ids"] = json.loads(result.get("blocking_dependency_ids") or "[]")
     except (TypeError, json.JSONDecodeError):
         result["blocking_dependency_ids"] = []
+    for field in ("ownership_scope", "acceptance_criteria"):
+        try:
+            result[field] = json.loads(result.get(field) or "[]")
+        except (TypeError, json.JSONDecodeError):
+            result[field] = []
     return result
 
 
@@ -143,6 +182,11 @@ def list_for_project(project_id: int) -> list[dict]:
             item["blocking_dependency_ids"] = json.loads(item.get("blocking_dependency_ids") or "[]")
         except (TypeError, json.JSONDecodeError):
             item["blocking_dependency_ids"] = []
+        for field in ("ownership_scope", "acceptance_criteria"):
+            try:
+                item[field] = json.loads(item.get(field) or "[]")
+            except (TypeError, json.JSONDecodeError):
+                item[field] = []
         item["recovery"] = None
         if item.get("status") in RECOVERABLE_TASK_STATUSES | {"failed"}:
             try:
