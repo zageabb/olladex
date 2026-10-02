@@ -96,3 +96,84 @@ def test_enqueue_rejects_cross_project_dependency(tmp_path, monkeypatch):
         assert "same project" in str(exc)
     else:
         raise AssertionError("Cross-project dependency should be rejected")
+
+
+
+def test_parallel_swarm_tasks_reject_overlapping_ownership_without_dependency(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    stamp = now()
+    with connect() as conn:
+        swarm_id = int(conn.execute(
+            "INSERT INTO swarm_runs(project_id,session_id,title,objective,status,max_agents,max_concurrency,created_at,started_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (project_id, session_id, "Ownership", "Coordinate safely", "running", 6, 3, stamp, stamp),
+        ).lastrowid)
+
+    first = task_queue.enqueue(
+        project_id,
+        session_id,
+        "Own auth",
+        "Implement authentication.",
+        swarm_id=swarm_id,
+        source_kind="swarm_specialist",
+        agent_role="backend",
+        task_kind="backend",
+        ownership_scope=["backend/app/auth.py"],
+        acceptance_criteria=["Authentication tests pass."],
+    )
+
+    with pytest.raises(ValueError) as exc:
+        task_queue.enqueue(
+            project_id,
+            session_id,
+            "Also own auth",
+            "Change authentication too.",
+            swarm_id=swarm_id,
+            source_kind="swarm_specialist",
+            agent_role="backend",
+            task_kind="backend",
+            ownership_scope=["backend/app/auth.py"],
+            acceptance_criteria=["Regression is fixed."],
+        )
+
+    assert str(first["id"]) in str(exc.value)
+    assert "ownership conflict" in str(exc.value).lower()
+
+
+def test_overlapping_ownership_is_allowed_when_explicitly_sequenced(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    stamp = now()
+    with connect() as conn:
+        swarm_id = int(conn.execute(
+            "INSERT INTO swarm_runs(project_id,session_id,title,objective,status,max_agents,max_concurrency,created_at,started_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (project_id, session_id, "Ownership", "Coordinate safely", "running", 6, 3, stamp, stamp),
+        ).lastrowid)
+
+    first = task_queue.enqueue(
+        project_id,
+        session_id,
+        "Base auth change",
+        "Implement authentication.",
+        swarm_id=swarm_id,
+        source_kind="swarm_specialist",
+        ownership_scope=["backend/app/auth.py"],
+        acceptance_criteria=["Authentication tests pass."],
+    )
+    second = task_queue.enqueue(
+        project_id,
+        session_id,
+        "Follow-up auth change",
+        "Extend authentication.",
+        swarm_id=swarm_id,
+        source_kind="swarm_specialist",
+        depends_on=[first["id"]],
+        ownership_scope=["backend/app/auth.py"],
+        acceptance_criteria=["Follow-up behaviour is verified."],
+    )
+
+    assert second["depends_on"] == [first["id"]]
+    assert second["ownership_scope"] == ["backend/app/auth.py"]
+    assert second["acceptance_criteria"] == ["Follow-up behaviour is verified."]
+    assert "Assigned ownership for this task" in second["prompt"]
+    assert "Acceptance criteria for this task" in second["prompt"]
