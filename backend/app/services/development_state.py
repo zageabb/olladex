@@ -443,20 +443,59 @@ def recovery_report(project: dict) -> dict:
 
 
 def merge_report(project: dict) -> dict:
+    from ..database import connect
+
     state = snapshot(project)
     review = review_report(project)
     ci = ci_report(project)
     current = state.get("current_item") or {}
-    blockers = list(review["blockers"])
     git_state = review["git"]
+    blockers = [
+        item for item in review["blockers"]
+        if "acceptance criterion" not in item
+    ]
     if _meaningful_git_changes(git_state):
         blockers.append("Working tree contains uncommitted changes")
-    if ci["status"] == "failed":
-        blockers.append("CI has failing checks")
-    elif ci["status"] in {"pending", "unavailable"}:
-        blockers.append("CI is not verified as passed")
-    if current and current.get("status") != "COMPLETE":
-        blockers.append(f"{current.get('key')} is still marked {current.get('status')}")
+
+    remote_present = bool(git_state.get("remotes"))
+    if remote_present:
+        if ci["status"] == "failed":
+            blockers.append("CI has failing checks")
+        elif ci["status"] != "passed":
+            blockers.append("CI is not verified as passed")
+
+    criteria = current.get("criteria") or []
+    post_merge_pattern = re.compile(
+        r"\b(?:merge|merged|post[- ]merge|intended branch|development state update|development\.md is updated)\b",
+        re.I,
+    )
+    pre_merge_unchecked = [
+        item.get("text") or ""
+        for item in criteria
+        if not item.get("complete") and not post_merge_pattern.search(str(item.get("text") or ""))
+    ]
+    if pre_merge_unchecked:
+        blockers.append(
+            f"{len(pre_merge_unchecked)} pre-merge acceptance criterion/criteria remain unchecked"
+        )
+
+    linked_swarm = None
+    if current:
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT id,title,status,integration_check_status,promotion_status,promoted_commit "
+                "FROM swarm_runs WHERE project_id=? AND development_item_key=? ORDER BY id DESC LIMIT 1",
+                (project["id"], current.get("key") or ""),
+            ).fetchone()
+        linked_swarm = dict(row) if row else None
+    if linked_swarm:
+        if linked_swarm.get("status") != "ready_to_promote":
+            blockers.append(
+                f"Advanced orchestration #{linked_swarm['id']} is {linked_swarm.get('status')}, not ready to promote"
+            )
+        if linked_swarm.get("integration_check_status") != "passed":
+            blockers.append("Combined integration checks have not passed")
+
     return {
         "ready": not blockers,
         "target_branch": "main",
@@ -464,6 +503,8 @@ def merge_report(project: dict) -> dict:
         "blockers": list(dict.fromkeys(blockers)),
         "review": review,
         "ci": ci,
+        "linked_swarm": linked_swarm,
+        "pre_merge_unchecked": pre_merge_unchecked,
     }
 
 
