@@ -240,6 +240,14 @@ def recovery_info(task_id: int) -> dict:
 
 def _recovery_context(task: dict, prior_run: dict, summary: dict, fresh_budget: int) -> str:
     dependency_context = _dependency_context(task)
+    recovery_attempt = int(task.get("recovery_attempt") or 0)
+    root_cause_gate = (
+        "\n\nROOT-CAUSE GATE: this task has already required repeated recovery. Before making another code edit, "
+        "inspect the actual failure, current diff, relevant history and test/runtime evidence, then call record_root_cause "
+        "with a concise evidence-backed explanation of the underlying cause and why the proposed correction addresses it. "
+        "write_file/apply_patch remain blocked until that analysis is recorded."
+        if recovery_attempt >= 2 else ""
+    )
     return (
         "Continue the existing task from its saved checkpoint and worktree. Inspect saved changes and uncertain command "
         "outcomes before editing. Do not restart or discard completed work. Do not claim completion until the task's "
@@ -257,6 +265,7 @@ def _recovery_context(task: dict, prior_run: dict, summary: dict, fresh_budget: 
         + (f"\n{dependency_context}\n" if dependency_context else "")
         + "\nExplicit remaining work: inspect the saved checkpoint, current worktree, prior command outcomes and acceptance criteria; "
         "finish only the work that remains, run relevant checks, and provide evidence for completion."
+        + root_cause_gate
     )
 
 
@@ -356,10 +365,11 @@ def resume_task(
         "completed_at": str(task.get("completed_at") or ""),
         "current_activity": str(task.get("current_activity") or ""),
         "no_progress_reason": str(task.get("no_progress_reason") or ""),
+        "root_cause_analysis": str(task.get("root_cause_analysis") or ""),
     }
     with connect() as conn:
         conn.execute(
-            "UPDATE background_tasks SET budget_override=?,recovery_attempt=?,retry_lineage=?,no_progress_reason='',error='',completed_at='',current_activity=? WHERE id=?",
+            "UPDATE background_tasks SET budget_override=?,recovery_attempt=?,retry_lineage=?,no_progress_reason='',root_cause_analysis='',error='',completed_at='',current_activity=? WHERE id=?",
             (budget, attempt, json.dumps(lineage), f"Recovery attempt {attempt}: restoring checkpoint from run #{prior['id']}", task_id),
         )
 
@@ -379,7 +389,7 @@ def resume_task(
     except Exception:
         with connect() as conn:
             conn.execute(
-                "UPDATE background_tasks SET budget_override=?,recovery_attempt=?,retry_lineage=?,error=?,completed_at=?,current_activity=?,no_progress_reason=? WHERE id=?",
+                "UPDATE background_tasks SET budget_override=?,recovery_attempt=?,retry_lineage=?,error=?,completed_at=?,current_activity=?,no_progress_reason=?,root_cause_analysis=? WHERE id=?",
                 (
                     previous["budget_override"],
                     previous["recovery_attempt"],
@@ -388,6 +398,7 @@ def resume_task(
                     previous["completed_at"],
                     previous["current_activity"],
                     previous["no_progress_reason"],
+                    previous["root_cause_analysis"],
                     task_id,
                 ),
             )
@@ -584,6 +595,23 @@ def set_progress(task_id: int, progress: int, current_activity: str = "") -> Non
             "UPDATE background_tasks SET progress=?,current_activity=? WHERE id=?",
             (value, str(current_activity or "")[:1000], task_id),
         )
+
+
+def record_root_cause(task_id: int, analysis: str) -> dict:
+    analysis = str(analysis or "").strip()
+    if len(analysis) < 40:
+        raise ValueError("Root-cause analysis must explain the observed failure and the evidence supporting the next change")
+    with connect() as conn:
+        row = conn.execute("SELECT recovery_attempt FROM background_tasks WHERE id=?", (task_id,)).fetchone()
+        if not row:
+            raise ValueError("Background task not found")
+        if int(row["recovery_attempt"] or 0) < 2:
+            raise ValueError("Root-cause analysis is only required after repeated recovery attempts")
+        conn.execute(
+            "UPDATE background_tasks SET root_cause_analysis=?,current_activity=? WHERE id=?",
+            (analysis[:20000], "Root cause recorded; corrective edits may proceed", task_id),
+        )
+    return get(task_id)
 
 
 def current_worktree_path() -> str:
