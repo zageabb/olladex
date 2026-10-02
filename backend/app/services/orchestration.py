@@ -28,10 +28,13 @@ def decompose(project: dict, objective: str, max_tasks: int = 6, *, swarm_mode: 
     prompt = f"""You are the lead software-engineering coordinator for Olladex.
 Break the objective into 2-{max_tasks} focused specialist tasks that can execute in parallel where safe.
 Return JSON only with this exact shape:
-{{"tasks":[{{"title":"...","role":"{role_text}","prompt":"...","depends_on":[0,1]}}]}}
+{{"tasks":[{{"title":"...","role":"{role_text}","prompt":"...","depends_on":[0,1],"ownership":["path/or/module"],"acceptance_criteria":["observable completion condition"]}}]}}
 Rules:
 - depends_on contains zero-based indexes of earlier tasks only.
 - keep tasks narrowly scoped and implementation-ready.
+- ownership lists files, modules, routes, components, or subsystems this task owns. Use an empty list for read-only analysis/testing tasks when exclusive ownership is unnecessary.
+- acceptance_criteria lists concrete evidence the specialist must produce before the task can be considered complete.
+- tasks that touch the same ownership area must be sequenced with depends_on rather than presented as parallel work.
 {verification_rule}
 - do not create a final consolidation task; Olladex adds that automatically.
 
@@ -82,7 +85,26 @@ Objective:\n{objective.strip()}\n\nPersistent repository development state:\n{pe
                 dependencies.append(mapped)
         result_index = len(result)
         source_to_result[source_index] = result_index
-        result.append({"title": title, "role": role, "prompt": task_prompt, "depends_on": sorted(set(dependencies))})
+        ownership = [
+            str(value).strip()
+            for value in (item.get("ownership") or [])
+            if str(value).strip()
+        ][:20]
+        acceptance_criteria = [
+            str(value).strip()
+            for value in (item.get("acceptance_criteria") or [])
+            if str(value).strip()
+        ][:20]
+        if role not in {"researcher", "tester"} and not acceptance_criteria:
+            acceptance_criteria = ["Requested implementation exists and relevant validation passes."]
+        result.append({
+            "title": title,
+            "role": role,
+            "prompt": task_prompt,
+            "depends_on": sorted(set(dependencies)),
+            "ownership": ownership,
+            "acceptance_criteria": acceptance_criteria,
+        })
     if len(result) < 2:
         raise ValueError("Lead planner must produce at least two actionable specialist tasks")
     return result
