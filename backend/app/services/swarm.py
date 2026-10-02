@@ -453,6 +453,11 @@ def list_agents(swarm_id: int) -> list[dict]:
                 item["blocking_dependency_ids"] = json.loads(item.get("blocking_dependency_ids") or "[]")
             except (TypeError, json.JSONDecodeError):
                 item["blocking_dependency_ids"] = []
+            for field in ("ownership_scope", "acceptance_criteria"):
+                try:
+                    item[field] = json.loads(item.get(field) or "[]")
+                except (TypeError, json.JSONDecodeError):
+                    item[field] = []
             item["recovery"] = None
             if item.get("status") in {"budget_exhausted", "interrupted", "no_progress", "incomplete", "failed"}:
                 try:
