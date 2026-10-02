@@ -1,0 +1,59 @@
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException
+
+from .database import connect
+from .services import development_state, git
+
+
+router = APIRouter(prefix="/api", tags=["development"])
+
+
+def _project(project_id: int) -> dict:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Project not found")
+    return dict(row)
+
+
+def _response(project: dict, action: str) -> dict:
+    resolved = development_state.resolve_action(project, action)
+    current = resolved.get("current_item") or {}
+    return {
+        **resolved,
+        "git": git.summary(project),
+        "execution": {
+            "mode": (
+                "verify" if action in {"verify", "evidence"}
+                else "autonomous" if action == "continue"
+                else "plan"
+            ),
+            "objective": current.get("title") or resolved.get("current_objective") or "",
+            "dev_item": current.get("key") or "",
+        },
+    }
+
+
+@router.get("/projects/{project_id}/development-state")
+def get_development_state(project_id: int):
+    project = _project(project_id)
+    state = development_state.snapshot(project)
+    return {
+        "project_id": project_id,
+        "current_objective": state.get("current_objective") or "",
+        "current_item": state.get("current_item"),
+        "items": state.get("items") or [],
+        "agents_present": state["agents_present"],
+        "development_present": state["development_present"],
+        "git": git.summary(project),
+    }
+
+
+@router.post("/projects/{project_id}/development-actions/{action}")
+def run_development_action(project_id: int, action: str):
+    project = _project(project_id)
+    try:
+        return _response(project, action.strip().lower().lstrip("/"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
