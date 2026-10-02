@@ -391,12 +391,41 @@ def ci_report(project: dict) -> dict:
 
 
 def review_report(project: dict) -> dict:
-    from . import git
+    from ..database import connect
+    from . import git, integration
 
     state = snapshot(project)
-    evidence = evidence_report(project)
+    current = state.get("current_item") or {}
+    evidence = evidence_report(project, current.get("key") or "")
     git_state = git.summary(project)
-    diff = git.diff(project)
+
+    linked_swarm = None
+    if current:
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM swarm_runs WHERE project_id=? AND development_item_key=? ORDER BY id DESC LIMIT 1",
+                (project["id"], current.get("key") or ""),
+            ).fetchone()
+        linked_swarm = dict(row) if row else None
+
+    diff = ""
+    diff_source = "working_tree"
+    if linked_swarm and linked_swarm.get("integration_path"):
+        try:
+            integration_state = integration.summary(project, str(linked_swarm["integration_path"]), "main")
+            diff = str(integration_state.get("diff") or "")
+            diff_source = "integration"
+        except ValueError:
+            diff = ""
+    if not diff:
+        code, branch_diff = git._git(project, "diff", "main...HEAD", "--", ".")
+        if code == 0:
+            diff = branch_diff[-750000:]
+            diff_source = "branch"
+        else:
+            diff = git.diff(project)
+            diff_source = "working_tree"
+
     blockers: list[str] = []
     if evidence["validation"]["active_tasks"]:
         blockers.append(f"{evidence['validation']['active_tasks']} development task(s) are still active")
@@ -411,7 +440,9 @@ def review_report(project: dict) -> dict:
         "current_item": current or None,
         "git": git_state,
         "diff": diff,
+        "diff_source": diff_source,
         "diff_present": bool(diff.strip()),
+        "linked_swarm": linked_swarm,
         "blockers": blockers,
         "ready_for_release_review": not blockers and not bool(git_state.get("changes")),
         "evidence": evidence,
