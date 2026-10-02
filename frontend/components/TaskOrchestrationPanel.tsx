@@ -41,7 +41,7 @@ type SwarmIntegrationPlan = { task_ids?:number[]; branches:string[]; overlaps:{p
 type DevelopmentItem = { key:string; title:string; status:string; priority:string; body:string };
 type DevelopmentState = { project_id:number; current_objective:string; current_item?:DevelopmentItem|null; items:DevelopmentItem[]; agents_present:boolean; development_present:boolean; development_mode:string; available_modes:Record<string,string>; git:{repository:boolean;branch:string;changes:{status:string;path:string}[];ahead:number;behind:number} };
 type DevelopmentEvidence = { result:string; current_objective:string; current_item?:DevelopmentItem|null; implementation:{repository_state_present:boolean;git_branch:string;working_tree_clean:boolean;recent_completed_tasks:number}; validation:{active_tasks:number;incomplete_tasks:number;latest_swarm?:{id:number;title:string;status:string;integration_check_status:string;promotion_status:string;promoted_commit:string}|null}; acceptance:{criteria_completed:number;criteria_total:number;all_declared_criteria_complete:boolean;ledger_status:string} };
-type DevelopmentAction = { action:string; current_objective:string; current_item?:DevelopmentItem|null; execution:{mode:string;objective:string;dev_item:string}; evidence?:DevelopmentEvidence };
+type DevelopmentAction = { action:string; current_objective:string; current_item?:DevelopmentItem|null; execution:{mode:string;objective:string;dev_item:string}; evidence?:DevelopmentEvidence; ci?:{status:string;checks?:{name:string;conclusion:string}[];reason?:string;pull_request?:{number?:number;title?:string}|null}; review?:{blockers:string[];diff_present:boolean;ready_for_release_review:boolean}; recovery?:{count:number;requires_root_cause:number[]}; merge?:{ready:boolean;blockers:string[];target_branch:string;current_branch:string}; sync?:{changed:boolean;reason:string} };
 
 export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversation }: { projectId:number; onCreated:()=>void; onOpenConversation?:(sessionId:number)=>void }) {
   const [graph,setGraph]=useState<Graph>({project_id:projectId,nodes:[]});
@@ -172,7 +172,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
     finally{setBusy(false);}
   }
 
-  async function runDevelopmentAction(action:"status"|"next"|"continue"|"verify"|"evidence"|"sync-state"){
+  async function runDevelopmentAction(action:"status"|"next"|"continue"|"verify"|"evidence"|"ci"|"review"|"recover"|"merge"|"sync-state"){
     setBusy(true);
     try{
       const result=await request<DevelopmentAction>(`/projects/${projectId}/development-actions/${action}`,{method:"POST"});
@@ -210,8 +210,27 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
         setNotice(result.current_item
           ? `${action==="verify"?"Verification":"Evidence"} target: ${result.current_item.key} — ${result.current_item.title}`
           : "No incomplete development item was found.");
+      }else if(action==="ci"){
+        const failed=(result.ci?.checks||[]).filter(item=>["FAILURE","FAILED","ERROR","CANCELLED","TIMED_OUT","ACTION_REQUIRED"].includes(item.conclusion)).length;
+        setNotice(result.ci?.status==="passed"
+          ? `CI passed · ${result.ci?.checks?.length||0} checks`
+          : result.ci?.status==="failed"
+          ? `CI failed · ${failed} failing check(s)`
+          : `CI ${result.ci?.status||"unknown"} · ${result.ci?.reason||"verification incomplete"}`);
+      }else if(action==="review"){
+        setNotice(result.review?.ready_for_release_review
+          ? "Pre-merge review has no repository blockers."
+          : `Review blocked · ${(result.review?.blockers||[]).join("; ")||"evidence remains incomplete"}`);
+      }else if(action==="recover"){
+        setNotice(result.recovery?.count
+          ? `Recovery found ${result.recovery.count} stopped task(s)${result.recovery.requires_root_cause.length?` · root-cause analysis required for #${result.recovery.requires_root_cause.join(", #")}`:""}`
+          : "No recoverable or failed development tasks found.");
+      }else if(action==="merge"){
+        setNotice(result.merge?.ready
+          ? `Release gate passed for ${result.merge.current_branch} → ${result.merge.target_branch}`
+          : `Merge blocked · ${(result.merge?.blockers||[]).join("; ")||"release evidence incomplete"}`);
       }else if(action==="sync-state"){
-        setNotice("Repository development state refreshed from DEVELOPMENT.md, AGENTS.md and Git.");
+        setNotice(result.sync?.reason||"Repository development state refreshed from evidence.");
       }else if(action==="status"){
         setNotice(result.current_item
           ? `${result.current_item.key} · ${result.current_item.status} · ${result.current_item.priority}`
@@ -666,8 +685,13 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
         <div>
           <button type="button" onClick={()=>runDevelopmentAction("status")} disabled={busy}>Status</button>
           <button type="button" className="primary" onClick={()=>runDevelopmentAction("continue")} disabled={busy||!developmentState.current_item}>Continue</button>
+          <button type="button" onClick={()=>runDevelopmentAction("next")} disabled={busy}>Next</button>
           <button type="button" onClick={()=>runDevelopmentAction("verify")} disabled={busy}>Verify</button>
           <button type="button" onClick={()=>runDevelopmentAction("evidence")} disabled={busy}>Evidence</button>
+          <button type="button" onClick={()=>runDevelopmentAction("ci")} disabled={busy}>CI</button>
+          <button type="button" onClick={()=>runDevelopmentAction("review")} disabled={busy}>Review</button>
+          <button type="button" onClick={()=>runDevelopmentAction("recover")} disabled={busy}>Recover</button>
+          <button type="button" onClick={()=>runDevelopmentAction("merge")} disabled={busy}>Merge</button>
           <button type="button" onClick={()=>runDevelopmentAction("sync-state")} disabled={busy}>Sync state</button>
         </div>
       </div>
