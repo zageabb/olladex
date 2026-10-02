@@ -580,6 +580,7 @@ def validate_arguments(name, args):
               "swarm_publish_decision": SwarmPublish,
               "swarm_publish_risk": SwarmPublish,
               "swarm_publish_handoff": SwarmPublish,
+              "swarm_publish_followup": SwarmPublish,
               "swarm_request_help": SwarmPublish}.get(name)
     if schema is None:
         raise ValueError(f"Unknown tool: {name}")
