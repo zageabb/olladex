@@ -14,6 +14,12 @@ class DevelopmentModeRequest(BaseModel):
     mode: str = Field(min_length=1, max_length=32)
 
 
+class DevelopmentContinueRequest(BaseModel):
+    profile_id: int
+    max_agents: int | None = Field(default=None, ge=2, le=20)
+    max_concurrency: int | None = Field(default=None, ge=1, le=8)
+
+
 def _project(project_id: int) -> dict:
     with connect() as conn:
         row = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
@@ -89,3 +95,40 @@ def update_development_mode(project_id: int, body: DevelopmentModeRequest):
 def get_development_evidence(project_id: int):
     project = _project(project_id)
     return development_state.evidence_report(project)
+
+
+@router.post("/projects/{project_id}/development-actions/continue/start")
+def start_current_development_item(project_id: int, body: DevelopmentContinueRequest):
+    project = _project(project_id)
+    state = development_state.snapshot(project)
+    current = state.get("current_item")
+    if not current:
+        raise HTTPException(409, "No incomplete DEVELOPMENT.md item is available to continue")
+    mode = development_state.normalise_mode(project.get("development_mode") or "build")
+    if mode in {"explore", "plan", "verify"}:
+        raise HTTPException(409, f"Development mode '{mode}' does not permit implementation execution")
+    objective = "\n\n".join(
+        part for part in (
+            state.get("current_objective") or "",
+            f"Continue {current['key']} — {current['title']}.",
+            current.get("body") or "",
+            (
+                "Continue autonomously until the current objective is verified complete, "
+                "a genuinely ambiguous product decision is required, progress is blocked outside the repository, "
+                "or continuing would risk destructive changes. Do not stop merely because one implementation step completed."
+                if mode == "autonomous" else ""
+            ),
+        )
+        if part
+    )
+    from .swarm_routes import SwarmCreateRequest, create_swarm
+    return create_swarm(
+        project_id,
+        SwarmCreateRequest(
+            objective=objective,
+            title=f"{current['key']}: {current['title']}",
+            profile_id=body.profile_id,
+            max_agents=body.max_agents,
+            max_concurrency=body.max_concurrency,
+        ),
+    )
