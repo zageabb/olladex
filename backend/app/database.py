@@ -314,6 +314,7 @@ ADDITIVE_COLUMNS = {
         "promotion_output": "TEXT NOT NULL DEFAULT ''",
         "coordinator_instructions": "TEXT NOT NULL DEFAULT ''",
         "coordinator_budget_extra": "INTEGER NOT NULL DEFAULT 0",
+        "development_item_key": "TEXT NOT NULL DEFAULT ''",
     },
     "swarm_profiles": {
         "resumed_task_tool_budget": "INTEGER NOT NULL DEFAULT 20",
