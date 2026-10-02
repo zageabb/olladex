@@ -107,6 +107,9 @@ def test_swarm_blackboard_tools_are_strictly_validated():
     handoff = ollama.validate_arguments("swarm_publish_handoff", {"content": "Done", "key": "final"})
     assert handoff == {"content": "Done", "key": "final"}
 
+    followup = ollama.validate_arguments("swarm_publish_followup", {"content": "Refactor later", "key": "debt"})
+    assert followup == {"content": "Refactor later", "key": "debt"}
+
     help_request = ollama.validate_arguments("swarm_request_help", {"content": "Need an independent tester", "key": "tests"})
     assert help_request == {"content": "Need an independent tester", "key": "tests"}
 
