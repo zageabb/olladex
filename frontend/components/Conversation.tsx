@@ -6,6 +6,7 @@ import { MarkdownBody } from "./MarkdownBody";
 type Run = { id: number; status: string };
 type Event = { id: number; run_id: number; kind: string; payload: any };
 const activeStates = ["running", "waiting_for_input", "waiting_for_approval", "stopping"];
+const developmentActions = new Set(["/status", "/continue", "/verify", "/evidence", "/ci", "/review", "/recover", "/next", "/merge", "/sync-state"]);
 
 export function Conversation({ sessionId, onChanged }: { sessionId: number; onChanged: () => void }) {
   const [runs, setRuns] = useState<Run[]>([]);
@@ -77,7 +78,14 @@ export function Conversation({ sessionId, onChanged }: { sessionId: number; onCh
     const content = prompt.trim(); setSending(true); setError("");
     try {
       if (active) await request(`/runs/${current.id}/input`, { method: "POST", body: JSON.stringify({ content }) });
-      else {
+      else if (developmentActions.has(content.toLowerCase())) {
+        const result = await request<{ messages:any[] }>(`/sessions/${sessionId}/development-action`, {
+          method: "POST",
+          body: JSON.stringify({ content }),
+        });
+        if (mounted.current) setLegacy(items => [...items, ...result.messages]);
+        changed.current();
+      } else {
         const run = await request<Run>(`/sessions/${sessionId}/runs`, { method: "POST", body: JSON.stringify({ content }) });
         if (mounted.current) setRuns(items => [...items.filter(item => item.id !== run.id), run]);
       }
@@ -155,6 +163,6 @@ export function Conversation({ sessionId, onChanged }: { sessionId: number; onCh
       <div ref={tail} />
     </div>
     {error && <p className="conversation-error" role="alert">{error}</p>}
-    <form className="composer" onSubmit={send}><textarea aria-label="Message Olladex" value={prompt} onChange={e => setPrompt(e.target.value)} placeholder={active ? "Keep chatting — add guidance or change direction…" : "Ask Olladex anything…"} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} /><div className="composer-actions"><span>{active ? "Olladex is working · you can keep chatting" : "Local conversation · reviewable changes"}</span>{active && <button type="button" onClick={() => act(`/runs/${current.id}`, undefined, "DELETE")}>Stop</button>}<button className="primary" disabled={!prompt.trim() || sending || !ready}>{active ? current.status === "waiting_for_input" ? "Reply" : "Send" : "Send"}</button></div></form>
+    <form className="composer" onSubmit={send}><textarea aria-label="Message Olladex" value={prompt} onChange={e => setPrompt(e.target.value)} placeholder={active ? "Keep chatting — add guidance or change direction…" : "Ask Olladex anything… Try /status or /continue"} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} /><div className="composer-actions"><span>{active ? "Olladex is working · you can keep chatting" : "Local conversation · reviewable changes"}</span>{active && <button type="button" onClick={() => act(`/runs/${current.id}`, undefined, "DELETE")}>Stop</button>}<button className="primary" disabled={!prompt.trim() || sending || !ready}>{active ? current.status === "waiting_for_input" ? "Reply" : "Send" : "Send"}</button></div></form>
   </>;
 }
