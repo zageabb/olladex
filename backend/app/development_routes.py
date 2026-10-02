@@ -29,33 +29,7 @@ def _project(project_id: int) -> dict:
 
 
 def _response(project: dict, action: str) -> dict:
-    resolved = development_state.resolve_action(project, action)
-    current = resolved.get("current_item") or {}
-    response = {
-        **resolved,
-        "git": git.summary(project),
-        "execution": {
-            "mode": resolved.get("mode") or "plan",
-            "objective": current.get("title") or resolved.get("current_objective") or "",
-            "dev_item": current.get("key") or "",
-        },
-    }
-    if action in {"verify", "evidence"}:
-        response["evidence"] = development_state.evidence_report(project)
-    elif action == "ci":
-        response["ci"] = development_state.ci_report(project)
-    elif action == "review":
-        response["review"] = development_state.review_report(project)
-    elif action == "recover":
-        response["recovery"] = development_state.recovery_report(project)
-    elif action == "merge":
-        response["merge"] = development_state.merge_report(project)
-    elif action == "sync-state":
-        response["sync"] = development_state.sync_development(project)
-        refreshed = development_state.snapshot(project)
-        response["current_objective"] = refreshed.get("current_objective") or ""
-        response["current_item"] = refreshed.get("current_item")
-    return response
+    return development_state.action_report(project, action)
 
 
 @router.get("/projects/{project_id}/development-state")
