@@ -25,7 +25,7 @@ def _project(project_id: int) -> dict:
 def _response(project: dict, action: str) -> dict:
     resolved = development_state.resolve_action(project, action)
     current = resolved.get("current_item") or {}
-    return {
+    response = {
         **resolved,
         "git": git.summary(project),
         "execution": {
@@ -38,6 +38,9 @@ def _response(project: dict, action: str) -> dict:
             "dev_item": current.get("key") or "",
         },
     }
+    if action in {"verify", "evidence"}:
+        response["evidence"] = development_state.evidence_report(project)
+    return response
 
 
 @router.get("/projects/{project_id}/development-state")
@@ -80,3 +83,9 @@ def update_development_mode(project_id: int, body: DevelopmentModeRequest):
         "development_mode": mode,
         "description": development_state.DEVELOPMENT_MODES[mode],
     }
+
+
+@router.get("/projects/{project_id}/development-evidence")
+def get_development_evidence(project_id: int):
+    project = _project(project_id)
+    return development_state.evidence_report(project)
