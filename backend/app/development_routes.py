@@ -146,7 +146,7 @@ def start_current_development_item(project_id: int, body: DevelopmentContinueReq
         raise HTTPException(409, "Advanced orchestration preflight failed: " + (failures or "unknown readiness failure"))
 
     from .swarm_routes import SwarmCreateRequest, create_swarm
-    return create_swarm(
+    result = create_swarm(
         project_id,
         SwarmCreateRequest(
             objective=objective,
@@ -156,3 +156,12 @@ def start_current_development_item(project_id: int, body: DevelopmentContinueReq
             max_concurrency=body.max_concurrency,
         ),
     )
+    swarm_id = int((result.get("swarm") or {}).get("id") or 0)
+    if swarm_id:
+        with connect() as conn:
+            conn.execute(
+                "UPDATE swarm_runs SET development_item_key=? WHERE id=?",
+                (current["key"], swarm_id),
+            )
+        result["swarm"]["development_item_key"] = current["key"]
+    return result
