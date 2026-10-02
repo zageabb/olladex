@@ -226,9 +226,28 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
           ? `Recovery found ${result.recovery.count} stopped task(s)${result.recovery.requires_root_cause.length?` · root-cause analysis required for #${result.recovery.requires_root_cause.join(", #")}`:""}`
           : "No recoverable or failed development tasks found.");
       }else if(action==="merge"){
-        setNotice(result.merge?.ready
-          ? `Release gate passed for ${result.merge.current_branch} → ${result.merge.target_branch}`
-          : `Merge blocked · ${(result.merge?.blockers||[]).join("; ")||"release evidence incomplete"}`);
+        if(
+          result.merge?.ready
+          && ["autonomous","release"].includes(developmentState?.development_mode||"")
+        ){
+          const merged=await request<{status:string;promotion?:{main_commit?:string};post_merge_verification?:{verified?:boolean;development_result?:string}}>(
+            `/projects/${projectId}/development-actions/merge/start`,
+            {method:"POST"}
+          );
+          setNotice(
+            `Merged to ${result.merge.target_branch}`
+            + (merged.promotion?.main_commit?` · ${merged.promotion.main_commit.slice(0,12)}`:"")
+            + (merged.post_merge_verification?.verified
+              ? ` · post-merge verified (${merged.post_merge_verification.development_result||"state synced"})`
+              : " · development-state sync still needs attention")
+          );
+          await load();
+          onCreated();
+        }else{
+          setNotice(result.merge?.ready
+            ? "Release gate passed. Switch to Autonomous or Release mode to execute the verified merge."
+            : `Merge blocked · ${(result.merge?.blockers||[]).join("; ")||"release evidence incomplete"}`);
+        }
       }else if(action==="sync-state"){
         setNotice(result.sync?.reason||"Repository development state refreshed from evidence.");
       }else if(action==="status"){
