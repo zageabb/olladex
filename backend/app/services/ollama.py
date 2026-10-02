@@ -27,6 +27,7 @@ for tool_name, description, properties in [
     ("remember_preference", "Save an explicit user request to remember a preference or decision. Do not infer personal facts or save secrets.", {"preference": {"type":"string"}}),
     ("update_plan", "Show or revise a short plan for a multi-step task.", {"steps": {"type":"array", "items": {"type":"string"}}}),
     ("update_progress", "Report objective progress through the current plan using completed and total step counts plus the current step.", {"completed_steps": {"type":"integer", "minimum":0}, "total_steps": {"type":"integer", "minimum":1}, "current_step": {"type":"string"}}),
+    ("record_root_cause", "Record an evidence-backed root-cause analysis before editing during repeated recovery. Required on recovery attempt 2 or later before write_file/apply_patch can proceed.", {"analysis": {"type":"string"}}),
     ("swarm_read_blackboard", "Read shared structured findings for the current swarm.", {"category": {"type":"string"}}),
     ("swarm_publish_finding", "Publish an important evidence-backed finding to the current swarm blackboard.", {"content": {"type":"string"}, "key": {"type":"string"}}),
     ("swarm_publish_decision", "Publish a meaningful engineering decision to the current swarm blackboard.", {"content": {"type":"string"}, "key": {"type":"string"}}),
@@ -128,6 +129,16 @@ def embed_texts(texts: list[str], model: str | None = None) -> list[list[float]]
 def _execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
     _check_cancelled()
     task = task_queue.current_task()
+    if (
+        task
+        and name in {"write_file", "apply_patch"}
+        and int(task.get("recovery_attempt") or 0) >= 2
+        and not str(task.get("root_cause_analysis") or "").strip()
+    ):
+        raise ValueError(
+            "Repeated recovery requires root-cause analysis before another edit. "
+            "Inspect the failure evidence, then call record_root_cause before write_file/apply_patch."
+        )
     if task and task.get("task_kind") in {"reviewer", "challenger"} and str(task.get("source_kind") or "").startswith("swarm_") and name in {"write_file", "apply_patch"}:
         raise ValueError("Reviewer/challenger tasks are inspection-only and may not edit files; Coordinator finalization owns integration.")
     if name == "get_project_tree":
@@ -154,6 +165,17 @@ def _execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
     elif name == "update_plan":
         result = {"steps": args["steps"]}
         runtime.emit("plan", result)
+    elif name == "record_root_cause":
+        task_id = task_queue.current_task_id()
+        if not task_id:
+            raise ValueError("Root-cause analysis requires an active background task")
+        updated = task_queue.record_root_cause(task_id, str(args.get("analysis") or ""))
+        result = {
+            "task_id": task_id,
+            "recovery_attempt": int(updated.get("recovery_attempt") or 0),
+            "recorded": bool(str(updated.get("root_cause_analysis") or "").strip()),
+        }
+        runtime.emit("finding", {"task_id": task_id, "kind": "root_cause", "content": str(args.get("analysis") or "")})
     elif name == "update_progress":
         completed = int(args["completed_steps"])
         total = int(args["total_steps"])
@@ -515,6 +537,8 @@ def validate_arguments(name, args):
         completed_steps: int = Field(ge=0)
         total_steps: int = Field(ge=1)
         current_step: str = Field(max_length=1000)
+    class RootCause(Strict):
+        analysis: str = Field(min_length=40, max_length=20000)
     class SwarmRead(Strict):
         category: str = Field(default="", max_length=40)
     class SwarmPublish(Strict):
@@ -522,7 +546,7 @@ def validate_arguments(name, args):
         key: str = Field(default="", max_length=200)
     schema = {"get_project_tree": Strict, "read_file": Read, "write_file": Write,
               "apply_patch": Patch, "run_command": Command, "search_code": Search,
-              "ask_user": Question, "update_plan": Plan, "update_progress": Progress, "remember_preference": Preference,
+              "ask_user": Question, "update_plan": Plan, "update_progress": Progress, "record_root_cause": RootCause, "remember_preference": Preference,
               "swarm_read_blackboard": SwarmRead,
               "swarm_publish_finding": SwarmPublish,
               "swarm_publish_decision": SwarmPublish,
