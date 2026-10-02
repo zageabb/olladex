@@ -287,6 +287,18 @@ def format_action_report(report: dict) -> str:
     if report.get("sync"):
         sync = report["sync"]
         lines.append(f"State sync: {sync.get('reason') or ('updated' if sync.get('changed') else 'unchanged')}")
+    if report.get("execution_started"):
+        execution = report["execution_started"]
+        if execution.get("kind") == "advanced_orchestration":
+            lines.append(f"Execution started: Advanced orchestration #{execution.get('swarm_id') or 0}")
+        elif execution.get("kind") == "merge":
+            commit = str(execution.get("commit") or "")
+            lines.append(
+                "Execution started: merge"
+                + (f" · {commit[:12]}" if commit else "")
+            )
+    if report.get("execution_error"):
+        lines.append(f"Execution blocked: {report['execution_error']}")
     return "\n".join(lines)
 
 
