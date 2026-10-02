@@ -302,3 +302,46 @@ def test_autonomous_mode_does_not_request_normal_command_approval(client_project
         ).fetchone()
     assert command["status"] == "completed"
     assert "autonomous" in command["output"]
+
+
+def test_development_slash_action_is_structured_and_persisted(client_project):
+    client, project, session, repo = client_project
+    (repo / "AGENTS.md").write_text("# AGENTS.md\nUse repository evidence.\n", encoding="utf-8")
+    (repo / "DEVELOPMENT.md").write_text(
+        """# Development Status
+
+## Current objective
+
+Ship verified state.
+
+### DEV-123 — Add slash actions
+
+Status: 🔨 IN PROGRESS
+Priority: High
+
+Completion criteria:
+- [x] Structured endpoint exists.
+- [ ] CI is verified.
+""",
+        encoding="utf-8",
+    )
+
+    response = client.post(
+        f"/api/sessions/{session['id']}/development-action",
+        json={"content": "/status"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["action"] == "status"
+    assert payload["report"]["current_item"]["key"] == "DEV-123"
+    assert payload["report"]["execution"]["dev_item"] == "DEV-123"
+    assert payload["messages"][0]["role"] == "user"
+    assert payload["messages"][1]["role"] == "assistant"
+    assert "Development action: /status" in payload["messages"][1]["content"]
+    assert "DEV-123" in payload["messages"][1]["content"]
+
+    messages = client.get(f"/api/sessions/{session['id']}/messages").json()
+    assert messages[-2]["content"] == "/status"
+    assert "Development action: /status" in messages[-1]["content"]
+
