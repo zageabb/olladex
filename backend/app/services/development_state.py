@@ -337,12 +337,13 @@ def evidence_report(project: dict, item_key: str = "") -> dict:
         None,
     ) if requested_key else state.get("current_item")
     current = current or {}
+    effective_key = requested_key or str(current.get("key") or "")
     with connect() as conn:
         linked_swarm = None
-        if requested_key:
+        if effective_key:
             linked_swarm = conn.execute(
                 "SELECT * FROM swarm_runs WHERE project_id=? AND development_item_key=? ORDER BY id DESC LIMIT 1",
-                (project["id"], requested_key),
+                (project["id"], effective_key),
             ).fetchone()
         if linked_swarm:
             tasks = [
@@ -386,7 +387,7 @@ def evidence_report(project: dict, item_key: str = "") -> dict:
     repository_clean = not bool(_meaningful_git_changes(git_state))
 
     delivery_complete = True
-    if requested_key and latest_swarm:
+    if effective_key and latest_swarm:
         delivery_complete = (
             latest_swarm.get("status") == "completed"
             and bool(str(latest_swarm.get("promoted_commit") or "").strip())
