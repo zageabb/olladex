@@ -284,3 +284,220 @@ def evidence_report(project: dict) -> dict:
         "tasks": tasks,
         "swarms": swarms,
     }
+
+
+
+def ci_report(project: dict) -> dict:
+    from . import git
+    from . import github as github_service
+
+    git_state = git.summary(project)
+    branch = str(git_state.get("branch") or "")
+    connection = github_service.status(project)
+    if not connection.get("available") or not connection.get("authenticated"):
+        return {
+            "status": "unavailable",
+            "branch": branch,
+            "pull_request": None,
+            "checks": [],
+            "reason": connection.get("error") or "GitHub CLI is unavailable or unauthenticated.",
+        }
+    try:
+        pull_requests = github_service.pull_requests(project, "open")
+    except ValueError as exc:
+        return {
+            "status": "unavailable",
+            "branch": branch,
+            "pull_request": None,
+            "checks": [],
+            "reason": str(exc),
+        }
+    pull_request = next(
+        (item for item in pull_requests if str(item.get("headRefName") or "") == branch),
+        None,
+    )
+    if not pull_request:
+        return {
+            "status": "no_pull_request",
+            "branch": branch,
+            "pull_request": None,
+            "checks": [],
+            "reason": "No open pull request matches the current branch.",
+        }
+    checks = list(pull_request.get("statusCheckRollup") or [])
+    normalized: list[dict] = []
+    failing = pending = 0
+    for item in checks:
+        name = str(item.get("name") or item.get("context") or item.get("workflowName") or "check")
+        conclusion = str(item.get("conclusion") or item.get("state") or item.get("status") or "").upper()
+        if conclusion in {"FAILURE", "FAILED", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"}:
+            failing += 1
+        elif conclusion not in {"SUCCESS", "PASSED", "NEUTRAL", "SKIPPED"}:
+            pending += 1
+        normalized.append({"name": name, "conclusion": conclusion})
+    status = "failed" if failing else "pending" if pending or not checks else "passed"
+    return {
+        "status": status,
+        "branch": branch,
+        "pull_request": {
+            "number": pull_request.get("number"),
+            "title": pull_request.get("title") or "",
+            "url": pull_request.get("url") or "",
+            "is_draft": bool(pull_request.get("isDraft")),
+            "review_decision": pull_request.get("reviewDecision") or "",
+        },
+        "checks": normalized,
+        "failing": failing,
+        "pending": pending,
+        "reason": "",
+    }
+
+
+def review_report(project: dict) -> dict:
+    from . import git
+
+    state = snapshot(project)
+    evidence = evidence_report(project)
+    git_state = git.summary(project)
+    diff = git.diff(project)
+    blockers: list[str] = []
+    if evidence["validation"]["active_tasks"]:
+        blockers.append(f"{evidence['validation']['active_tasks']} development task(s) are still active")
+    if evidence["validation"]["incomplete_tasks"]:
+        blockers.append(f"{evidence['validation']['incomplete_tasks']} development task(s) remain incomplete or failed")
+    current = state.get("current_item") or {}
+    if current and current.get("criteria_total") and current.get("criteria_completed") != current.get("criteria_total"):
+        blockers.append(
+            f"{current.get('criteria_total', 0) - current.get('criteria_completed', 0)} acceptance criterion/criteria remain unchecked"
+        )
+    return {
+        "current_item": current or None,
+        "git": git_state,
+        "diff": diff,
+        "diff_present": bool(diff.strip()),
+        "blockers": blockers,
+        "ready_for_release_review": not blockers and not bool(git_state.get("changes")),
+        "evidence": evidence,
+    }
+
+
+def recovery_report(project: dict) -> dict:
+    from ..database import connect
+
+    with connect() as conn:
+        rows = [
+            dict(row) for row in conn.execute(
+                "SELECT id,title,status,recovery_attempt,max(0,0) AS placeholder,root_cause_analysis,"
+                "worktree_branch,current_activity,error FROM background_tasks "
+                "WHERE project_id=? AND status IN ('budget_exhausted','interrupted','no_progress','incomplete','dependency_failed','failed') "
+                "ORDER BY id DESC LIMIT 50",
+                (project["id"],),
+            )
+        ]
+    for item in rows:
+        attempt = int(item.get("recovery_attempt") or 0)
+        item.pop("placeholder", None)
+        item["root_cause_required"] = attempt >= 2 and not bool(str(item.get("root_cause_analysis") or "").strip())
+        item["root_cause_recorded"] = bool(str(item.get("root_cause_analysis") or "").strip())
+    return {
+        "count": len(rows),
+        "recoverable": rows,
+        "requires_root_cause": [item["id"] for item in rows if item["root_cause_required"]],
+    }
+
+
+def merge_report(project: dict) -> dict:
+    state = snapshot(project)
+    review = review_report(project)
+    ci = ci_report(project)
+    current = state.get("current_item") or {}
+    blockers = list(review["blockers"])
+    git_state = review["git"]
+    if git_state.get("changes"):
+        blockers.append("Working tree contains uncommitted changes")
+    if ci["status"] == "failed":
+        blockers.append("CI has failing checks")
+    elif ci["status"] in {"pending", "unavailable"}:
+        blockers.append("CI is not verified as passed")
+    if current and current.get("status") != "COMPLETE":
+        blockers.append(f"{current.get('key')} is still marked {current.get('status')}")
+    return {
+        "ready": not blockers,
+        "target_branch": "main",
+        "current_branch": git_state.get("branch") or "",
+        "blockers": list(dict.fromkeys(blockers)),
+        "review": review,
+        "ci": ci,
+    }
+
+
+def sync_development(project: dict) -> dict:
+    from datetime import UTC, datetime
+
+    state = snapshot(project)
+    current = state.get("current_item")
+    if not state["development_present"]:
+        raise ValueError("DEVELOPMENT.md is not present")
+    if not current:
+        return {"changed": False, "reason": "No incomplete development item is available to synchronise", "current_item": None}
+
+    report = evidence_report(project)
+    markdown = state["development_markdown"]
+    today = datetime.now(UTC).date().isoformat()
+    updated = re.sub(
+        r"(?m)^Last reviewed:\s*.*$",
+        f"Last reviewed: {today}",
+        markdown,
+        count=1,
+    )
+
+    if current["status"] == "PLANNED" and (
+        report["implementation"]["recent_completed_tasks"] > 0
+        or report["validation"]["active_tasks"] > 0
+        or report["validation"]["latest_swarm"]
+    ):
+        pattern = (
+            rf"(?ms)(^###\s+{re.escape(current['key'])}\s+[—-]\s+.*?$.*?^Status:\s*)[^\n]+"
+        )
+        updated = re.sub(pattern, rf"\1🔨 IN PROGRESS  ", updated, count=1)
+
+    marker_start = f"<!-- OLLADEX:EVIDENCE:{current['key']}:START -->"
+    marker_end = f"<!-- OLLADEX:EVIDENCE:{current['key']}:END -->"
+    sync_block = (
+        f"{marker_start}\n"
+        "Repository evidence snapshot (managed by Olladex):\n"
+        f"- Git branch: `{report['implementation']['git_branch'] or 'unknown'}`\n"
+        f"- Working tree clean: {'yes' if report['implementation']['working_tree_clean'] else 'no'}\n"
+        f"- Recent completed tasks: {report['implementation']['recent_completed_tasks']}\n"
+        f"- Active tasks: {report['validation']['active_tasks']}\n"
+        f"- Incomplete/failed tasks: {report['validation']['incomplete_tasks']}\n"
+        f"- Acceptance criteria checked: {report['acceptance']['criteria_completed']}/{report['acceptance']['criteria_total']}\n"
+        f"- Verification result: {report['result']}\n"
+        f"{marker_end}"
+    )
+    if marker_start in updated and marker_end in updated:
+        updated = re.sub(
+            re.escape(marker_start) + r".*?" + re.escape(marker_end),
+            sync_block,
+            updated,
+            count=1,
+            flags=re.S,
+        )
+    else:
+        item_pattern = rf"(?ms)(^###\s+{re.escape(current['key'])}\s+[—-]\s+.*?)(?=^###\s+DEV-|^##\s+|\Z)"
+        match = re.search(item_pattern, updated)
+        if not match:
+            raise ValueError(f"Could not locate {current['key']} in DEVELOPMENT.md")
+        item_text = match.group(1).rstrip()
+        replacement = item_text + "\n\n" + sync_block + "\n\n"
+        updated = updated[:match.start(1)] + replacement + updated[match.end(1):]
+
+    changed = updated != markdown
+    if changed:
+        workspace.write_text(project, "DEVELOPMENT.md", updated)
+    return {
+        "changed": changed,
+        "current_item": current,
+        "evidence": report,
+        "reason": "DEVELOPMENT.md reconciled from repository evidence" if changed else "DEVELOPMENT.md already matches repository evidence",
+    }
