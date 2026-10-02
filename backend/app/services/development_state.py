@@ -279,6 +279,13 @@ def evidence_report(project: dict, item_key: str = "") -> dict:
     no_known_incomplete = task_summary["incomplete"] == 0
     repository_clean = not bool(_meaningful_git_changes(git_state))
 
+    delivery_complete = True
+    if requested_key and latest_swarm:
+        delivery_complete = (
+            latest_swarm.get("status") == "completed"
+            and bool(str(latest_swarm.get("promoted_commit") or "").strip())
+        )
+
     result = "VERIFIED COMPLETE" if (
         current
         and declared_complete
@@ -286,6 +293,7 @@ def evidence_report(project: dict, item_key: str = "") -> dict:
         and no_active_work
         and no_known_incomplete
         and repository_clean
+        and delivery_complete
     ) else "INCOMPLETE"
 
     return {
@@ -302,6 +310,7 @@ def evidence_report(project: dict, item_key: str = "") -> dict:
             "active_tasks": task_summary["active"],
             "incomplete_tasks": task_summary["incomplete"],
             "latest_swarm": latest_swarm,
+            "delivery_complete": delivery_complete,
         },
         "acceptance": {
             "criteria_completed": current.get("criteria_completed", 0) if current else 0,
