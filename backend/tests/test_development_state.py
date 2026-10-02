@@ -2,10 +2,24 @@ from pathlib import Path
 import subprocess
 
 from backend.app.services import development_state
+from backend.app.config import settings
+from backend.app.database import connect, init_db, now
 
 
 def _project(tmp_path: Path) -> dict:
     return {"id": 1, "name": "demo", "path": str(tmp_path)}
+
+
+def _db_project(tmp_path: Path, monkeypatch) -> dict:
+    monkeypatch.setattr(settings, "data_root", tmp_path / "data")
+    init_db()
+    stamp = now()
+    with connect() as conn:
+        project_id = int(conn.execute(
+            "INSERT INTO projects(name,path,model,created_at,last_opened_at) VALUES(?,?,?,?,?)",
+            ("demo", str(tmp_path), "qwen3:14b", stamp, stamp),
+        ).lastrowid)
+    return {"id": project_id, "name": "demo", "path": str(tmp_path)}
 
 
 def test_parse_development_selects_high_priority_incomplete_item():
@@ -173,6 +187,112 @@ def test_ci_report_matches_current_branch_pull_request(tmp_path, monkeypatch):
     assert report["status"] == "passed"
     assert report["pull_request"]["number"] == 7
     assert len(report["checks"]) == 2
+
+
+def test_ci_report_falls_back_to_current_commit_checks_without_pull_request(tmp_path, monkeypatch):
+    from backend.app.services import git as git_service
+    from backend.app.services import github as github_service
+
+    monkeypatch.setattr(git_service, "summary", lambda project: {"branch": "main"})
+    monkeypatch.setattr(
+        github_service,
+        "status",
+        lambda project: {"available": True, "authenticated": True, "repository": "owner/repo", "error": ""},
+    )
+    monkeypatch.setattr(github_service, "pull_requests", lambda project, state="open": [])
+    monkeypatch.setattr(
+        github_service,
+        "commit_checks",
+        lambda project: [
+            {"name": "Backend tests", "status": "completed", "conclusion": "success", "url": ""},
+            {"name": "Frontend build", "status": "completed", "conclusion": "success", "url": ""},
+        ],
+    )
+
+    report = development_state.ci_report(_project(tmp_path))
+
+    assert report["status"] == "passed"
+    assert report["pull_request"] is None
+    assert len(report["checks"]) == 2
+
+
+def test_evidence_report_blocks_feature_branch_when_delivery_is_required(tmp_path, monkeypatch):
+    project = _db_project(tmp_path, monkeypatch)
+    (tmp_path / "AGENTS.md").write_text("# AGENTS.md\nUse repository evidence.\n", encoding="utf-8")
+    (tmp_path / "DEVELOPMENT.md").write_text(
+        """# Development Status
+
+## Current objective
+
+Ship verified workflow.
+
+### DEV-500 — Verified workflow
+
+Status: 🔨 IN PROGRESS
+Priority: High
+
+Completion criteria:
+- [x] Implementation exists.
+- [x] CI passes.
+- [x] Merged to intended branch.
+""",
+        encoding="utf-8",
+    )
+    from backend.app.services import git as git_service
+    monkeypatch.setattr(
+        git_service,
+        "summary",
+        lambda project: {"branch": "feature/test", "changes": []},
+    )
+    monkeypatch.setattr(
+        development_state,
+        "ci_report",
+        lambda project: {"status": "passed", "checks": [{"name": "CI", "conclusion": "SUCCESS"}]},
+    )
+
+    report = development_state.evidence_report(project)
+
+    assert report["result"] == "INCOMPLETE"
+    assert report["validation"]["ci_required"] is True
+    assert report["validation"]["ci_verified"] is True
+    assert report["validation"]["delivery_required"] is True
+    assert report["validation"]["delivery_complete"] is False
+
+
+def test_evidence_report_requires_real_ci_even_when_ledger_checkbox_is_checked(tmp_path, monkeypatch):
+    project = _db_project(tmp_path, monkeypatch)
+    (tmp_path / "AGENTS.md").write_text("# AGENTS.md\nUse repository evidence.\n", encoding="utf-8")
+    (tmp_path / "DEVELOPMENT.md").write_text(
+        """# Development Status
+
+## Current objective
+
+Verify CI independently.
+
+### DEV-501 — CI evidence
+
+Status: 🔨 IN PROGRESS
+Priority: High
+
+Completion criteria:
+- [x] Implementation exists.
+- [x] CI passes.
+""",
+        encoding="utf-8",
+    )
+    from backend.app.services import git as git_service
+    monkeypatch.setattr(git_service, "summary", lambda project: {"branch": "main", "changes": []})
+    monkeypatch.setattr(
+        development_state,
+        "ci_report",
+        lambda project: {"status": "failed", "checks": [{"name": "CI", "conclusion": "FAILURE"}]},
+    )
+
+    report = development_state.evidence_report(project)
+
+    assert report["result"] == "INCOMPLETE"
+    assert report["validation"]["ci_required"] is True
+    assert report["validation"]["ci_verified"] is False
 
 
 def test_sync_development_records_repository_evidence_without_claiming_completion(tmp_path, monkeypatch):
