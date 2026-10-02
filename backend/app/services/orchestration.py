@@ -3,28 +3,42 @@ from __future__ import annotations
 import json
 
 from ..config import settings
-from . import ollama, workspace
+from . import development_state, ollama, workspace
 
 
-ALLOWED_ROLES = {"worker", "frontend", "backend", "tester", "reviewer", "researcher"}
+ALLOWED_ROLES = {"worker", "frontend", "backend", "tester", "reviewer", "researcher", "architect", "coder", "documentation"}
+SWARM_SPECIALIST_ROLES = {"worker", "frontend", "backend", "tester", "researcher", "architect", "coder", "documentation"}
 
 
-def decompose(project: dict, objective: str, max_tasks: int = 6) -> list[dict]:
+def decompose(project: dict, objective: str, max_tasks: int = 6, *, swarm_mode: bool = False) -> list[dict]:
     if not objective.strip():
         raise ValueError("Lead objective is required")
-    max_tasks = max(2, min(int(max_tasks or 6), 10))
+    max_tasks = max(2, min(int(max_tasks or 6), 16))
     intelligence = workspace.repository_intelligence(project)
+    persistent_state = development_state.orchestration_context(project)
+    if swarm_mode:
+        role_text = "architect|backend|frontend|coder|tester|researcher|documentation|worker"
+        verification_rule = (
+            "- do not create reviewer or challenger tasks; Olladex reserves those roles for final verification.\n"
+            "- create explicit implementation/testing/research tasks when useful."
+        )
+    else:
+        role_text = "backend|frontend|tester|reviewer|researcher|worker"
+        verification_rule = "- create explicit test/review work when useful."
     prompt = f"""You are the lead software-engineering coordinator for Olladex.
 Break the objective into 2-{max_tasks} focused specialist tasks that can execute in parallel where safe.
 Return JSON only with this exact shape:
-{{"tasks":[{{"title":"...","role":"backend|frontend|tester|reviewer|researcher|worker","prompt":"...","depends_on":[0,1]}}]}}
+{{"tasks":[{{"title":"...","role":"{role_text}","prompt":"...","depends_on":[0,1],"ownership":["path/or/module"],"acceptance_criteria":["observable completion condition"]}}]}}
 Rules:
 - depends_on contains zero-based indexes of earlier tasks only.
 - keep tasks narrowly scoped and implementation-ready.
-- create explicit test/review work when useful.
+- ownership lists files, modules, routes, components, or subsystems this task owns. Use an empty list for read-only analysis/testing tasks when exclusive ownership is unnecessary.
+- acceptance_criteria lists concrete evidence the specialist must produce before the task can be considered complete.
+- tasks that touch the same ownership area must be sequenced with depends_on rather than presented as parallel work.
+{verification_rule}
 - do not create a final consolidation task; Olladex adds that automatically.
 
-Objective:\n{objective.strip()}\n\nRepository intelligence:\n{json.dumps(intelligence, default=str)[:16000]}"""
+Objective:\n{objective.strip()}\n\nPersistent repository development state:\n{persistent_state or "No AGENTS.md/DEVELOPMENT.md state found."}\n\nRepository intelligence:\n{json.dumps(intelligence, default=str)[:16000]}"""
     model = project.get("profile_chat_model") or project.get("model") or settings.ollama_model
     with ollama.client(120) as http:
         response = http.post("/api/chat", json={
@@ -54,7 +68,8 @@ Objective:\n{objective.strip()}\n\nRepository intelligence:\n{json.dumps(intelli
             continue
         title = str(item.get("title") or f"Specialist task {source_index + 1}").strip()[:256]
         role = str(item.get("role") or "worker").strip().lower()
-        if role not in ALLOWED_ROLES:
+        allowed_roles = SWARM_SPECIALIST_ROLES if swarm_mode else ALLOWED_ROLES
+        if role not in allowed_roles:
             role = "worker"
         task_prompt = str(item.get("prompt") or "").strip()
         if not task_prompt:
@@ -70,7 +85,26 @@ Objective:\n{objective.strip()}\n\nRepository intelligence:\n{json.dumps(intelli
                 dependencies.append(mapped)
         result_index = len(result)
         source_to_result[source_index] = result_index
-        result.append({"title": title, "role": role, "prompt": task_prompt, "depends_on": sorted(set(dependencies))})
+        ownership = [
+            str(value).strip()
+            for value in (item.get("ownership") or [])
+            if str(value).strip()
+        ][:20]
+        acceptance_criteria = [
+            str(value).strip()
+            for value in (item.get("acceptance_criteria") or [])
+            if str(value).strip()
+        ][:20]
+        if role not in {"researcher", "tester"} and not acceptance_criteria:
+            acceptance_criteria = ["Requested implementation exists and relevant validation passes."]
+        result.append({
+            "title": title,
+            "role": role,
+            "prompt": task_prompt,
+            "depends_on": sorted(set(dependencies)),
+            "ownership": ownership,
+            "acceptance_criteria": acceptance_criteria,
+        })
     if len(result) < 2:
         raise ValueError("Lead planner must produce at least two actionable specialist tasks")
     return result

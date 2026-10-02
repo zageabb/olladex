@@ -14,6 +14,7 @@ import { Conversation } from "../components/Conversation";
 import { ConversationTaskSummary } from "../components/ConversationTaskSummary";
 import { MemoryPanel } from "../components/MemoryPanel";
 import { WorkspacePanel } from "../components/WorkspacePanel";
+import { MarkdownBody } from "../components/MarkdownBody";
 import { request } from "../lib/api";
 
 type Project = { id: number; name: string; path: string; model: string; approval_mode: "review" | "assisted" | "autonomous"; instructions: string; git_author_name: string; git_author_email: string; model_profile_id?: number; profile_name?: string; profile_chat_model?: string; profile_embedding_model?: string; profile_temperature?: number; profile_max_steps?: number; profile_context_files?: number; profile_context_chars?: number };
@@ -39,6 +40,7 @@ export default function Home() {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [selected, setSelected] = useState<TreeNode | null>(null);
   const [fileContent, setFileContent] = useState("");
+  const [markdownPreview, setMarkdownPreview] = useState(false);
   const [fileDraft, setFileDraft] = useState("");
   const [changes, setChanges] = useState<Change[]>([]);
   const [selectedHunks, setSelectedHunks] = useState<Record<number, number[]>>({});
@@ -54,13 +56,27 @@ export default function Home() {
   selectedProject.current = project?.id;
 
   useEffect(() => {
-    const handler = () => setAuthRequired(true);
+    const handler = () => {
+      setShowOpen(false);
+      setAuthRequired(true);
+    };
+    if (sessionStorage.getItem("olladex-auth-required") === "1") handler();
     window.addEventListener("olladex-auth-required", handler);
     return () => window.removeEventListener("olladex-auth-required", handler);
   }, []);
 
   useEffect(() => {
-    request<Project[]>("/projects").then((data) => { setProjects(data); if (data.length) setProject(data[0]); }).catch((e) => setNotice(e.message));
+    request<Project[]>("/projects").then((data) => {
+      sessionStorage.removeItem("olladex-auth-required");
+      setProjects(data);
+      if (data.length) setProject(data[0]);
+    }).catch((e) => {
+      if (sessionStorage.getItem("olladex-auth-required") === "1") {
+        setShowOpen(false);
+        setAuthRequired(true);
+      }
+      setNotice(e.message);
+    });
     request<Status>("/status").then(setStatus).catch(() => {});
   }, []);
 
@@ -133,6 +149,7 @@ export default function Home() {
   async function selectFile(item: TreeNode) {
     setSelected(item); selectedFile.current = item.path;
     setFileContent(""); setFileDraft("");
+    setMarkdownPreview(item.type === "file" && /\.(md|markdown)$/i.test(item.path));
     if (item.type !== "file" || !project) return;
     if (/\.(docx|xlsx|pptx|pdf)$/i.test(item.path)) { setTab("office"); return; }
     if (/\.(mmd|mermaid)$/i.test(item.path)) setTab("diagrams");
@@ -218,7 +235,7 @@ export default function Home() {
       <section className="inspector-panel">
         <div className="inspector-tabs"><span className="context-label">Context</span>{(["files", "changes", "terminal", "diagrams", "office", "tasks", "memory", "workspace", "project"] as Tab[]).map((item) => <button key={item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item}{item === "changes" && changes.filter((change) => change.status === "proposed").length ? <span>{changes.filter((change) => change.status === "proposed").length}</span> : null}</button>)}</div>
         {project ? <>
-          {tab === "files" && <div className="file-workspace"><aside className="file-sidebar"><div className="file-search"><span>⌕</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter files" /></div><FileTree items={filteredTree} selected={selected?.path} onSelect={selectFile} /></aside><div className="editor-pane">{selected?.type === "file" ? <><div className="editor-head"><div><span className="file-icon">□</span><strong>{selected.path}</strong>{fileDraft !== fileContent && <i>Modified</i>}</div><button className="primary" onClick={() => saveFile().catch(error => setNotice(error.message))} disabled={fileDraft === fileContent}>Save</button></div><textarea className="code-editor" value={fileDraft} onChange={(e) => setFileDraft(e.target.value)} spellCheck={false} /></> : <EmptyWorkspace onOpen={() => setShowOpen(true)} />}</div></div>}
+          {tab === "files" && <div className="file-workspace"><aside className="file-sidebar"><div className="file-search"><span>⌕</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter files" /></div><FileTree items={filteredTree} selected={selected?.path} onSelect={selectFile} /></aside><div className="editor-pane">{selected?.type === "file" ? <><div className="editor-head"><div><span className="file-icon">□</span><strong>{selected.path}</strong>{fileDraft !== fileContent && <i>Modified</i>}</div><div className="markdown-file-toolbar">{/\.(md|markdown)$/i.test(selected.path)&&<><button className={!markdownPreview?"active":""} onClick={()=>setMarkdownPreview(false)}>Edit</button><button className={markdownPreview?"active":""} onClick={()=>setMarkdownPreview(true)}>Preview</button></>}<button className="primary" onClick={() => saveFile().catch(error => setNotice(error.message))} disabled={fileDraft === fileContent}>Save</button></div></div>{markdownPreview&&/\.(md|markdown)$/i.test(selected.path)?<div className="markdown-document"><MarkdownBody value={fileDraft}/></div>:<textarea className="code-editor" value={fileDraft} onChange={(e) => setFileDraft(e.target.value)} spellCheck={false} />}</> : <EmptyWorkspace onOpen={() => setShowOpen(true)} />}</div></div>}
           {tab === "changes" && <div className="changes-panel">
             <GitControls projectId={project.id} git={git} onRefresh={() => refreshGit(project.id)} onTaskQueued={() => setTab("tasks")} />
             {gitDiff && <article><header><div><strong>Current Git diff</strong><small>Working tree and staged changes</small></div><span>git</span></header><pre>{gitDiff}</pre></article>}
@@ -227,7 +244,7 @@ export default function Home() {
           {tab === "terminal" && <TerminalPanel projectId={project.id} />}
           {tab === "diagrams" && <DiagramStudio initialSource={diagramSource} initialEngine={diagramEngine} />}
           {tab === "office" && <OfficePanel projectId={project.id} selectedPath={selected?.path} onCreated={refreshTree} />}
-          {tab === "tasks" && <div className="tasks-workspace">{session ? <ConversationTaskSummary sessionId={session.id} title={session.title} onOpenConversation={() => setTab("files")} /> : null}<TaskOrchestrationPanel projectId={project.id} onCreated={() => setNotice("Orchestrated task queued")} /><BackgroundTasksPanel projectId={project.id} onOpenSession={openTaskSession} /></div>}
+          {tab === "tasks" && <div className="tasks-workspace">{session ? <ConversationTaskSummary sessionId={session.id} title={session.title} onOpenConversation={() => setTab("files")} /> : null}<TaskOrchestrationPanel projectId={project.id} onCreated={() => setNotice("Orchestrated task queued")} onOpenConversation={openTaskSession} /><BackgroundTasksPanel projectId={project.id} onOpenSession={openTaskSession} /></div>}
           {tab === "memory" && <MemoryPanel projectId={project.id} projectName={project.name} sessionId={session?.id} />}
           {tab === "workspace" && <WorkspacePanel projectId={project.id} projectName={project.name} projects={projects} />}
           {tab === "project" && <ProjectPanel project={project} onUpdated={(updated) => { setProject(updated); setProjects((items) => items.map((item) => item.id === updated.id ? updated : item)); }} />}
@@ -235,8 +252,8 @@ export default function Home() {
       </section>
     </div>
 
-    {authRequired && <div className="modal-backdrop"><form className="modal" onSubmit={async e => { e.preventDefault(); sessionStorage.setItem("olladex-token", token); try { await request("/projects"); window.location.reload(); } catch { setNotice("Token was not accepted"); } }}><h2>Connect to Olladex</h2><p>Paste the connection token printed by start-local.sh.</p><input aria-label="Connection token" type="password" value={token} onChange={e => setToken(e.target.value)} /><button className="primary">Connect</button></form></div>}
-    {showOpen && <div className="modal-backdrop" onMouseDown={() => setShowOpen(false)}><div className="modal" onMouseDown={(e) => e.stopPropagation()}><div className="modal-head"><div><p className="eyebrow">Local repository</p><h2>Open in Olladex</h2></div><button onClick={() => setShowOpen(false)}>×</button></div><form onSubmit={openProject}><label>Absolute directory path<input autoFocus value={openPath} onChange={(e) => setOpenPath(e.target.value)} placeholder="/home/gez/projects/my-app" /></label><p>File tools are restricted to this repository. Approved shell commands run with your operating-system permissions.</p><div><button type="button" onClick={() => setShowOpen(false)}>Cancel</button><button className="primary">Open repository</button></div></form></div></div>}
+    {authRequired && <div className="modal-backdrop auth-modal-backdrop"><form className="modal" onSubmit={async e => { e.preventDefault(); sessionStorage.setItem("olladex-token", token); try { await request("/projects"); sessionStorage.removeItem("olladex-auth-required"); window.location.reload(); } catch { setNotice("Token was not accepted"); } }}><h2>Connect to Olladex</h2><p>Paste the connection token printed by start-local.sh.</p><input aria-label="Connection token" type="password" value={token} onChange={e => setToken(e.target.value)} /><button className="primary">Connect</button></form></div>}
+    {showOpen && !authRequired && <div className="modal-backdrop" onMouseDown={() => setShowOpen(false)}><div className="modal" onMouseDown={(e) => e.stopPropagation()}><div className="modal-head"><div><p className="eyebrow">Local repository</p><h2>Open in Olladex</h2></div><button onClick={() => setShowOpen(false)}>×</button></div><form onSubmit={openProject}><label>Absolute directory path<input autoFocus value={openPath} onChange={(e) => setOpenPath(e.target.value)} placeholder="/home/gez/projects/my-app" /></label><p>File tools are restricted to this repository. Approved shell commands run with your operating-system permissions.</p><div><button type="button" onClick={() => setShowOpen(false)}>Cancel</button><button className="primary">Open repository</button></div></form></div></div>}
     {notice && <button className="toast" onClick={() => setNotice("")}>{notice}</button>}
   </main>;
 }

@@ -612,3 +612,47 @@ Continue from the saved context, but first inspect the repository and tool state
 | Reviewing someone else's work | GitHub PR review |
 | Agent missing relevant files | Context Lens troubleshooting |
 | AI model/server change | Ollama server/model workflow |
+
+
+---
+
+## 34. Swarm development workflow — feature branch
+
+Use this workflow for a larger objective that can be decomposed into independent or dependency-ordered local-agent tasks.
+
+1. open the repository and confirm Ollama is connected;
+2. open **Swarm**;
+3. enable the Swarm skill for the project if required;
+4. choose a preset such as Development, Bug Hunt or Deep Development;
+5. set maximum agents and concurrency;
+6. expand **Role model settings** if different local models should handle Coordinator/coding/testing/review roles;
+7. enter the objective and start the Swarm;
+8. watch the Coordinator and agent cards;
+9. inspect the combined timeline, individual agent drill-down and Blackboard;
+10. send direct agent guidance only for agent-specific constraints;
+11. send Coordinator guidance for swarm-wide priorities or constraints;
+12. let the Coordinator open the review gate after specialists/follow-up work finishes;
+13. review challenger/reviewer outcomes;
+14. select completed implementation branches;
+15. run integration preflight and inspect overlaps;
+16. build the Swarm integration worktree;
+17. run the repository's combined verification command;
+18. only after checks pass, push the integration branch and create the PR.
+
+### Recommended completion criteria
+
+Do not treat the Swarm as complete merely because all worker cards stopped. Confirm:
+
+- final reviewer completed successfully when required;
+- challenger completed when enabled;
+- important Blackboard risks are understood;
+- the integration worktree contains only intended specialist branches;
+- combined checks passed;
+- the final integration diff is understood;
+- the integration branch/PR state is correct.
+
+### Recovery behaviour
+
+When a specialist fails or is interrupted, the persistent Coordinator can use spare capacity for a bounded recovery agent. If risks remain after normal specialists complete, it can add a focused follow-up task before opening final verification.
+
+The Coordinator never permits unrestricted recursive agent spawning: specialists can publish findings/risks but only the Coordinator creates additional Swarm agents.

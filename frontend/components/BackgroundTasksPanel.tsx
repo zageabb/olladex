@@ -2,13 +2,17 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { request } from "../lib/api";
+import { MarkdownBody } from "./MarkdownBody";
+
+type RecoveryInfo = { task_id:number; status:string; session_id:number; active_run_id:number; prior_run_id:number; prior_run_status:string; checkpoint_available:boolean; checkpoint_bytes:number; worktree_path:string; worktree_branch:string; worktree_available:boolean; branch_available:boolean; previous_budget:number; resumed_budget:number; max_recovery_attempts:number; recovery_attempt:number; blocking_dependency_ids:number[]; can_resume:boolean };
 
 type BackgroundTask = {
   id: number; session_id: number; title: string; prompt: string; source_kind: string; source_ref: string;
-  status: "queued" | "running" | "completed" | "cancelled" | "failed" | "interrupted" | "budget_exhausted" | "waiting_for_approval" | "waiting_for_input"; result: string; error: string;
+  status: "queued" | "running" | "completed" | "cancelled" | "failed" | "interrupted" | "budget_exhausted" | "dependency_failed" | "no_progress" | "incomplete" | "waiting_for_approval" | "waiting_for_input"; result: string; error: string;
   cancel_requested: number; created_at: string; started_at: string; completed_at: string;
   worktree_path?: string; worktree_branch?: string;
   pull_request_number?: number; pull_request_url?: string; pull_request_state?: string;
+  recovery?: RecoveryInfo | null; blocking_dependency_ids?: number[];
 };
 
 type WorktreeSummary = {
@@ -93,6 +97,21 @@ export function BackgroundTasksPanel({ projectId, onOpenSession }: { projectId: 
       const updated = await request<BackgroundTask>(`/tasks/${task.id}`, { method: "DELETE" });
       setTasks((items) => items.map((item) => item.id === task.id ? updated : item));
     } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); }
+  }
+
+  async function resumeTask(task: BackgroundTask) {
+    if(!task.recovery?.can_resume)return;
+    setBusyTask(task.id);
+    try{
+      const result=await request<{prior_run_id:number;run_id:number;fresh_budget:number;worktree_path:string;worktree_branch:string}>(`/tasks/${task.id}/resume`,{
+        method:"POST",
+        body:JSON.stringify({fresh_budget:task.recovery.resumed_budget})
+      });
+      setNotice(`Task #${task.id} resumed from run #${result.prior_run_id} with ${result.fresh_budget} fresh tool steps`);
+      const data=await request<BackgroundTask[]>(`/projects/${projectId}/tasks`);
+      setTasks(data);
+    }catch(error){setNotice(error instanceof Error?error.message:String(error));}
+    finally{setBusyTask(null);}
   }
 
   async function inspectWorktree(task: BackgroundTask) {
@@ -186,7 +205,9 @@ export function BackgroundTasksPanel({ projectId, onOpenSession }: { projectId: 
     if (status === "failed") return "Failed";
     if (status === "cancelled") return "Stopped";
     if (status === "interrupted") return "Paused";
-    if (status === "budget_exhausted") return "Partial";
+    if (status === "budget_exhausted") return "Recovery available";
+    if (status === "dependency_failed") return "Blocked";
+    if (status === "no_progress") return "Recovery available";
     return status;
   }
 
@@ -200,7 +221,9 @@ export function BackgroundTasksPanel({ projectId, onOpenSession }: { projectId: 
         const expanded = expandedTask === task.id;
         return <article key={task.id} className={`queue-task ${task.status} ${expanded ? "expanded" : ""}`}>
           <header><div><strong>{task.title}</strong><small>{task.source_kind === "github_issue" ? "GitHub issue" : "Background task"} · {new Date(task.created_at).toLocaleString()}</small>{task.worktree_branch && <small>Branch · {task.worktree_branch}</small>}{task.pull_request_number ? <small>PR #{task.pull_request_number} · {prState || "OPEN"}{checkState !== "none" ? ` · checks ${checkState}` : ""}</small> : null}</div><span>{task.cancel_requested && task.status === "running" ? "Stopping" : taskPhase(task.status)}</span></header>
-          <p>{task.prompt}</p>{task.result && <pre>{task.result}</pre>}{task.error && <pre className="queue-error">{task.error}</pre>}
+          <MarkdownBody value={task.prompt} compact />{task.result && <MarkdownBody value={task.result} />}{task.error && <pre className="queue-error">{task.error}</pre>}
+          {task.recovery?.can_resume&&<section className="task-recovery-card"><strong>Recovery checkpoint available</strong><small>Source run #{task.recovery.prior_run_id} · checkpoint {task.recovery.checkpoint_bytes} bytes</small><small>Budget: previous {task.recovery.previous_budget} · fresh {task.recovery.resumed_budget}</small><small>{task.recovery.worktree_branch} · {task.recovery.worktree_path}</small><div><button className="primary" onClick={()=>resumeTask(task)} disabled={busyTask===task.id}>Resume from checkpoint</button><button onClick={()=>onOpenSession(task.session_id)}>Open conversation</button></div></section>}
+          {task.status==="dependency_failed"&&<section className="task-recovery-card"><strong>Blocked by dependency</strong><small>Waiting for {(task.blocking_dependency_ids||[]).map(id=>"#"+id).join(", ")}</small></section>}
           {task.pull_request_number ? <div className="task-pr-status"><div><strong>PR #{task.pull_request_number}</strong><span className={`pr-state ${prState.toLowerCase()}`}>{prState || "OPEN"}</span><span className={`check-state ${checkState}`}>checks {checkState}</span>{lifecycle?.review_decision ? <span>{lifecycle.review_decision}</span> : null}</div><div><button disabled={busyTask === task.id} onClick={() => syncLifecycle(task)}>Refresh PR</button>{task.pull_request_url ? <button onClick={() => window.open(task.pull_request_url, "_blank", "noopener,noreferrer")}>Open GitHub</button> : null}</div>{lifecycle?.checks.checks.length ? <ul>{lifecycle.checks.checks.slice(0, 8).map((check) => <li key={`${check.name}-${check.state}`}><span>{check.name}</span><b>{check.state}</b></li>)}</ul> : null}{lifecycle?.cleanup_blocked ? <small>{lifecycle.cleanup_blocked}</small> : null}</div> : null}
           {worktree && <details className="activity-card" open><summary><span>⑂</span><div><strong>{worktree.branch}</strong><small>{worktree.changes.length} working changes · base {worktree.base}</small></div><b>⌄</b></summary>
             <div className="task-promotion-form">
@@ -223,9 +246,10 @@ export function BackgroundTasksPanel({ projectId, onOpenSession }: { projectId: 
             {worktree?.changes?.length ? <div className="task-detail-section"><div><p className="eyebrow">Files changed</p><strong>{worktree.changes.length} files</strong></div><ul>{worktree.changes.slice(0, 12).map(path => <li key={path}>{path}</li>)}</ul></div> : null}
             {task.pull_request_number ? <div className="task-detail-section"><div><p className="eyebrow">Delivery</p><strong>Pull request #{task.pull_request_number}</strong></div><p>{prState || "OPEN"}{lifecycle?.review_decision ? ` · ${lifecycle.review_decision}` : ""}</p></div> : null}
             {(task.status === "waiting_for_input" || task.status === "waiting_for_approval") && <div className="task-attention"><strong>{task.status === "waiting_for_input" ? "Needs your input" : "Needs your approval"}</strong><p>Open the linked conversation to resolve this task and continue.</p></div>}
+            {task.recovery?.can_resume&&<div className="task-attention"><strong>Recovery available</strong><p>Resume the same task from its saved checkpoint, branch and worktree with a fresh budget.</p><button onClick={()=>resumeTask(task)} disabled={busyTask===task.id}>Resume from checkpoint</button></div>}
             <div className="task-detail-actions"><button onClick={() => onOpenSession(task.session_id)}>Open conversation</button>{task.worktree_path && <button onClick={() => inspectWorktree(task)} disabled={busyTask === task.id}>{busyTask === task.id ? "Working…" : worktree ? "Refresh files" : "Inspect files"}</button>}{task.pull_request_url ? <button onClick={() => window.open(task.pull_request_url, "_blank", "noopener,noreferrer")}>Open pull request</button> : null}</div>
           </section>}
-          <footer><button onClick={() => setExpandedTask(expanded ? null : task.id)}>{expanded ? "Hide details" : "View task"}</button><button onClick={() => onOpenSession(task.session_id)}>Open conversation</button>{task.worktree_path && <button onClick={() => inspectWorktree(task)} disabled={busyTask === task.id}>{busyTask === task.id ? "Working…" : worktree ? "Refresh branch" : "Review branch"}</button>}{(["queued", "running", "waiting_for_approval", "waiting_for_input"].includes(task.status)) && <button onClick={() => cancel(task)}>{task.status === "running" ? "Request stop" : "Cancel"}</button>}</footer>
+          <footer>{task.recovery?.can_resume&&<button className="primary" onClick={()=>resumeTask(task)} disabled={busyTask===task.id}>Resume from checkpoint</button>}<button onClick={() => setExpandedTask(expanded ? null : task.id)}>{expanded ? "Hide details" : "View task"}</button><button onClick={() => onOpenSession(task.session_id)}>Open conversation</button>{task.worktree_path && <button onClick={() => inspectWorktree(task)} disabled={busyTask === task.id}>{busyTask === task.id ? "Working…" : worktree ? "Refresh branch" : "Review branch"}</button>}{(["queued", "running", "waiting_for_approval", "waiting_for_input"].includes(task.status)) && <button onClick={() => cancel(task)}>{task.status === "running" ? "Request stop" : "Cancel"}</button>}</footer>
         </article>;
       }) : <div className="empty-panel"><span>◷</span><h3>No queued work</h3><p>Queue a prompt here or import an open GitHub issue from the Changes panel.</p></div>}
     </section>{notice && <div className="queue-notice">{notice}</div>}

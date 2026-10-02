@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from backend.app.config import settings
 from backend.app.database import connect, init_db, now
 from backend.app.services import task_queue
@@ -39,6 +41,27 @@ def test_dependency_waits_until_prerequisite_completes(tmp_path, monkeypatch):
         assert reason == ""
 
 
+@pytest.mark.parametrize("status", sorted(task_queue.RECOVERABLE_TASK_STATUSES))
+def test_recoverable_prerequisite_waits_for_recovery(tmp_path, monkeypatch, status):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    first = task_queue.enqueue(project_id, session_id, "First", "first")
+    second = task_queue.enqueue(project_id, session_id, "Second", "second", depends_on=[first["id"]])
+
+    with connect() as conn:
+        conn.execute(
+            "UPDATE background_tasks SET status=?,error='recoverable stop',completed_at=? WHERE id=?",
+            (status, now(), first["id"]),
+        )
+        second_row = dict(conn.execute("SELECT * FROM background_tasks WHERE id=?", (second["id"],)).fetchone())
+        ready, reason = task_queue._dependency_state(conn, second_row)
+        blockers = task_queue._dependency_blockers(conn, second_row)
+
+    assert ready is False
+    assert reason == ""
+    assert blockers == []
+    assert task_queue.get(second["id"])["status"] == "queued"
+
+
 def test_failed_prerequisite_blocks_dependent_task(tmp_path, monkeypatch):
     project_id, session_id = _seed(tmp_path, monkeypatch)
     first = task_queue.enqueue(project_id, session_id, "First", "first")
@@ -73,3 +96,124 @@ def test_enqueue_rejects_cross_project_dependency(tmp_path, monkeypatch):
         assert "same project" in str(exc)
     else:
         raise AssertionError("Cross-project dependency should be rejected")
+
+
+
+def test_parallel_swarm_tasks_reject_overlapping_ownership_without_dependency(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    stamp = now()
+    with connect() as conn:
+        swarm_id = int(conn.execute(
+            "INSERT INTO swarm_runs(project_id,session_id,title,objective,status,max_agents,max_concurrency,created_at,started_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (project_id, session_id, "Ownership", "Coordinate safely", "running", 6, 3, stamp, stamp),
+        ).lastrowid)
+
+    first = task_queue.enqueue(
+        project_id,
+        session_id,
+        "Own auth",
+        "Implement authentication.",
+        swarm_id=swarm_id,
+        source_kind="swarm_specialist",
+        agent_role="backend",
+        task_kind="backend",
+        ownership_scope=["backend/app/auth.py"],
+        acceptance_criteria=["Authentication tests pass."],
+    )
+
+    with pytest.raises(ValueError) as exc:
+        task_queue.enqueue(
+            project_id,
+            session_id,
+            "Also own auth",
+            "Change authentication too.",
+            swarm_id=swarm_id,
+            source_kind="swarm_specialist",
+            agent_role="backend",
+            task_kind="backend",
+            ownership_scope=["backend/app/auth.py"],
+            acceptance_criteria=["Regression is fixed."],
+        )
+
+    assert str(first["id"]) in str(exc.value)
+    assert "ownership conflict" in str(exc.value).lower()
+
+
+def test_overlapping_ownership_is_allowed_when_explicitly_sequenced(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    stamp = now()
+    with connect() as conn:
+        swarm_id = int(conn.execute(
+            "INSERT INTO swarm_runs(project_id,session_id,title,objective,status,max_agents,max_concurrency,created_at,started_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (project_id, session_id, "Ownership", "Coordinate safely", "running", 6, 3, stamp, stamp),
+        ).lastrowid)
+
+    first = task_queue.enqueue(
+        project_id,
+        session_id,
+        "Base auth change",
+        "Implement authentication.",
+        swarm_id=swarm_id,
+        source_kind="swarm_specialist",
+        ownership_scope=["backend/app/auth.py"],
+        acceptance_criteria=["Authentication tests pass."],
+    )
+    second = task_queue.enqueue(
+        project_id,
+        session_id,
+        "Follow-up auth change",
+        "Extend authentication.",
+        swarm_id=swarm_id,
+        source_kind="swarm_specialist",
+        depends_on=[first["id"]],
+        ownership_scope=["backend/app/auth.py"],
+        acceptance_criteria=["Follow-up behaviour is verified."],
+    )
+
+    assert second["depends_on"] == [first["id"]]
+    assert second["ownership_scope"] == ["backend/app/auth.py"]
+    assert second["acceptance_criteria"] == ["Follow-up behaviour is verified."]
+    assert "Assigned ownership for this task" in second["prompt"]
+    assert "Acceptance criteria for this task" in second["prompt"]
+
+
+def test_dependency_context_includes_acceptance_and_completion_evidence(tmp_path, monkeypatch):
+    project_id, session_id = _seed(tmp_path, monkeypatch)
+    first = task_queue.enqueue(
+        project_id,
+        session_id,
+        "Implement endpoint",
+        "Implement it.",
+        source_kind="lead_specialist",
+        agent_role="backend",
+        ownership_scope=["backend/app/api.py"],
+        acceptance_criteria=["Health endpoint returns 200."],
+    )
+    second = task_queue.enqueue(
+        project_id,
+        session_id,
+        "Review endpoint",
+        "Review it.",
+        source_kind="lead_specialist",
+        agent_role="reviewer",
+        depends_on=[first["id"]],
+    )
+    with connect() as conn:
+        conn.execute(
+            "UPDATE background_tasks SET status='completed',result=?,completion_evidence=?,completed_at=? WHERE id=?",
+            (
+                "Implemented the endpoint and ran pytest.",
+                '{"required":true,"ok":true,"validation_commands":["pytest -q"],"head_changed":true}',
+                now(),
+                first["id"],
+            ),
+        )
+
+    context = task_queue._dependency_context(task_queue.get(second["id"]))
+
+    assert "Health endpoint returns 200." in context
+    assert "Completion evidence:" in context
+    assert "pytest -q" in context
+    assert "Implemented the endpoint" in context

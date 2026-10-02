@@ -1,4 +1,4 @@
-from backend.app.services import task_queue
+from backend.app.services import ollama, task_queue
 from backend.app.services.ollama import execute_tool
 
 
@@ -8,6 +8,38 @@ def test_tool_failures_are_recoverable_observations(tmp_path):
     assert result["recoverable"] is True
     assert "escapes" in result["error"]
     assert activity["tool"] == "read_file"
+
+
+def test_oversized_read_is_capped_without_a_failed_tool_call(tmp_path):
+    target = tmp_path / "large.txt"
+    target.write_text("".join(f"line {number}\n" for number in range(1, 1201)), encoding="utf-8")
+    project = {"id": 1, "name": "Tools", "path": str(tmp_path), "model": "test"}
+
+    result, activity = execute_tool(project, "read_file", {"path": "large.txt", "line_count": 2000})
+
+    assert len(result.splitlines()) == 1000
+    assert result.splitlines()[-1] == "line 1000"
+    assert activity["arguments"]["line_count"] == 1000
+    assert activity["warnings"] == ["Requested 2,000 lines; capped at the 1,000-line maximum"]
+    assert "Tool failed" not in activity["summary"]
+
+
+def test_validation_errors_are_concise_and_do_not_expose_pydantic_urls(tmp_path):
+    project = {"id": 1, "name": "Tools", "path": str(tmp_path), "model": "test"}
+
+    result, activity = execute_tool(project, "read_file", {"path": "app.py", "start_line": -5})
+
+    assert result["recoverable"] is True
+    assert result["error"].startswith("Invalid read_file arguments")
+    assert "start_line" in result["error"]
+    assert "pydantic.dev" not in result["error"]
+    assert "pydantic.dev" not in activity["summary"]
+
+
+def test_read_tool_description_states_the_line_limit():
+    read_tool = next(tool for tool in ollama.TOOLS if tool["function"]["name"] == "read_file")
+
+    assert "1,000 lines" in read_tool["function"]["description"]
 
 
 def test_interactive_write_file_remains_a_reviewable_proposal(tmp_path):
@@ -63,3 +95,212 @@ def test_background_task_write_is_blocked_without_an_isolated_worktree(tmp_path,
     assert result["recoverable"] is True
     assert "isolated Git worktree" in result["error"]
     assert activity["tool"] == "write_file"
+
+
+def test_swarm_blackboard_tools_are_strictly_validated():
+    finding = ollama.validate_arguments("swarm_publish_finding", {"content": "Evidence", "key": "auth"})
+    assert finding == {"content": "Evidence", "key": "auth"}
+
+    read = ollama.validate_arguments("swarm_read_blackboard", {"category": "risk"})
+    assert read == {"category": "risk"}
+
+    handoff = ollama.validate_arguments("swarm_publish_handoff", {"content": "Done", "key": "final"})
+    assert handoff == {"content": "Done", "key": "final"}
+
+    followup = ollama.validate_arguments("swarm_publish_followup", {"content": "Refactor later", "key": "debt"})
+    assert followup == {"content": "Refactor later", "key": "debt"}
+
+    help_request = ollama.validate_arguments("swarm_request_help", {"content": "Need an independent tester", "key": "tests"})
+    assert help_request == {"content": "Need an independent tester", "key": "tests"}
+
+
+def test_update_progress_persists_step_based_percentage(tmp_path, monkeypatch):
+    project = {"id": 1, "name": "Tools", "path": str(tmp_path), "model": "test"}
+    persisted = {}
+    emitted = []
+
+    monkeypatch.setattr(task_queue, "cancel_requested", lambda: False)
+    monkeypatch.setattr(task_queue, "current_task_id", lambda: 42)
+    monkeypatch.setattr(task_queue, "set_progress", lambda task_id, progress, activity="": persisted.update({
+        "task_id": task_id, "progress": progress, "activity": activity
+    }))
+    monkeypatch.setattr(ollama.runtime, "cancelled", lambda: False)
+    monkeypatch.setattr(ollama.runtime, "emit", lambda kind, payload: emitted.append((kind, payload)))
+
+    result, activity = execute_tool(project, "update_progress", {
+        "completed_steps": 2,
+        "total_steps": 4,
+        "current_step": "Run regression tests",
+    })
+
+    assert result["progress"] == 50
+    assert persisted == {"task_id": 42, "progress": 50, "activity": "Run regression tests"}
+    assert ("progress", result) in emitted
+    assert activity["tool"] == "update_progress"
+
+
+def test_update_progress_rejects_invalid_step_counts(tmp_path, monkeypatch):
+    project = {"id": 1, "name": "Tools", "path": str(tmp_path), "model": "test"}
+    monkeypatch.setattr(task_queue, "cancel_requested", lambda: False)
+    monkeypatch.setattr(ollama.runtime, "cancelled", lambda: False)
+
+    result, activity = execute_tool(project, "update_progress", {
+        "completed_steps": 5,
+        "total_steps": 4,
+        "current_step": "Impossible",
+    })
+
+    assert result["recoverable"] is True
+    assert "completed_steps" in result["error"]
+    assert activity["tool"] == "update_progress"
+
+
+def test_swarm_reviewer_cannot_mutate_git_for_integration(tmp_path, monkeypatch):
+    project = {"id": 1, "name": "Tools", "path": str(tmp_path), "model": "test"}
+    monkeypatch.setattr(task_queue, "cancel_requested", lambda: False)
+    monkeypatch.setattr(
+        task_queue,
+        "current_task",
+        lambda: {
+            "id": 77,
+            "task_kind": "reviewer",
+            "source_kind": "swarm_reviewer",
+        },
+    )
+    monkeypatch.setattr(task_queue, "current_task_id", lambda: 77)
+    monkeypatch.setattr(task_queue, "current_worktree_path", lambda: str(tmp_path))
+    monkeypatch.setattr(ollama.runtime, "current_id", lambda: None)
+    monkeypatch.setattr(ollama.runtime, "cancelled", lambda: False)
+
+    for command in [
+        "git checkout main",
+        "git switch main",
+        "git merge olladex/task-1",
+        "git cherry-pick deadbeef",
+        "git reset --hard HEAD~1",
+        "git worktree remove /tmp/other",
+    ]:
+        result, activity = execute_tool(project, "run_command", {"command": command})
+        assert result["recoverable"] is True
+        assert "may inspect Git but may not mutate" in result["error"]
+        assert activity["tool"] == "run_command"
+
+
+def test_swarm_reviewer_can_inspect_git(tmp_path, monkeypatch):
+    project = {"id": 1, "name": "Tools", "path": str(tmp_path), "model": "test"}
+    monkeypatch.setattr(task_queue, "cancel_requested", lambda: False)
+    monkeypatch.setattr(
+        task_queue,
+        "current_task",
+        lambda: {
+            "id": 78,
+            "task_kind": "reviewer",
+            "source_kind": "swarm_reviewer",
+        },
+    )
+    monkeypatch.setattr(task_queue, "current_task_id", lambda: 78)
+    monkeypatch.setattr(task_queue, "current_worktree_path", lambda: str(tmp_path))
+    monkeypatch.setattr(ollama.runtime, "current_id", lambda: None)
+    monkeypatch.setattr(ollama.runtime, "cancelled", lambda: False)
+    monkeypatch.setattr(ollama, "run_command", lambda project, command: {"command": command, "output": "clean", "exit_code": 0})
+    monkeypatch.setattr(ollama, "requires_approval", lambda project, command: False)
+
+    result, _ = execute_tool(project, "run_command", {"command": "git status --short"})
+
+    assert result["exit_code"] == 0
+    assert result["output"] == "clean"
+
+
+def test_swarm_reviewer_cannot_edit_files(tmp_path, monkeypatch):
+    target = tmp_path / "main.py"
+    target.write_text("print('original')\n", encoding="utf-8")
+    project = {"id": 1, "name": "Tools", "path": str(tmp_path), "model": "test"}
+    monkeypatch.setattr(task_queue, "cancel_requested", lambda: False)
+    monkeypatch.setattr(
+        task_queue,
+        "current_task",
+        lambda: {"id": 79, "task_kind": "reviewer", "source_kind": "swarm_reviewer"},
+    )
+    monkeypatch.setattr(task_queue, "current_task_id", lambda: 79)
+    monkeypatch.setattr(task_queue, "current_worktree_path", lambda: str(tmp_path))
+    monkeypatch.setattr(ollama.runtime, "cancelled", lambda: False)
+
+    result, activity = execute_tool(project, "write_file", {"path": "main.py", "content": "print('changed')\n"})
+
+    assert result["recoverable"] is True
+    assert "inspection-only" in result["error"]
+    assert target.read_text(encoding="utf-8") == "print('original')\n"
+    assert activity["tool"] == "write_file"
+
+
+
+def test_repeated_recovery_blocks_edits_until_root_cause_is_recorded(tmp_path, monkeypatch):
+    target = tmp_path / "app.py"
+    target.write_text("value = 1\n", encoding="utf-8")
+    project = {"id": 1, "name": "Tools", "path": str(tmp_path), "model": "test"}
+
+    monkeypatch.setattr(task_queue, "cancel_requested", lambda: False)
+    monkeypatch.setattr(
+        task_queue,
+        "current_task",
+        lambda: {
+            "id": 88,
+            "task_kind": "backend",
+            "source_kind": "swarm_recovery",
+            "recovery_attempt": 2,
+            "root_cause_analysis": "",
+        },
+    )
+    monkeypatch.setattr(task_queue, "current_task_id", lambda: 88)
+    monkeypatch.setattr(task_queue, "current_worktree_path", lambda: str(tmp_path))
+    monkeypatch.setattr(ollama.runtime, "cancelled", lambda: False)
+
+    result, activity = execute_tool(project, "write_file", {"path": "app.py", "content": "value = 2\n"})
+
+    assert result["recoverable"] is True
+    assert "root-cause analysis" in result["error"]
+    assert target.read_text(encoding="utf-8") == "value = 1\n"
+    assert activity["tool"] == "write_file"
+
+
+def test_record_root_cause_tool_unlocks_repeated_recovery_gate(tmp_path, monkeypatch):
+    target = tmp_path / "app.py"
+    target.write_text("value = 1\n", encoding="utf-8")
+    project = {"id": 1, "name": "Tools", "path": str(tmp_path), "model": "test"}
+    state = {"analysis": ""}
+
+    def current_task():
+        return {
+            "id": 89,
+            "task_kind": "backend",
+            "source_kind": "swarm_recovery",
+            "recovery_attempt": 2,
+            "root_cause_analysis": state["analysis"],
+        }
+
+    monkeypatch.setattr(task_queue, "cancel_requested", lambda: False)
+    monkeypatch.setattr(task_queue, "current_task", current_task)
+    monkeypatch.setattr(task_queue, "current_task_id", lambda: 89)
+    monkeypatch.setattr(task_queue, "current_worktree_path", lambda: str(tmp_path))
+    monkeypatch.setattr(
+        task_queue,
+        "record_root_cause",
+        lambda task_id, analysis: (
+            state.update({"analysis": analysis})
+            or {**current_task(), "root_cause_analysis": analysis}
+        ),
+    )
+    monkeypatch.setattr(ollama.runtime, "cancelled", lambda: False)
+    monkeypatch.setattr(ollama.runtime, "emit", lambda *args, **kwargs: None)
+
+    analysis = (
+        "The first fixes treated the symptom. The failing validation shows the actual cause is "
+        "stale state being reused after the branch changes, so the next change must invalidate that state."
+    )
+    result, _ = execute_tool(project, "record_root_cause", {"analysis": analysis})
+    assert result["recorded"] is True
+
+    result, activity = execute_tool(project, "write_file", {"path": "app.py", "content": "value = 2\n"})
+    assert result["status"] == "applied"
+    assert activity["tool"] == "task_write_file"
+    assert target.read_text(encoding="utf-8") == "value = 2\n"

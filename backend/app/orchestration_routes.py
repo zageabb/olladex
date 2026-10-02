@@ -94,6 +94,8 @@ def create_autonomous_lead(project_id: int, body: LeadOrchestrationRequest):
                 project_id, session_id, item["title"], item["prompt"],
                 source_kind="lead_specialist", source_ref=f"lead:{lead_id}", parent_task_id=lead_id,
                 depends_on=dependency_ids, agent_role=item["role"],
+                ownership_scope=item.get("ownership") or [],
+                acceptance_criteria=item.get("acceptance_criteria") or [],
             )
             child_ids.append(child["id"])
             created.append(child)
@@ -146,6 +148,8 @@ def orchestration_graph(project_id: int):
             "id": task["id"], "title": task["title"], "status": task["status"],
             "agent_role": task.get("agent_role") or "worker", "parent_task_id": task.get("parent_task_id"),
             "depends_on": task.get("depends_on") or [], "children": by_parent.get(task["id"], []),
+            "ownership_scope": task.get("ownership_scope") or [],
+            "acceptance_criteria": task.get("acceptance_criteria") or [],
             "worktree_branch": task.get("worktree_branch") or "",
             "pr_number": task.get("pull_request_number") or 0, "pr_state": task.get("pull_request_state") or "",
             "result": task.get("result") or "", "error": task.get("error") or "",

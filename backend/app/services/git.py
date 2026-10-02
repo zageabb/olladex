@@ -18,6 +18,64 @@ def _git(project: dict, *args: str) -> tuple[int, str]:
     return completed.returncode, completed.stdout
 
 
+def capabilities(project: dict) -> dict:
+    info = summary(project)
+    if not info.get("repository"):
+        return {
+            "repository": False,
+            "has_head": False,
+            "remotes": [],
+            "has_remote": False,
+            "github_remote": "",
+            "can_push": False,
+            "can_create_pull_request": False,
+        }
+    head_code, _ = _git(project, "rev-parse", "--verify", "HEAD")
+    remotes = info.get("remotes") or []
+    github_remote = ""
+    for remote in remotes:
+        url = str(remote.get("url") or "")
+        if "github.com" in url.lower():
+            github_remote = str(remote.get("name") or "")
+            break
+    return {
+        "repository": True,
+        "has_head": head_code == 0,
+        "remotes": remotes,
+        "has_remote": bool(remotes),
+        "github_remote": github_remote,
+        "can_push": bool(remotes),
+        "can_create_pull_request": bool(github_remote),
+    }
+
+
+def initialize_local_repository(project: dict) -> dict:
+    info = summary(project)
+    if not info.get("repository"):
+        code, output = _git(project, "init", "-b", "main")
+        if code:
+            code, output = _git(project, "init")
+            if code:
+                raise ValueError(output.strip() or "Could not initialize local Git repository")
+            branch_code, branch_output = _git(project, "branch", "-M", "main")
+            if branch_code:
+                raise ValueError(branch_output.strip() or "Could not set initial Git branch")
+    head_code, _ = _git(project, "rev-parse", "--verify", "HEAD")
+    if head_code != 0:
+        code, output = _git(project, "add", "-A")
+        if code:
+            raise ValueError(output.strip() or "Could not stage the local baseline")
+        code, output = _git(
+            project,
+            "-c", f"user.name={project.get('git_author_name') or 'Olladex User'}",
+            "-c", f"user.email={project.get('git_author_email') or 'olladex@local'}",
+            "commit", "--allow-empty", "-m", "Initial Olladex local baseline",
+        )
+        if code:
+            raise ValueError(output.strip() or "Could not create the local baseline commit")
+    return {"summary": summary(project), "capabilities": capabilities(project)}
+
+
 def summary(project: dict) -> dict:
     code, inside = _git(project, "rev-parse", "--is-inside-work-tree")
     if code != 0:

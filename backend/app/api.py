@@ -8,12 +8,15 @@ from .orchestration_routes import router as orchestration_router
 from .services import runtime_settings
 from .settings_routes import router as settings_router
 from .task_routes import router as task_router
+from .swarm_routes import router as swarm_router
 
 
 runtime_settings.load()
 
 from .conversation_routes import router as conversation_router
 app.include_router(conversation_router)
+from .development_routes import router as development_router
+app.include_router(development_router)
 from .terminal_routes import router as terminal_router
 app.include_router(terminal_router)
 app.include_router(task_router)
@@ -22,3 +25,4 @@ app.include_router(github_review_router)
 app.include_router(orchestration_router)
 app.include_router(integration_router)
 app.include_router(settings_router)
+app.include_router(swarm_router)

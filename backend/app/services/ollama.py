@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 
 from ..config import settings
-from . import task_queue, workspace, conversation_runtime as runtime
+from . import development_state, task_queue, workspace, conversation_runtime as runtime
 from .context_engine import format_context
 from .repository_index import ranked_context
 from .terminal import requires_approval, run as run_command
@@ -15,7 +15,7 @@ from .terminal import requires_approval, run as run_command
 
 TOOLS = [
     {"type": "function", "function": {"name": "get_project_tree", "description": "List the repository tree", "parameters": {"type": "object", "properties": {}}}},
-    {"type": "function", "function": {"name": "read_file", "description": "Read a UTF-8 repository file", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
+    {"type": "function", "function": {"name": "read_file", "description": "Read a UTF-8 repository file. Read at most 1,000 lines per call; use start_line for additional chunks.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
     {"type": "function", "function": {"name": "search_code", "description": "Search filenames and text", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
     {"type": "function", "function": {"name": "write_file", "description": "Write or propose a complete UTF-8 file change. In a background task, write directly to the isolated task worktree. In interactive chat, propose the change for user review. Use only when the user asks for changes.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
     {"type": "function", "function": {"name": "run_command", "description": "Run a bash command in the project", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
@@ -26,6 +26,15 @@ for tool_name, description, properties in [
     ("ask_user", "Ask a necessary clarification and wait for the answer before continuing.", {"question": {"type":"string"}}),
     ("remember_preference", "Save an explicit user request to remember a preference or decision. Do not infer personal facts or save secrets.", {"preference": {"type":"string"}}),
     ("update_plan", "Show or revise a short plan for a multi-step task.", {"steps": {"type":"array", "items": {"type":"string"}}}),
+    ("update_progress", "Report objective progress through the current plan using completed and total step counts plus the current step.", {"completed_steps": {"type":"integer", "minimum":0}, "total_steps": {"type":"integer", "minimum":1}, "current_step": {"type":"string"}}),
+    ("record_root_cause", "Record an evidence-backed root-cause analysis before editing during repeated recovery. Required on recovery attempt 2 or later before write_file/apply_patch can proceed.", {"analysis": {"type":"string"}}),
+    ("swarm_read_blackboard", "Read shared structured findings for the current swarm.", {"category": {"type":"string"}}),
+    ("swarm_publish_finding", "Publish an important evidence-backed finding to the current swarm blackboard.", {"content": {"type":"string"}, "key": {"type":"string"}}),
+    ("swarm_publish_decision", "Publish a meaningful engineering decision to the current swarm blackboard.", {"content": {"type":"string"}, "key": {"type":"string"}}),
+    ("swarm_publish_risk", "Publish an identified risk or uncertainty to the current swarm blackboard.", {"content": {"type":"string"}, "key": {"type":"string"}}),
+    ("swarm_publish_handoff", "Publish the final concise hand-off from this specialist to the coordinator and downstream agents.", {"content": {"type":"string"}, "key": {"type":"string"}}),
+    ("swarm_publish_followup", "Capture an unrelated improvement, technical-debt item, or product idea for later without expanding the current task scope.", {"content": {"type":"string"}, "key": {"type":"string"}}),
+    ("swarm_request_help", "Request one additional bounded specialist from the Swarm Coordinator when another role would materially help. The Coordinator decides whether to spawn it.", {"content": {"type":"string"}, "key": {"type":"string"}}),
 ]:
     TOOLS.append({"type":"function", "function": {"name":tool_name, "description":description,
         "parameters": {"type":"object", "properties":properties, "required":list(properties), "additionalProperties":False}}})
@@ -54,6 +63,27 @@ def status() -> dict:
         return {"connected": True, "url": settings.ollama_url, "models": models, "embedding_model": settings.ollama_embedding_model, "embedding_available": settings.ollama_embedding_model in models}
     except Exception as exc:
         return {"connected": False, "url": settings.ollama_url, "models": [], "embedding_model": settings.ollama_embedding_model, "embedding_available": False, "error": str(exc)}
+
+
+def _guard_verifier_git_command(command: str) -> None:
+    task = task_queue.current_task()
+    if not task or task.get("task_kind") not in {"reviewer", "challenger"}:
+        return
+    if not str(task.get("source_kind") or "").startswith("swarm_"):
+        return
+    mutating = re.compile(
+        r"(?:^|[;&|]\s*)git\s+(?:"
+        r"checkout|switch|merge|rebase|cherry-pick|reset|commit|add|restore|clean|rm|mv|"
+        r"worktree|update-ref|tag|"
+        r"branch\s+(?:-d|-D|-m|-M)"
+        r")\b",
+        re.I,
+    )
+    if mutating.search(str(command or "")):
+        raise ValueError(
+            "Reviewer/challenger tasks may inspect Git but may not mutate or integrate repository branches. "
+            "Olladex Coordinator finalization owns deterministic integration and promotion."
+        )
 
 
 def _check_cancelled() -> None:
@@ -99,6 +129,19 @@ def embed_texts(texts: list[str], model: str | None = None) -> list[list[float]]
 
 def _execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
     _check_cancelled()
+    task = task_queue.current_task()
+    if (
+        task
+        and name in {"write_file", "apply_patch"}
+        and int(task.get("recovery_attempt") or 0) >= 2
+        and not str(task.get("root_cause_analysis") or "").strip()
+    ):
+        raise ValueError(
+            "Repeated recovery requires root-cause analysis before another edit. "
+            "Inspect the failure evidence, then call record_root_cause before write_file/apply_patch."
+        )
+    if task and task.get("task_kind") in {"reviewer", "challenger"} and str(task.get("source_kind") or "").startswith("swarm_") and name in {"write_file", "apply_patch"}:
+        raise ValueError("Reviewer/challenger tasks are inspection-only and may not edit files; Coordinator finalization owns integration.")
     if name == "get_project_tree":
         result = workspace.tree(project, max_items=350)
     elif name == "read_file":
@@ -123,6 +166,57 @@ def _execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
     elif name == "update_plan":
         result = {"steps": args["steps"]}
         runtime.emit("plan", result)
+    elif name == "record_root_cause":
+        task_id = task_queue.current_task_id()
+        if not task_id:
+            raise ValueError("Root-cause analysis requires an active background task")
+        updated = task_queue.record_root_cause(task_id, str(args.get("analysis") or ""))
+        result = {
+            "task_id": task_id,
+            "recovery_attempt": int(updated.get("recovery_attempt") or 0),
+            "recorded": bool(str(updated.get("root_cause_analysis") or "").strip()),
+        }
+        runtime.emit("finding", {"task_id": task_id, "kind": "root_cause", "content": str(args.get("analysis") or "")})
+    elif name == "update_progress":
+        completed = int(args["completed_steps"])
+        total = int(args["total_steps"])
+        if completed < 0 or total < 1 or completed > total:
+            raise ValueError("Progress requires 0 <= completed_steps <= total_steps")
+        current_step = str(args.get("current_step") or "").strip()
+        percent = round((completed / total) * 100)
+        result = {"completed_steps": completed, "total_steps": total, "progress": percent, "current_step": current_step}
+        task_id = task_queue.current_task_id()
+        if task_id:
+            task_queue.set_progress(task_id, percent, current_step)
+        runtime.emit("progress", result)
+    elif name == "swarm_read_blackboard":
+        swarm_id = task_queue.current_swarm_id()
+        if not swarm_id:
+            raise ValueError("This agent is not running inside a swarm")
+        from . import swarm as swarm_service
+        result = swarm_service.blackboard(swarm_id, category=str(args.get("category") or ""))
+    elif name in {"swarm_publish_finding", "swarm_publish_decision", "swarm_publish_risk", "swarm_publish_handoff", "swarm_publish_followup", "swarm_request_help"}:
+        swarm_id = task_queue.current_swarm_id()
+        task_id = task_queue.current_task_id()
+        if not swarm_id or not task_id:
+            raise ValueError("This agent is not running inside a swarm")
+        from . import swarm as swarm_service
+        category = {
+            "swarm_publish_finding": "finding",
+            "swarm_publish_decision": "decision",
+            "swarm_publish_risk": "risk",
+            "swarm_publish_handoff": "handoff",
+            "swarm_publish_followup": "recommendation",
+            "swarm_request_help": "question",
+        }[name]
+        result = swarm_service.publish(
+            swarm_id,
+            category,
+            str(args.get("content") or ""),
+            task_id=task_id,
+            key=str(args.get("key") or ""),
+        )
+        runtime.emit(category, {"task_id": task_id, "blackboard_id": result["id"], "content": result["content"], "key": result.get("key", "")})
     elif name == "apply_patch":
         before = workspace.read_text(project, args["path"])
         old = args["old_text"]
@@ -158,6 +252,7 @@ def _execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
             result = {"path": path, "diff": diff, "before": before, "after": after, "status": "proposed"}
     elif name == "run_command":
         command = args.get("command", "")
+        _guard_verifier_git_command(command)
         if task_queue.current_task_id() and not task_queue.current_worktree_path():
             raise ValueError("Background commands require an isolated Git worktree")
         if runtime.current_id():
@@ -176,13 +271,38 @@ def _execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
 
 def execute_tool(project: dict, name: str, args: dict) -> tuple[Any, dict]:
     try:
+        warnings = []
+        args = dict(args) if isinstance(args, dict) else args
+        if name == "read_file" and isinstance(args, dict):
+            requested_line_count = args.get("line_count")
+            if isinstance(requested_line_count, int) and not isinstance(requested_line_count, bool) and requested_line_count > 1000:
+                args["line_count"] = 1000
+                warnings.append(f"Requested {requested_line_count:,} lines; capped at the 1,000-line maximum")
         args = validate_arguments(name, args)
-        return _execute_tool(project, name, args)
+        result, activity = _execute_tool(project, name, args)
+        if warnings:
+            activity["warnings"] = warnings
+            activity["summary"] += " · " + " · ".join(warnings)
+        return result, activity
     except AgentCancelled:
         raise
     except Exception as exc:
-        result = {"error": str(exc), "recoverable": True}
-        return result, {"tool": name, "arguments": args, "summary": f"Tool failed: {exc}", "result": result}
+        message = _tool_error_message(name, exc)
+        result = {"error": message, "recoverable": True}
+        return result, {"tool": name, "arguments": args, "summary": f"Tool failed: {message}", "result": result}
+
+
+def _tool_error_message(name: str, exc: Exception) -> str:
+    """Keep model-generated validation mistakes useful without leaking framework diagnostics."""
+    errors = getattr(exc, "errors", None)
+    if not callable(errors):
+        return str(exc)
+    details = []
+    for error in errors():
+        location = ".".join(str(part) for part in error.get("loc", ())) or "arguments"
+        message = str(error.get("msg") or "is invalid")
+        details.append(f"{location}: {message}")
+    return f"Invalid {name} arguments — " + "; ".join(details)
 
 
 def summarize(name: str, result: Any) -> str:
@@ -277,15 +397,49 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
     runtime.emit("progress", {"message": "Preparing repository context"})
     intelligence = workspace.repository_intelligence(project)
     intelligence["symbols"] = intelligence.get("symbols", [])[:40]
-    embedding_model = project.get("profile_embedding_model") or settings.ollama_embedding_model
-    selected_context = ranked_context(project, request, embedder=lambda texts: embed_texts(texts, embedding_model), embedding_model=embedding_model, max_files=project.get("profile_context_files") or 8, max_chars=project.get("profile_context_chars") or 32000)
+    task_profile = task_queue.current_model_settings()
+    embedding_model = task_profile.get("embedding_model") or project.get("profile_embedding_model") or settings.ollama_embedding_model
+    selected_context = ranked_context(
+        project,
+        request,
+        embedder=lambda texts: embed_texts(texts, embedding_model),
+        embedding_model=embedding_model,
+        max_files=task_profile.get("context_files") or project.get("profile_context_files") or 8,
+        max_chars=task_profile.get("context_chars") or project.get("profile_context_chars") or 32000,
+    )
+    persistent_state = development_state.orchestration_context(project)
     task_context = ""
-    if task_queue.current_task_id():
+    current_task = task_queue.current_task()
+    if current_task:
+        ownership = current_task.get("ownership_scope") or []
+        criteria = current_task.get("acceptance_criteria") or []
+        if isinstance(ownership, str):
+            try:
+                ownership = json.loads(ownership)
+            except (TypeError, json.JSONDecodeError):
+                ownership = []
+        if isinstance(criteria, str):
+            try:
+                criteria = json.loads(criteria)
+            except (TypeError, json.JSONDecodeError):
+                criteria = []
         task_context = (
             "\n\nBackground task mode: you are working inside an isolated Git worktree. "
             "When changes are requested, use write_file to apply them directly in this task worktree. "
             "You may edit multiple files and run appropriate checks. Do not merely describe edits that should be made."
         )
+        if ownership:
+            task_context += (
+                "\nTask ownership scope: " + ", ".join(str(item) for item in ownership)
+                + "\nStay within this ownership unless a dependency/blocker requires a tightly related change; "
+                "capture unrelated work as a follow-up instead of expanding scope."
+            )
+        if criteria:
+            task_context += (
+                "\nTask acceptance criteria:\n- "
+                + "\n- ".join(str(item) for item in criteria)
+                + "\nBefore finishing, verify these criteria against repository/tool evidence and address them explicitly in the handoff."
+            )
     system = (
         "You are Olladex, a thoughtful conversational coding collaborator. "
         "For greetings, discussion and questions, respond naturally; do not interpret every message as an instruction to edit. "
@@ -296,34 +450,43 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
         "Incorporate steering messages while preserving the original objective. Never claim success if checks failed or approval is pending. "
         "Finish with the outcome, relevant verification and remaining limitations. Work only inside the selected repository. "
         "Use tools to inspect evidence before answering. Keep the user informed in concise language. "
-        "Do not invent file contents or command results. When asked to change code, make focused edits, run appropriate checks, and summarize changes.\n\n"
+        "Do not invent file contents or command results. When asked to change code, make focused edits, run appropriate checks, and summarize changes. "
+        "When running inside a swarm, use update_plan before meaningful groups of work, use update_progress after completing meaningful plan steps, publish important evidence-backed findings, engineering decisions and risks to the shared blackboard, "
+        "Use swarm_request_help only when one additional bounded specialist would materially improve the outcome; you cannot spawn agents yourself. "
+        "Publish one concise swarm handoff before finishing that states the outcome, changed files, checks run, remaining risks and what downstream agents should know. "
+        "If you discover an unrelated improvement, technical-debt item, or product idea, do not expand the current scope; capture it with swarm_publish_followup for later. "
+        "Read the blackboard when dependency context or another specialist's findings would materially help your task.\n\n"
         + "\n\nOriginal conversation objective:\n" + next((m["content"] for m in history if m.get("role") == "user"), request)[:4000]
         + "\n\n" + workspace.project_summary(project)
         + ("\n\nProject instructions:\n" + project.get("instructions", "") if project.get("instructions", "").strip() else "")
+        + ("\n\nPersistent repository development state:\n" + persistent_state if persistent_state else "")
         + "\n\nRepository intelligence:\n" + json.dumps(intelligence, default=str)[:20_000]
         + ("\n\nPersistent session summary:\n" + session_summary if session_summary else "")
         + "\n\nAutomatically ranked repository context:\n" + format_context(selected_context)
         + task_context
     )
-    context_tokens = project.get("profile_context_tokens") or settings.context_tokens
+    context_tokens = task_profile.get("context_tokens") or project.get("profile_context_tokens") or settings.context_tokens
     resumed = runtime.resume_messages()
     messages: list[dict] = resumed or [{"role": "system", "content": system}, *history]
     if resumed:
         messages.append({"role": "user", "content": request})
     activities: list[dict] = []
     tool_attempts: dict[str, int] = {}
+    tool_budget = int(task_profile.get("agent_tool_budget") or 0)
+    profile_steps = int(task_profile.get("max_steps") or project.get("profile_max_steps") or 8)
+    effective_steps = min(profile_steps, tool_budget) if tool_budget else profile_steps
     with client() as http:
-        for _ in range(max_steps or project.get("profile_max_steps") or 8):
+        for _ in range(max_steps or effective_steps):
             _check_cancelled()
             messages.extend(runtime.consume_inputs())
             messages = fit_context(messages, context_tokens)
             runtime.checkpoint(messages)
             runtime.emit("assistant_start", {})
             message = _stream_chat(http, {
-                "model": model or project.get("profile_chat_model") or project.get("model") or settings.ollama_model,
+                "model": model or task_queue.current_assigned_model() or task_profile.get("chat_model") or project.get("profile_chat_model") or project.get("model") or settings.ollama_model,
                 "messages": messages,
                 "tools": TOOLS,
-                "options": {"num_ctx": context_tokens, "temperature": project.get("profile_temperature") if project.get("profile_temperature") is not None else 0.2},
+                "options": {"num_ctx": context_tokens, "temperature": task_profile.get("temperature") if task_profile.get("temperature") is not None else project.get("profile_temperature") if project.get("profile_temperature") is not None else 0.2},
             })
             messages.append(message)
             runtime.checkpoint(messages)
@@ -337,6 +500,8 @@ def chat(project: dict, history: list[dict], model: str | None = None, max_steps
                 return message.get("content", ""), activities
             for call in tool_calls:
                 _check_cancelled()
+                if tool_budget and len(activities) >= tool_budget:
+                    raise BudgetExhausted("Swarm agent tool budget exhausted")
                 function = call.get("function", {})
                 name = function.get("name", "")
                 args = function.get("arguments") or {}
@@ -396,9 +561,27 @@ def validate_arguments(name, args):
         preference: str = Field(min_length=1, max_length=1000)
     class Plan(Strict):
         steps: list[str] = Field(min_length=1, max_length=20)
+    class Progress(Strict):
+        completed_steps: int = Field(ge=0)
+        total_steps: int = Field(ge=1)
+        current_step: str = Field(max_length=1000)
+    class RootCause(Strict):
+        analysis: str = Field(min_length=40, max_length=20000)
+    class SwarmRead(Strict):
+        category: str = Field(default="", max_length=40)
+    class SwarmPublish(Strict):
+        content: str = Field(min_length=1, max_length=50000)
+        key: str = Field(default="", max_length=200)
     schema = {"get_project_tree": Strict, "read_file": Read, "write_file": Write,
               "apply_patch": Patch, "run_command": Command, "search_code": Search,
-              "ask_user": Question, "update_plan": Plan, "remember_preference": Preference}.get(name)
+              "ask_user": Question, "update_plan": Plan, "update_progress": Progress, "record_root_cause": RootCause, "remember_preference": Preference,
+              "swarm_read_blackboard": SwarmRead,
+              "swarm_publish_finding": SwarmPublish,
+              "swarm_publish_decision": SwarmPublish,
+              "swarm_publish_risk": SwarmPublish,
+              "swarm_publish_handoff": SwarmPublish,
+              "swarm_publish_followup": SwarmPublish,
+              "swarm_request_help": SwarmPublish}.get(name)
     if schema is None:
         raise ValueError(f"Unknown tool: {name}")
     return schema.model_validate(args).model_dump()

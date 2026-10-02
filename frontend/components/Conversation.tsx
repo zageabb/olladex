@@ -1,10 +1,12 @@
 "use client";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { request, streamEvents } from "../lib/api";
+import { MarkdownBody } from "./MarkdownBody";
 
 type Run = { id: number; status: string };
 type Event = { id: number; run_id: number; kind: string; payload: any };
 const activeStates = ["running", "waiting_for_input", "waiting_for_approval", "stopping"];
+const developmentActions = new Set(["/status", "/continue", "/verify", "/evidence", "/ci", "/review", "/recover", "/next", "/merge", "/sync-state"]);
 
 export function Conversation({ sessionId, onChanged }: { sessionId: number; onChanged: () => void }) {
   const [runs, setRuns] = useState<Run[]>([]);
@@ -76,7 +78,14 @@ export function Conversation({ sessionId, onChanged }: { sessionId: number; onCh
     const content = prompt.trim(); setSending(true); setError("");
     try {
       if (active) await request(`/runs/${current.id}/input`, { method: "POST", body: JSON.stringify({ content }) });
-      else {
+      else if (developmentActions.has(content.toLowerCase())) {
+        const result = await request<{ messages:any[] }>(`/sessions/${sessionId}/development-action`, {
+          method: "POST",
+          body: JSON.stringify({ content }),
+        });
+        if (mounted.current) setLegacy(items => [...items, ...result.messages]);
+        changed.current();
+      } else {
         const run = await request<Run>(`/sessions/${sessionId}/runs`, { method: "POST", body: JSON.stringify({ content }) });
         if (mounted.current) setRuns(items => [...items.filter(item => item.id !== run.id), run]);
       }
@@ -116,18 +125,18 @@ export function Conversation({ sessionId, onChanged }: { sessionId: number; onCh
     <div className="messages live-messages" role="log" aria-label="Conversation" onScroll={e => {
       const el = e.currentTarget; following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
     }}>
-      {legacy.map(item => <article key={item.id} className={`message ${item.role}`}><div className="bubble">{item.content}</div></article>)}
+      {legacy.map(item => <article key={item.id} className={`message ${item.role}`}><div className="bubble"><MarkdownBody value={item.content} /></div></article>)}
       {!legacy.length && !timeline.length && <div className="conversation-welcome"><h2>What would you like to work on?</h2><p>Discuss an idea, ask a question, or describe a change. You can add guidance while I work.</p></div>}
       {timeline.map(event => {
         const p = event.payload;
         if (event.kind === "final") {
           if (events.some(e => e.run_id === event.run_id && e.kind === "assistant_end" && e.payload.content === p.content)) return null;
-          return <article key={event.id} className="message assistant"><div className="bubble">{p.content}</div></article>;
+          return <article key={event.id} className="message assistant"><div className="bubble"><MarkdownBody value={p.content} /></div></article>;
         }
-        if (event.kind === "text_delta" || event.kind === "user_message") return <article key={event.id} className={`message ${event.kind === "user_message" ? "user" : "assistant"}`}><div className="message-avatar">{event.kind === "user_message" ? "You" : "O"}</div><div className="bubble">{p.text || p.content}</div></article>;
+        if (event.kind === "text_delta" || event.kind === "user_message") return <article key={event.id} className={`message ${event.kind === "user_message" ? "user" : "assistant"}`}><div className="message-avatar">{event.kind === "user_message" ? "You" : "O"}</div><div className="bubble"><MarkdownBody value={p.text || p.content || ""} /></div></article>;
         if (event.kind === "change_approval") return <section key={event.id} className="interaction-card"><strong>Review {p.path}</strong><pre>{p.diff}</pre>{current?.id === event.run_id && active && !events.some(e => e.kind === "tool_result" && e.payload.result?.change_id === p.change_id) && <div><button onClick={() => act(`/projects/${p.project_id}/changes/${p.change_id}/apply`, {})}>Apply change</button><button onClick={() => act(`/projects/${p.project_id}/changes/${p.change_id}/reject`)}>Reject</button></div>}</section>;
         if (event.kind === "approval") return <section key={event.id} className="interaction-card"><strong>Command approval</strong><pre>{p.command}</pre><small>Working directory: {p.cwd}</small>{!decided.has(p.command_run_id) && current?.id === event.run_id && active ? <div><button onClick={() => act(`/commands/${p.command_run_id}/decision`, { accepted: true })}>Approve once</button><button onClick={() => act(`/commands/${p.command_run_id}/decision`, { accepted: false })}>Decline</button></div> : <p>Approval closed</p>}</section>;
-        if (event.kind === "question") return <section key={event.id} className="interaction-card"><strong>{p.question}</strong>{current?.id === event.run_id && current.status === "waiting_for_input" && <p>Reply below to continue.</p>}</section>;
+        if (event.kind === "question") return <section key={event.id} className="interaction-card"><MarkdownBody value={p.question || ""} compact />{current?.id === event.run_id && current.status === "waiting_for_input" && <p>Reply below to continue.</p>}</section>;
         if (event.kind === "plan") return <ol key={event.id} className="interaction-card">{p.steps.map((s: string, i: number) => <li key={i}>{s}</li>)}</ol>;
         if (event.kind === "error") return <p role="alert" key={event.id}>{p.message}</p>;
         if (event.kind === "memory") return <p key={event.id} className="live-progress">Remembered: {p.remembered}</p>;
@@ -154,6 +163,6 @@ export function Conversation({ sessionId, onChanged }: { sessionId: number; onCh
       <div ref={tail} />
     </div>
     {error && <p className="conversation-error" role="alert">{error}</p>}
-    <form className="composer" onSubmit={send}><textarea aria-label="Message Olladex" value={prompt} onChange={e => setPrompt(e.target.value)} placeholder={active ? "Keep chatting — add guidance or change direction…" : "Ask Olladex anything…"} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} /><div className="composer-actions"><span>{active ? "Olladex is working · you can keep chatting" : "Local conversation · reviewable changes"}</span>{active && <button type="button" onClick={() => act(`/runs/${current.id}`, undefined, "DELETE")}>Stop</button>}<button className="primary" disabled={!prompt.trim() || sending || !ready}>{active ? current.status === "waiting_for_input" ? "Reply" : "Send" : "Send"}</button></div></form>
+    <form className="composer" onSubmit={send}><textarea aria-label="Message Olladex" value={prompt} onChange={e => setPrompt(e.target.value)} placeholder={active ? "Keep chatting — add guidance or change direction…" : "Ask Olladex anything… Try /status or /continue"} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} /><div className="composer-actions"><span>{active ? "Olladex is working · you can keep chatting" : "Local conversation · reviewable changes"}</span>{active && <button type="button" onClick={() => act(`/runs/${current.id}`, undefined, "DELETE")}>Stop</button>}<button className="primary" disabled={!prompt.trim() || sending || !ready}>{active ? current.status === "waiting_for_input" ? "Reply" : "Send" : "Send"}</button></div></form>
   </>;
 }

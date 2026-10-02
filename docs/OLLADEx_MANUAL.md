@@ -80,7 +80,9 @@ The navigation rail provides the principal work areas:
 | **Terminal** | Interactive repository-scoped local terminal. |
 | **Diagrams** | Mermaid and Graphviz/DOT editor and SVG preview/export. |
 | **Office** | Inspect Office/PDF files and create basic DOCX/XLSX/PPTX files. |
-| **Queue** | Persistent background tasks and multi-agent orchestration. |
+| **Tasks** | Persistent background tasks, orchestration and the integrated Swarm Agent Board. |
+| **Memory** | Personal, workspace, project and conversation memory scopes. |
+| **Workspace** | Named project groups and workspace memory. |
 | **Project** | Ollama, project, model profile, approval, Git identity, context and repository intelligence settings. |
 
 ### 3.3 Project and chat sidebar
@@ -108,6 +110,8 @@ The right-hand inspector has tabs for:
 - Diagrams;
 - Office;
 - Tasks;
+- Memory;
+- Workspace;
 - Project.
 
 The **Changes** tab shows a badge when agent file proposals are awaiting a decision.
@@ -551,9 +555,274 @@ olladex/integration-<lead-task-id>
 
 Conflict-safe cherry-pick integration aborts instead of modifying `main` when a conflict cannot be safely applied.
 
+### 14.7 Swarm skill — feature branch
+
+The `feature/swarm-v0.7` branch adds an optional **Swarm** workspace above the lower-level Queue/Orchestration controls.
+
+Use it when one larger objective benefits from several local specialist agents.
+
+1. open **Swarm** from the left rail;
+2. enable the Swarm skill for the selected project;
+3. choose a Swarm preset;
+4. set the maximum agent count and concurrency;
+5. optionally expand **Role model settings** and assign local Olladex model profiles to Coordinator, backend/coder, tester, researcher, reviewer and challenger roles;
+6. enter the objective and start the Swarm;
+7. use the Agent Board to watch task state, assigned model, worktree branch, latest activity and dependency graph;
+8. open an agent for its detailed event timeline and to send guidance;
+9. use **Send to Coordinator** for constraints that should affect later replanning/recovery;
+10. inspect the Blackboard for findings, decisions, risks and hand-offs;
+11. after verification completes, select completed implementation branches and run integration preflight;
+12. create the Swarm integration worktree, run combined checks, then push and create the final PR when appropriate.
+
+Swarm execution remains local to the configured Ollama server. Swarm model assignments are validated before the run begins.
+
+Maximum agents and maximum concurrency are separate settings. The global Olladex task-worker pool can still impose a lower machine-wide concurrency ceiling.
+
+The Swarm Coordinator can:
+
+- monitor specialist state;
+- preserve explicit dependency ordering;
+- recover from failed/interrupted specialists when capacity remains;
+- inspect Blackboard risks before final review;
+- add one bounded follow-up specialist when justified;
+- hold challenger/reviewer tasks until it explicitly opens the `reviewing` gate;
+- keep challenger before reviewer;
+- preserve user guidance across later decisions;
+- write a durable Coordinator event timeline for status changes, risks, decisions and guidance.
+
+The Agent Board reads agent and Coordinator event streams incrementally using event IDs rather than repeatedly reloading the whole event history. This keeps the live view responsive while reducing SQLite read pressure during parallel execution.
+
+Each specialist works in an isolated task worktree. Important plans, tool activity, findings, decisions, risks and final hand-offs are visible on the board; Olladex does not expose or depend on raw hidden model chain-of-thought.
+
+Agents can report explicit plan-step progress with the Swarm progress tool. The board stores and displays that value instead of inventing a percentage from prose. Agent cards also show durable tool usage against the configured worker tool budget.
+
+Open an agent from the board to inspect:
+
+- its durable activity timeline;
+- current status, model, branch, run ID, progress and tool usage;
+- committed changed files and branch diff;
+- any uncommitted worktree diff;
+- commands associated with that task and their outputs;
+- task-specific Blackboard findings, risks and hand-offs;
+- a steering box while the run is still active.
+
+A specialist may use **request help** when one additional bounded specialist would materially improve the result. The specialist does not create another agent directly. Its request is written to the Blackboard and the Coordinator decides whether to decline it or use spare dynamic-swarm capacity to create one helper. Final challenger/reviewer verification remains downstream of any helper that is created.
+
+Coordinator guidance has two scopes:
+
+- **Send to Coordinator** stores the instruction for later planning, recovery and follow-up decisions.
+- **Apply to all agents** stores the same persistent instruction, injects it into queued task prompts and live-steers currently active agents. Any helper/recovery/follow-up agents created later also inherit the persistent guidance.
+
+The configured **Coordinator budget** limits autonomous Coordinator model decisions. Initial decomposition, specialist-help decisions, pre-review risk decisions and recovery decisions consume that budget. Usage is shown on the Coordinator card and recorded in the durable Coordinator timeline. Once exhausted, Olladex uses conservative fallbacks rather than making additional autonomous Coordinator model calls.
+
+Swarm integration branches use a separate namespace:
+
+```text
+olladex/integration-swarm-<swarm-id>
+```
+
 ---
 
-## 15. Project settings
+
+
+
+
+## 15. Swarm in the Interaction Layer
+
+Swarm is integrated into **Tasks → Agent Board** rather than using a separate navigation item.
+
+Use Swarm for larger objectives that benefit from several local Ollama specialists working in parallel with explicit roles, dependencies, worktree isolation and a persistent Coordinator.
+
+### 15.0 Repository modes
+
+Swarm requires Git worktrees, but it does **not** require GitHub.
+
+Olladex supports three repository modes:
+
+- **Plain local folder** — preflight explains that Git is required and offers **Initialize local Git**. This creates a local Git repository and a baseline commit of all non-ignored files.
+- **Local Git repository with no remote** — the full Swarm can run, review and integrate. After combined checks pass, Olladex reports **Verified local integration branch ready** and does not require push or a pull request.
+- **Git repository with a remote** — Olladex can push the verified integration branch. If a GitHub remote is detected, the final **Create final PR** action is also available.
+
+The local Git initializer does not create a GitHub repository or upload files anywhere.
+
+### 15.1 Enable and start a Swarm
+
+1. open **Tasks**;
+2. expand **Swarm controls**;
+3. enable Swarm for the current project;
+4. choose a preset;
+5. set maximum agents and concurrency;
+6. optionally add a title;
+7. enter the objective;
+8. select **Preflight & start Swarm**.
+
+Preflight checks the selected profile, local Ollama models, project Git repository, SQLite WAL/busy timeout and requested limits before a Swarm is created.
+
+### 15.2 Local model and policy settings
+
+Expand **Model & policy settings** to configure:
+
+- Coordinator model profile;
+- default worker model profile;
+- role-specific overrides for backend, frontend, coder, tester, researcher, reviewer and challenger;
+- worker tool budget;
+- Coordinator decision budget;
+- dynamic swarm sizing;
+- final reviewer requirement;
+- challenger requirement.
+
+All Swarm model assignments are local Ollama profiles. Missing required models block startup rather than silently falling back to another model.
+
+Use **Test local models** to run a tiny non-tool responsiveness check against each unique model used by the selected Swarm profile. The result shows the roles mapped to each model, whether it returned the expected response, and approximate request latency. The self-test creates no Swarm, tasks or worktrees.
+
+### 15.3 Agent Board
+
+When a Swarm exists, the Agent Board displays:
+
+- Swarm title, state and progress;
+- total, active and completed agent counts;
+- Coordinator activity and decision-budget usage;
+- specialist role, state, progress and tool usage;
+- current activity;
+- latest finding when available;
+- integration readiness.
+
+Selecting an agent opens its detail view with:
+
+- current activity;
+- changed files;
+- recorded commands;
+- task-specific Blackboard findings and hand-offs.
+
+### 15.4 Steering and lifecycle controls
+
+From the integrated board you can:
+
+- pause and resume a Swarm;
+- stop a Swarm;
+- send guidance to the Coordinator;
+- apply guidance to all active and queued agents;
+- stop an individual active specialist.
+
+Swarm-wide guidance is persistent: queued work receives it before starting and later helper/recovery/follow-up agents inherit it.
+
+### 15.5 Coordinator timeline and Blackboard
+
+The board exposes two expandable observability areas:
+
+- **Coordinator timeline** — durable status changes, decisions, guidance, model-call budget events and recovery/follow-up actions;
+- **Blackboard** — shared facts, findings, decisions, questions, risks, hand-offs and test results published by agents and the Coordinator.
+
+These are explicit operational records. Olladex does not expose raw hidden model chain-of-thought.
+
+### 15.6 Dynamic helper agents
+
+A specialist may request help from the Coordinator when another bounded role would materially improve the result.
+
+The specialist cannot create another agent directly. The Coordinator decides whether to decline the request or use spare dynamic-swarm capacity to create one helper. Final challenger/reviewer verification remains downstream of any accepted helper.
+
+### 15.6 Advanced orchestration command approvals
+
+Advanced orchestration agents use the same command approval policy as normal conversations.
+
+When a background agent is waiting for an assisted-mode command approval:
+
+- the Agent Board shows a prominent **Command approval required** notification;
+- the parent board identifies the exact agent with **Agent #N needs command approval**;
+- opening that agent shows the exact command and working directory;
+- **Approve once** approves only that pending command;
+- **Decline** returns control to the same background agent so it can choose another approach;
+- **Open conversation** opens that agent's own conversation session, where approvals and questions can also be handled.
+
+Only a pending command belonging to the agent's current active `waiting_for_approval` run is actionable. Historical pending rows from completed, interrupted, failed, cancelled, or budget-exhausted runs are not offered for approval.
+
+In autonomous mode, normal commands do not show approval controls unless another explicit safety mechanism requires an approval.
+
+An Advanced orchestration run cannot finalize while a specialist command approval remains unresolved.
+
+---
+
+### 15.7 Swarm finalization, integration and promotion
+
+Managed Swarm worktrees deliberately isolate agent changes from the configured project directory. A specialist or reviewer finishing does **not** mean those files are on `main`.
+
+The finalization lifecycle is:
+
+```text
+reviewing
+  → ready_for_integration
+  → integrating
+  → checks_failed      (when combined checks or evidence fail)
+  → ready_to_promote   (only after evidence-backed checks pass)
+  → completed          (local promotion to main succeeded)
+```
+
+The Coordinator owns deterministic integration. Reviewer and challenger agents may inspect Git, but they cannot checkout/switch/merge/rebase/cherry-pick/reset/commit or edit files for repository integration.
+
+Before integration, Olladex verifies:
+
+- required specialist tasks completed;
+- specialist worktrees are clean;
+- implementation work is committed;
+- recovery tasks produced a meaningful committed diff;
+- required reviewer output contains a substantive final report.
+
+The Coordinator then prepares a dedicated branch such as:
+
+```text
+olladex/integration-swarm-<swarm-id>
+```
+
+inside the Olladex integration worktree area. Specialist/reviewer worktrees are preserved.
+
+Before `ready_to_promote`, Olladex verifies:
+
+- the integration worktree is clean;
+- configured combined checks pass;
+- expected deliverables explicitly named or implied by the objective are present;
+- reviewer evidence remains valid.
+
+The Agent Board shows three separate locations:
+
+1. **Specialist worktrees** — isolated agent branches and files;
+2. **Integration worktree** — deterministic combined result;
+3. **Main project directory** — the configured repository path users normally open.
+
+Until local promotion succeeds, the board shows:
+
+```text
+Work is committed on <branch> but has not yet been promoted to main.
+```
+
+#### Local repositories
+
+For a local-only repository, select **Promote to main** after the Swarm reaches `ready_to_promote`.
+
+Promotion runs from the configured main worktree and uses a fast-forward-only merge. Olladex:
+
+- confirms `main` is already checked out in the configured project directory;
+- requires the main worktree to be clean;
+- resolves the integration commit;
+- requires `main` to be an ancestor of that integration commit;
+- runs `git merge --ff-only <integration-commit>`;
+- verifies main contains the integration commit;
+- verifies expected generated files are visible in the configured project directory.
+
+Olladex never force-resets main during promotion. On dirty/diverged/conflicting state it reports the problem and preserves all branches/worktrees for recovery.
+
+Only successful local promotion marks a local-only Swarm `completed`.
+
+#### Remote repositories
+
+For repositories with a remote, the verified integration branch can still be pushed. If the remote is GitHub, **Create final PR** remains available.
+
+A pushed integration branch or open PR is **not** equivalent to “merged to main”; the board keeps those states distinct.
+
+Failed checks, failed evidence gates and blocked promotion never delete specialist or integration worktrees automatically.
+
+---
+
+## 16. Project settings
 
 Open **Project** for project and AI configuration.
 

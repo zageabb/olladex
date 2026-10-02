@@ -19,6 +19,13 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS agent_runs (
  id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL REFERENCES sessions(id), task_id INTEGER,
  status TEXT NOT NULL, checkpoint TEXT NOT NULL DEFAULT '[]', cancel_requested INTEGER NOT NULL DEFAULT 0,
+ resumed_from_run_id INTEGER REFERENCES agent_runs(id) ON DELETE SET NULL,
+ recovery_attempt INTEGER NOT NULL DEFAULT 0,
+ checkpoint_restored INTEGER NOT NULL DEFAULT 0,
+ starting_head TEXT NOT NULL DEFAULT '',
+ starting_diff TEXT NOT NULL DEFAULT '',
+ completion_evidence TEXT NOT NULL DEFAULT '{}',
+ no_progress_reason TEXT NOT NULL DEFAULT '',
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_session ON agent_runs(session_id)
@@ -39,6 +46,18 @@ def init():
     _stopping.clear()
     with connect() as conn:
         conn.executescript(SCHEMA)
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(agent_runs)")}
+        for name, definition in {
+            "resumed_from_run_id": "INTEGER REFERENCES agent_runs(id) ON DELETE SET NULL",
+            "recovery_attempt": "INTEGER NOT NULL DEFAULT 0",
+            "checkpoint_restored": "INTEGER NOT NULL DEFAULT 0",
+            "starting_head": "TEXT NOT NULL DEFAULT ''",
+            "starting_diff": "TEXT NOT NULL DEFAULT ''",
+            "completion_evidence": "TEXT NOT NULL DEFAULT '{}'",
+            "no_progress_reason": "TEXT NOT NULL DEFAULT ''",
+        }.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE agent_runs ADD COLUMN {name} {definition}")
         conn.execute("UPDATE agent_runs SET status='interrupted' WHERE status IN ('running','waiting_for_approval','waiting_for_input')")
         conn.execute("UPDATE command_runs SET status='interrupted' WHERE status='running'")
 
@@ -65,14 +84,16 @@ def get(run_id):
     return dict(row)
 
 
-def create(session_id, task_id=None):
+def create(session_id, task_id=None, *, resumed_from_run_id=None, recovery_attempt=0, checkpoint_restored=False, starting_head="", starting_diff=""):
     import sqlite3
     with connect() as conn:
         if not conn.execute('SELECT id FROM sessions WHERE id=?', (session_id,)).fetchone():
             raise HTTPException(404, 'Session not found')
         try:
-            cursor = conn.execute('INSERT INTO agent_runs(session_id,task_id,status,created_at,updated_at) VALUES(?,?,?,?,?)',
-                                  (session_id, task_id, 'running', now(), now()))
+            cursor = conn.execute(
+                'INSERT INTO agent_runs(session_id,task_id,status,resumed_from_run_id,recovery_attempt,checkpoint_restored,starting_head,starting_diff,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                (session_id, task_id, 'running', resumed_from_run_id, int(recovery_attempt or 0), 1 if checkpoint_restored else 0, starting_head, starting_diff, now(), now())
+            )
         except sqlite3.IntegrityError:
             raise HTTPException(409, 'This conversation already has an active turn')
     return cursor.lastrowid
@@ -103,6 +124,26 @@ def state(status, run_id=None):
             if row and row['task_id'] and status in ACTIVE:
                 conn.execute('UPDATE background_tasks SET status=? WHERE id=?', (status, row['task_id']))
         emit('status', {'status': status}, run_id)
+
+
+def state_with_event(status, kind, payload, run_id=None):
+    run_id = run_id or current_id()
+    if not run_id:
+        return
+    stamp = now()
+    with connect() as conn:
+        conn.execute('UPDATE agent_runs SET status=?,updated_at=? WHERE id=?', (status, stamp, run_id))
+        row = conn.execute('SELECT task_id FROM agent_runs WHERE id=?', (run_id,)).fetchone()
+        if row and row['task_id'] and status in ACTIVE:
+            conn.execute('UPDATE background_tasks SET status=? WHERE id=?', (status, row['task_id']))
+        conn.execute(
+            'INSERT INTO agent_events(run_id,kind,payload,created_at) VALUES(?,?,?,?)',
+            (run_id, 'status', json.dumps({'status': status}), stamp),
+        )
+        conn.execute(
+            'INSERT INTO agent_events(run_id,kind,payload,created_at) VALUES(?,?,?,?)',
+            (run_id, kind, json.dumps(payload), stamp),
+        )
 
 
 def checkpoint(messages):
@@ -168,8 +209,14 @@ def command(project, command):
             (project['id'], task_queue.current_task_id(), current_id(), cwd, command, '', -1, 'pending' if pending else 'running', now(), now()))
         command_id = cursor.lastrowid
     if pending:
-        emit('approval', {'command_run_id': command_id, 'command': command, 'cwd': cwd})
-        state('waiting_for_approval')
+        # Publish the approval event only after the durable run/task state is ready.
+        # A UI reacting immediately to the event can then approve without racing a
+        # still-'running' agent state.
+        state_with_event(
+            'waiting_for_approval',
+            'approval',
+            {'command_run_id': command_id, 'command': command, 'cwd': cwd},
+        )
         while True:
             check_cancelled()
             with connect() as conn:
@@ -206,12 +253,12 @@ def approve(command_id, accepted):
     return {'status': 'approved' if accepted else 'rejected'}
 
 
-def launch(session_id, content, resume_id=None):
+def launch(session_id, content, resume_id=None, recovery_metadata=None):
     checkpoint_data = None
     task_id = None
     if resume_id:
         prior = get(resume_id)
-        if prior['session_id'] != session_id or prior['status'] not in ('interrupted', 'budget_exhausted', 'cancelled', 'failed'):
+        if prior['session_id'] != session_id or prior['status'] not in ('interrupted', 'budget_exhausted', 'cancelled', 'failed', 'no_progress', 'incomplete'):
             raise HTTPException(409, 'Only a stopped or interrupted turn can be resumed')
         checkpoint_data = json.loads(prior['checkpoint'])
         task_id = prior['task_id']
@@ -228,7 +275,22 @@ def launch(session_id, content, resume_id=None):
             if not Path(task['worktree_path']).is_dir():
                 raise HTTPException(409, 'The task workspace is unavailable; start a new conversation to use the main project')
             task_id = task['id']
-    run_id = create(session_id, task_id)
+    recovery_metadata = recovery_metadata or {}
+    run_id = create(
+        session_id,
+        task_id,
+        resumed_from_run_id=resume_id,
+        recovery_attempt=int(recovery_metadata.get("recovery_attempt") or 0),
+        checkpoint_restored=bool(resume_id and checkpoint_data),
+        starting_head=str(recovery_metadata.get("starting_head") or ""),
+        starting_diff=str(recovery_metadata.get("starting_diff") or "")[:500000],
+    )
+    if resume_id and checkpoint_data:
+        with connect() as conn:
+            conn.execute(
+                "UPDATE agent_runs SET checkpoint=?,checkpoint_restored=1,updated_at=? WHERE id=?",
+                (json.dumps(checkpoint_data, default=str), now(), run_id),
+            )
     def worker():
         with bind(run_id):
             from . import task_queue
@@ -249,18 +311,66 @@ def launch(session_id, content, resume_id=None):
                         result['content'] += f'\n\nTask branch auto-committed as {sha[:12]}.'
                 emit('final', result)
                 if get(run_id)['status'] == 'running':
-                    state('completed')
+                    if resume_id and task_id:
+                        evidence = _validate_recovery_completion(task_id, run_id, result, recovery_metadata)
+                        if not evidence["ok"]:
+                            with connect() as conn:
+                                conn.execute(
+                                    "UPDATE agent_runs SET completion_evidence=?,no_progress_reason=?,updated_at=? WHERE id=?",
+                                    (json.dumps(evidence, default=str), evidence["reason"], now(), run_id),
+                                )
+                                conn.execute(
+                                    "UPDATE background_tasks SET completion_evidence=?,no_progress_reason=?,status='no_progress',error=? WHERE id=?",
+                                    (json.dumps(evidence, default=str), evidence["reason"], evidence["reason"], task_id),
+                                )
+                            # Make recovery availability visible before publishing the
+                            # terminal no-progress run state. Pollers must never observe a
+                            # no-progress run while the swarm still reports recovering.
+                            task_queue._mark_recovery_available(task_queue.get(task_id), evidence["reason"])
+                            state('no_progress')
+                        else:
+                            with connect() as conn:
+                                conn.execute(
+                                    "UPDATE agent_runs SET completion_evidence=?,updated_at=? WHERE id=?",
+                                    (json.dumps(evidence, default=str), now(), run_id),
+                                )
+                                conn.execute(
+                                    "UPDATE background_tasks SET completion_evidence=?,no_progress_reason='' WHERE id=?",
+                                    (json.dumps(evidence, default=str), task_id),
+                                )
+                            state('completed')
+                    else:
+                        state('completed')
             except Exception as exc:
-                from .ollama import AgentCancelled
+                from .ollama import AgentCancelled, BudgetExhausted
                 error = str(exc)
                 emit('error', {'message': error})
-                state('cancelled' if isinstance(exc, AgentCancelled) else 'failed')
+                state(
+                    'cancelled' if isinstance(exc, AgentCancelled)
+                    else 'budget_exhausted' if isinstance(exc, BudgetExhausted)
+                    else 'failed'
+                )
             finally:
                 if task_id:
                     final_status = get(run_id)["status"]
+                    current_task = task_queue.get(task_id)
+                    final_error = error
+                    if final_status == "no_progress":
+                        final_error = str(current_task.get("no_progress_reason") or current_task.get("error") or "Recovery made no meaningful progress")
                     with connect() as conn:
-                        conn.execute("UPDATE background_tasks SET status=?,result=?,error=?,completed_at=? WHERE id=?", (final_status, result["content"] if result else "", error, now(), task_id))
-                    task_queue._finalize_parent(task_queue.get(task_id), final_status, result=result["content"] if result else "", error=error)
+                        conn.execute(
+                            "UPDATE background_tasks SET status=?,result=?,error=?,completed_at=? WHERE id=?",
+                            (final_status, result["content"] if result else "", final_error, now(), task_id),
+                        )
+                    refreshed_task = task_queue.get(task_id)
+                    if final_status == "budget_exhausted":
+                        task_queue._mark_recovery_available(refreshed_task, final_error or "Recovery budget exhausted again")
+                    elif final_status == "no_progress":
+                        task_queue._mark_recovery_available(refreshed_task, final_error)
+                    elif final_status == "completed":
+                        task_queue.auto_retry_recovered_dependants(task_id)
+                        refreshed_task = task_queue.get(task_id)
+                    task_queue._finalize_parent(refreshed_task, final_status, result=result["content"] if result else "", error=final_error)
                 _local.resume = None
                 task_queue._local.task_id = None
                 with _lock:
@@ -270,6 +380,42 @@ def launch(session_id, content, resume_id=None):
         _threads[run_id] = thread
     thread.start()
     return get(run_id)
+
+
+def _validate_recovery_completion(task_id: int, run_id: int, result: dict, recovery_metadata: dict) -> dict:
+    from . import task_queue, worktrees
+    task = task_queue.get(task_id)
+    project = task_queue._project_for_task(task)
+    summary = worktrees.summary(project, task["worktree_path"]) if task.get("worktree_path") else {}
+    activities = list(result.get("activities") or [])
+    meaningful_tools = {"write_file", "apply_patch", "run_command"}
+    meaningful = [item for item in activities if str(item.get("tool") or "") in meaningful_tools]
+    checks = [item for item in activities if str(item.get("tool") or "") == "run_command"]
+    starting_head = str(recovery_metadata.get("starting_head") or "")
+    ending_head = str(summary.get("head") or "")
+    head_changed = bool(starting_head and ending_head and starting_head != ending_head)
+    working_changes = bool(summary.get("changes"))
+    response = str(result.get("content") or "").strip()
+    ok = bool(response) and bool(meaningful or head_changed or working_changes)
+    reason = ""
+    if not response:
+        reason = "Recovery produced an empty final response."
+    elif not (meaningful or head_changed or working_changes):
+        reason = "Recovery made no meaningful changes, checks, or commits."
+    evidence = {
+        "ok": ok,
+        "reason": reason,
+        "run_id": run_id,
+        "response_nonempty": bool(response),
+        "activity_count": len(activities),
+        "meaningful_tools": [str(item.get("tool") or "") for item in meaningful],
+        "checks_run": len(checks),
+        "starting_head": starting_head,
+        "ending_head": ending_head,
+        "head_changed": head_changed,
+        "worktree_changes": summary.get("changes") or [],
+    }
+    return evidence
 
 
 def resume_messages():

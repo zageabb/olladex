@@ -1,4 +1,4 @@
-export const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001/api";
+export const API = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8001/api";
 
 export async function authHeaders(): Promise<Record<string, string>> {
   const desktop = window.olladexDesktop;
@@ -13,7 +13,10 @@ export async function request<T>(path: string, options?: RequestInit): Promise<T
   });
   if (!response.ok) {
     const data = await response.json().catch(() => ({ detail: response.statusText }));
-    if (response.status === 401) window.dispatchEvent(new Event("olladex-auth-required"));
+    if (response.status === 401) {
+      sessionStorage.setItem("olladex-auth-required", "1");
+      window.dispatchEvent(new Event("olladex-auth-required"));
+    }
     throw new Error(typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail || response.statusText));
   }
   return response.json();

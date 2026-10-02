@@ -18,13 +18,17 @@ def client_project(tmp_path, monkeypatch):
         session = client.get(f"/api/projects/{project['id']}/sessions").json()[0]
         yield client, project, session, repo
 
-def wait_for(predicate):
-    deadline = time.monotonic() + 5
+def wait_for(predicate, timeout=10):
+    # Conversation runs execute on background threads. CI runners can be
+    # temporarily CPU/disk constrained, so use a deadline generous enough to
+    # observe durable state transitions without making normal tests slower.
+    deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         value = predicate()
-        if value: return value
+        if value:
+            return value
         time.sleep(.02)
-    raise AssertionError('Timed out')
+    raise AssertionError(f'Timed out after {timeout}s')
 
 def test_auth_and_origin(client_project):
     client, _, _, _ = client_project
@@ -216,3 +220,172 @@ def test_followup_to_task_keeps_original_worktree(client_project, monkeypatch):
         task=conn.execute('SELECT * FROM background_tasks WHERE id=?',(task_id,)).fetchone()
     assert task['status']=='completed'
     assert task['result']=='Followup complete'
+
+
+def test_declining_command_returns_control_to_same_background_run(client_project, monkeypatch):
+    client, project, session, _ = client_project
+    seen = {}
+
+    def fake_chat(project, history, **kwargs):
+        seen["run_id_before"] = runtime.current_id()
+        result = runtime.command(project, "printf should-not-run")
+        seen["command_result"] = result
+        seen["run_id_after"] = runtime.current_id()
+        return "Handled the decline and continued.", []
+
+    monkeypatch.setattr(ollama, "chat", fake_chat)
+    run = client.post(f"/api/sessions/{session['id']}/runs", json={"content": "Try command"}).json()
+    wait_for(lambda: runtime.get(run["id"])["status"] == "waiting_for_approval")
+    approval = next(e["payload"] for e in runtime.events(run["id"]) if e["kind"] == "approval")
+
+    response = client.post(
+        f"/api/commands/{approval['command_run_id']}/decision",
+        json={"accepted": False},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "rejected"
+    wait_for(lambda: runtime.get(run["id"])["status"] == "completed")
+
+    assert seen["run_id_before"] == run["id"]
+    assert seen["run_id_after"] == run["id"]
+    assert seen["command_result"]["status"] == "rejected"
+    assert seen["command_result"]["exit_code"] == 126
+    with connect() as conn:
+        command = conn.execute(
+            "SELECT status FROM command_runs WHERE id=?",
+            (approval["command_run_id"],),
+        ).fetchone()
+    assert command["status"] == "rejected"
+
+
+def test_stale_command_approval_is_rejected(client_project):
+    client, project, session, _ = client_project
+    run_id = runtime.create(session["id"])
+    runtime.state("waiting_for_approval", run_id)
+    with connect() as conn:
+        command_id = int(conn.execute(
+            "INSERT INTO command_runs(project_id,task_id,run_id,cwd,command,output,exit_code,status,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (project["id"], None, run_id, project["path"], "printf stale", "", -1, "pending", now(), now()),
+        ).lastrowid)
+    runtime.state("completed", run_id)
+
+    response = client.post(
+        f"/api/commands/{command_id}/decision",
+        json={"accepted": True},
+    )
+
+    assert response.status_code == 409
+    with connect() as conn:
+        row = conn.execute("SELECT status FROM command_runs WHERE id=?", (command_id,)).fetchone()
+    assert row["status"] == "pending"
+
+
+def test_autonomous_mode_does_not_request_normal_command_approval(client_project, monkeypatch):
+    client, project, session, _ = client_project
+    with connect() as conn:
+        conn.execute("UPDATE projects SET approval_mode='autonomous' WHERE id=?", (project["id"],))
+
+    def fake_chat(project, history, **kwargs):
+        result = runtime.command(project, "printf autonomous")
+        return result["output"], []
+
+    monkeypatch.setattr(ollama, "chat", fake_chat)
+    run = client.post(f"/api/sessions/{session['id']}/runs", json={"content": "Run it"}).json()
+    wait_for(lambda: runtime.get(run["id"])["status"] == "completed")
+
+    assert not any(event["kind"] == "approval" for event in runtime.events(run["id"]))
+    with connect() as conn:
+        command = conn.execute(
+            "SELECT status,output FROM command_runs WHERE run_id=? ORDER BY id DESC LIMIT 1",
+            (run["id"],),
+        ).fetchone()
+    assert command["status"] == "completed"
+    assert "autonomous" in command["output"]
+
+
+def test_development_slash_action_is_structured_and_persisted(client_project):
+    client, project, session, repo = client_project
+    (repo / "AGENTS.md").write_text("# AGENTS.md\nUse repository evidence.\n", encoding="utf-8")
+    (repo / "DEVELOPMENT.md").write_text(
+        """# Development Status
+
+## Current objective
+
+Ship verified state.
+
+### DEV-123 — Add slash actions
+
+Status: 🔨 IN PROGRESS
+Priority: High
+
+Completion criteria:
+- [x] Structured endpoint exists.
+- [ ] CI is verified.
+""",
+        encoding="utf-8",
+    )
+
+    response = client.post(
+        f"/api/sessions/{session['id']}/development-action",
+        json={"content": "/status"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["action"] == "status"
+    assert payload["report"]["current_item"]["key"] == "DEV-123"
+    assert payload["report"]["execution"]["dev_item"] == "DEV-123"
+    assert payload["messages"][0]["role"] == "user"
+    assert payload["messages"][1]["role"] == "assistant"
+    assert "Development action: /status" in payload["messages"][1]["content"]
+    assert "DEV-123" in payload["messages"][1]["content"]
+
+    messages = client.get(f"/api/sessions/{session['id']}/messages").json()
+    assert messages[-2]["content"] == "/status"
+    assert "Development action: /status" in messages[-1]["content"]
+
+
+
+def test_autonomous_continue_slash_action_starts_advanced_orchestration(client_project, monkeypatch):
+    client, project, session, repo = client_project
+    (repo / "AGENTS.md").write_text("# AGENTS.md\nUse repository evidence.\n", encoding="utf-8")
+    (repo / "DEVELOPMENT.md").write_text(
+        """# Development Status
+
+## Current objective
+
+Finish current development.
+
+### DEV-200 — Continue autonomously
+
+Status: 🔨 IN PROGRESS
+Priority: High
+""",
+        encoding="utf-8",
+    )
+    with connect() as conn:
+        conn.execute("UPDATE projects SET development_mode='autonomous' WHERE id=?", (project["id"],))
+        profile_id = int(conn.execute("SELECT id FROM swarm_profiles WHERE name='Development'").fetchone()["id"])
+
+    from backend.app import development_routes
+    seen = {}
+
+    def fake_start(project_id, body):
+        seen["project_id"] = project_id
+        seen["profile_id"] = body.profile_id
+        return {"swarm": {"id": 77}}
+
+    monkeypatch.setattr(development_routes, "start_current_development_item", fake_start)
+
+    response = client.post(
+        f"/api/sessions/{session['id']}/development-action",
+        json={"content": "/continue"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert seen == {"project_id": project["id"], "profile_id": profile_id}
+    assert payload["report"]["execution_started"]["swarm_id"] == 77
+    assert "Execution started: Advanced orchestration #77" in payload["messages"][1]["content"]
+

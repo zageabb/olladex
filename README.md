@@ -27,6 +27,7 @@ See [runtime architecture and verification](docs/conversation-runtime.md) for en
 - Connect to local or network-hosted Ollama and discover installed models.
 - Persistent projects, task sessions, messages and activity records in SQLite.
 - Persistent background task queue with isolated worktrees and configurable worker concurrency.
+- Integrated **Tasks → Agent Board** for local Ollama Swarms with Coordinator state, per-role models, progress/tool budgets, shared Blackboard knowledge, steering and final integration/PR workflow.
 - Live streamed conversation, tool activity, inline questions, steering, Stop, and resumable saved context.
 - Repository tree, UTF-8 file viewer/editor and text/code search.
 - Review-first agent file proposals with selectable diff hunks, apply, reject and conflict-safe revert.
@@ -156,10 +157,13 @@ npm --prefix frontend run build
 3. Ask: `Inspect this project and explain its architecture.`
 4. Ask: `Add a health endpoint, run the relevant tests and show the changes.`
 5. Review agent activity, the file editor, Git diff and terminal output.
-6. Use **Queue** to let another prompt run persistently in the background.
-7. Connect GitHub CLI to import an issue or prepare a pull request for explicit approval.
-8. Open the Diagrams tab to create Mermaid or DOT output.
-9. Open an Office file from the tree or create one in the Office tab.
+6. Use **Tasks** to queue persistent background work or open the Agent Board.
+7. For a larger objective, enable Swarm under **Tasks → Swarm controls**, run preflight, choose local role models and start the Swarm.
+8. Inspect Coordinator activity, specialist progress, Blackboard findings and isolated worktree results in the Agent Board.
+9. When a Swarm is ready, preflight overlaps, build the integration worktree, run combined checks, push and create the final PR.
+10. Connect GitHub CLI to import an issue or prepare a pull request for explicit approval.
+11. Open the Diagrams tab to create Mermaid or DOT output.
+12. Open an Office file from the tree or create one in the Office tab.
 
 ## Safety boundary
 

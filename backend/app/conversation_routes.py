@@ -3,8 +3,9 @@ import json
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from .database import connect
+from .database import connect, now
 from .services import conversation_runtime as runtime
+from .services import development_state
 
 router = APIRouter()
 
@@ -18,6 +19,85 @@ class Decision(BaseModel):
 @router.post('/api/sessions/{session_id}/runs')
 def start(session_id: int, body: Turn):
     return runtime.launch(session_id, body.content, body.resume_id)
+
+@router.post('/api/sessions/{session_id}/development-action')
+def development_action(session_id: int, body: Turn):
+    action = body.content.strip().lower().lstrip("/")
+    if action not in development_state.DEVELOPMENT_ACTIONS:
+        raise HTTPException(400, f"Unsupported development action: {body.content}")
+    with connect() as conn:
+        session = conn.execute(
+            "SELECT s.id,s.project_id FROM sessions s WHERE s.id=?",
+            (session_id,),
+        ).fetchone()
+        if not session:
+            raise HTTPException(404, "Session not found")
+        project_row = conn.execute(
+            "SELECT * FROM projects WHERE id=?",
+            (session["project_id"],),
+        ).fetchone()
+    if not project_row:
+        raise HTTPException(404, "Project not found")
+    project = dict(project_row)
+    try:
+        report = development_state.action_report(project, action)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+    if action == "continue" and development_state.normalise_mode(project.get("development_mode") or "build") in {"build", "autonomous", "recover", "release"}:
+        with connect() as conn:
+            profile = conn.execute(
+                "SELECT id FROM swarm_profiles WHERE enabled=1 ORDER BY CASE WHEN name='Development' THEN 0 ELSE 1 END,is_builtin DESC,name LIMIT 1"
+            ).fetchone()
+        if profile:
+            try:
+                from .development_routes import DevelopmentContinueRequest, start_current_development_item
+                started = start_current_development_item(
+                    int(session["project_id"]),
+                    DevelopmentContinueRequest(profile_id=int(profile["id"])),
+                )
+                report["execution_started"] = {
+                    "kind": "advanced_orchestration",
+                    "swarm_id": int((started.get("swarm") or {}).get("id") or 0),
+                }
+            except HTTPException as exc:
+                report["execution_error"] = str(exc.detail)
+        else:
+            report["execution_error"] = "No enabled Advanced orchestration profile is available."
+    elif action == "merge" and development_state.normalise_mode(project.get("development_mode") or "build") in {"autonomous", "release"}:
+        try:
+            from .development_routes import merge_current_development_item
+            merged = merge_current_development_item(int(session["project_id"]))
+            report["execution_started"] = {
+                "kind": "merge",
+                "status": merged.get("status") or "",
+                "commit": str((merged.get("promotion") or {}).get("main_commit") or ""),
+            }
+        except HTTPException as exc:
+            report["execution_error"] = str(exc.detail)
+
+    content = development_state.format_action_report(report)
+    stamp = now()
+    with connect() as conn:
+        user_id = int(conn.execute(
+            "INSERT INTO messages(session_id,role,content,activities,created_at) VALUES(?,?,?,?,?)",
+            (session_id, "user", body.content.strip(), "[]", stamp),
+        ).lastrowid)
+        assistant_id = int(conn.execute(
+            "INSERT INTO messages(session_id,role,content,activities,created_at) VALUES(?,?,?,?,?)",
+            (session_id, "assistant", content, "[]", stamp),
+        ).lastrowid)
+        conn.execute("UPDATE sessions SET updated_at=? WHERE id=?", (stamp, session_id))
+    return {
+        "action": action,
+        "report": report,
+        "messages": [
+            {"id": user_id, "session_id": session_id, "role": "user", "content": body.content.strip(), "activities": []},
+            {"id": assistant_id, "session_id": session_id, "role": "assistant", "content": content, "activities": []},
+        ],
+    }
+
+
 
 @router.get('/api/sessions/{session_id}/runs')
 def runs(session_id: int):

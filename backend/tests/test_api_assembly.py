@@ -8,11 +8,19 @@ def test_task_and_pr_review_routes_are_mounted():
     assert "/api/tasks/{task_id}/worktree/push" in paths
     assert "/api/tasks/{task_id}/worktree/pull-request" in paths
     assert "/api/tasks/{task_id}/lifecycle" in paths
+    assert "/api/tasks/{task_id}/retry-dependants" in paths
+    assert "/api/tasks/{task_id}/resume" in paths
+    assert "/api/tasks/{task_id}/recovery" in paths
     assert "/api/tasks/{task_id}/worktree/cleanup" in paths
     assert "/api/projects/{project_id}/github/pull-requests/review" in paths
     assert "/api/projects/{project_id}/github/pull-requests/{number}/diff" in paths
     assert "/api/projects/{project_id}/github/pull-requests/{number}/comments" in paths
     assert "/api/projects/{project_id}/github/pull-requests/{number}/reviews" in paths
+    assert "/api/projects/{project_id}/development-state" in paths
+    assert "/api/sessions/{session_id}/development-action" in paths
+    assert "/api/projects/{project_id}/development-actions/{action}" in paths
+    assert "/api/projects/{project_id}/development-mode" in paths
+    assert "/api/projects/{project_id}/development-evidence" in paths
     assert "/api/projects/{project_id}/orchestration" in paths
     assert "/api/projects/{project_id}/orchestration/tasks" in paths
     assert "/api/projects/{project_id}/orchestration/lead" in paths
@@ -23,3 +31,19 @@ def test_task_and_pr_review_routes_are_mounted():
     assert "/api/tasks/{lead_task_id}/integration/checks" in paths
     assert "/api/tasks/{lead_task_id}/integration/push" in paths
     assert "/api/tasks/{lead_task_id}/integration/pull-request" in paths
+    assert "/api/projects/{project_id}/skills/swarm" in paths
+    assert "/api/swarm-profiles" in paths
+    assert "/api/projects/{project_id}/swarms" in paths
+    assert "/api/projects/{project_id}/swarms/preflight" in paths
+    assert "/api/projects/{project_id}/swarms/self-test" in paths
+    assert "/api/projects/{project_id}/swarms/git/init" in paths
+    assert "/api/swarms/{swarm_id}" in paths
+    assert "/api/swarms/{swarm_id}/agents" in paths
+    assert "/api/swarms/{swarm_id}/blackboard" in paths
+    assert "/api/swarms/{swarm_id}/events" in paths
+    assert "/api/swarms/{swarm_id}/coordinator/events" in paths
+    assert "/api/swarms/{swarm_id}/board" in paths
+    assert "/api/swarms/{swarm_id}/pause" in paths
+    assert "/api/swarms/{swarm_id}/resume" in paths
+    assert "/api/swarm-agents/{task_id}" in paths
+    assert "/api/swarm-agents/{task_id}/input" in paths
