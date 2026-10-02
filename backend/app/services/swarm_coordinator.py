@@ -535,6 +535,8 @@ def _consider_help_request(run: dict, completed: list[dict]) -> bool:
         task_kind=role,
         priority=125,
         depth=1,
+        ownership_scope=[str(value).strip() for value in (decision.get("ownership") or []) if str(value).strip()],
+        acceptance_criteria=[str(value).strip() for value in (decision.get("acceptance_criteria") or []) if str(value).strip()],
     )
     swarm.publish(
         swarm_id,
@@ -579,7 +581,8 @@ def _help_decision(run: dict, profile: dict, request: dict, requester: dict | No
         "You are the persistent Coordinator for a local Olladex software-engineering swarm. "
         "A running specialist requested another specialist. Decide whether one additional bounded helper is materially useful. "
         "Return JSON only: {\"action\":\"spawn|decline\",\"role\":\"backend|frontend|tester|researcher|coder|documentation|worker\","
-        "\"title\":\"...\",\"prompt\":\"...\",\"reason\":\"...\"}. "
+        "\"title\":\"...\",\"prompt\":\"...\",\"ownership\":[\"path/or/module\"],"
+        "\"acceptance_criteria\":[\"observable completion condition\"],\"reason\":\"...\"}. "
         "Do not spawn a manager, reviewer, challenger or recursive coordinator. "
         "Prefer declining when the requesting agent can reasonably complete the work itself or the request duplicates existing work.\n\n"
         + json.dumps(evidence, default=str)[:20000]
@@ -694,6 +697,8 @@ def _consider_pre_review(run: dict, profile: dict, completed: list[dict]) -> boo
         task_kind=role,
         priority=175,
         depth=1,
+        ownership_scope=[str(value).strip() for value in (decision.get("ownership") or []) if str(value).strip()],
+        acceptance_criteria=[str(value).strip() for value in (decision.get("acceptance_criteria") or []) if str(value).strip()],
     )
     swarm.publish(
         swarm_id,
@@ -724,7 +729,8 @@ def _followup_decision(run: dict, profile: dict, completed: list[dict], risks: l
         "All current specialists completed, but the shared Blackboard contains risk entries. "
         "Decide whether one additional focused specialist is justified before challenger/reviewer verification. "
         "Return JSON only: {\"action\":\"spawn|proceed\",\"role\":\"backend|frontend|tester|researcher|coder|documentation|worker\","
-        "\"title\":\"...\",\"prompt\":\"...\",\"reason\":\"...\"}. "
+        "\"title\":\"...\",\"prompt\":\"...\",\"ownership\":[\"path/or/module\"],"
+        "\"acceptance_criteria\":[\"observable completion condition\"],\"reason\":\"...\"}. "
         "Spawn only for a concrete unresolved risk that can be checked or fixed by one bounded task. "
         "Do not create reviewers, managers, or recursive coordinators.\n\n"
         + json.dumps(evidence, default=str)[:24000]
