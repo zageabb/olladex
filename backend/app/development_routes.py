@@ -121,6 +121,21 @@ def start_current_development_item(project_id: int, body: DevelopmentContinueReq
         )
         if part
     )
+    from .services import swarm as swarm_service
+    readiness = swarm_service.preflight(
+        project_id,
+        body.profile_id,
+        max_agents=body.max_agents,
+        max_concurrency=body.max_concurrency,
+    )
+    if not readiness.get("ready"):
+        failures = "; ".join(
+            str(item.get("detail") or item.get("name") or "preflight failed")
+            for item in readiness.get("checks") or []
+            if not item.get("ok")
+        )
+        raise HTTPException(409, "Advanced orchestration preflight failed: " + (failures or "unknown readiness failure"))
+
     from .swarm_routes import SwarmCreateRequest, create_swarm
     return create_swarm(
         project_id,
