@@ -204,7 +204,7 @@ Keep this current.
     monkeypatch.setattr(
         development_state,
         "evidence_report",
-        lambda project: {
+        lambda project, item_key="": {
             "result": "INCOMPLETE",
             "implementation": {
                 "git_branch": "feature/test",
