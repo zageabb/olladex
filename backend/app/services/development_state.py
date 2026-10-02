@@ -16,6 +16,22 @@ STATUS_ORDER = {
     "COMPLETE": 9,
 }
 PRIORITY_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+DEVELOPMENT_MODES = {
+    "explore": "Discuss ideas and architecture without changing code.",
+    "plan": "Inspect repository evidence and update development state without implementation.",
+    "build": "Implement the current objective and validate the changed behaviour.",
+    "autonomous": "Continue until the objective is verified complete or a genuine stop condition is reached.",
+    "verify": "Independently inspect implementation, validation and acceptance evidence.",
+    "recover": "Perform root-cause analysis and resume stalled or failed work from repository evidence.",
+    "release": "Run pre-merge review, delivery checks and post-merge verification.",
+}
+
+
+def normalise_mode(value: str) -> str:
+    mode = str(value or "build").strip().lower()
+    if mode not in DEVELOPMENT_MODES:
+        raise ValueError(f"Unsupported development mode: {value}")
+    return mode
 
 
 @dataclass(frozen=True)
@@ -139,6 +155,13 @@ def orchestration_context(project: dict, *, max_chars: int = 14000) -> str:
             )
             concise.append(current.get("body") or "")
         parts.append("\n".join(concise))
+    mode = normalise_mode(project.get("development_mode") or "build")
+    parts.append(
+        "Development mode: "
+        + mode
+        + "\nMode contract: "
+        + DEVELOPMENT_MODES[mode]
+    )
     if not parts:
         return ""
     text = "\n\n".join(parts)
