@@ -196,3 +196,77 @@ def resolve_action(project: dict, action: str) -> dict:
             "development_present": state["development_present"],
         }
     raise ValueError(f"Unsupported development action: {action}")
+
+
+def evidence_report(project: dict) -> dict:
+    from ..database import connect
+    from . import git
+
+    state = snapshot(project)
+    current = state.get("current_item") or {}
+    with connect() as conn:
+        tasks = [
+            dict(row) for row in conn.execute(
+                "SELECT id,title,status,source_kind,agent_role,completion_evidence,worktree_branch,completed_at "
+                "FROM background_tasks WHERE project_id=? ORDER BY id DESC LIMIT 50",
+                (project["id"],),
+            )
+        ]
+        swarms = [
+            dict(row) for row in conn.execute(
+                "SELECT id,title,status,integration_branch,integration_check_status,promotion_status,promoted_commit,completed_at "
+                "FROM swarm_runs WHERE project_id=? ORDER BY id DESC LIMIT 20",
+                (project["id"],),
+            )
+        ]
+
+    active_statuses = {"queued", "running", "waiting_for_input", "waiting_for_approval", "coordinating"}
+    incomplete_statuses = {"budget_exhausted", "interrupted", "no_progress", "incomplete", "dependency_failed", "failed"}
+    task_summary = {
+        "total": len(tasks),
+        "active": sum(1 for item in tasks if item["status"] in active_statuses),
+        "incomplete": sum(1 for item in tasks if item["status"] in incomplete_statuses),
+        "completed": sum(1 for item in tasks if item["status"] == "completed"),
+    }
+    latest_swarm = swarms[0] if swarms else None
+    git_state = git.summary(project)
+    criteria = current.get("criteria") or []
+    criteria_complete = bool(criteria) and all(bool(item.get("complete")) for item in criteria)
+    declared_complete = current.get("status") == "COMPLETE" if current else True
+    no_active_work = task_summary["active"] == 0
+    no_known_incomplete = task_summary["incomplete"] == 0
+    repository_clean = not bool(git_state.get("changes"))
+
+    result = "VERIFIED COMPLETE" if (
+        current
+        and declared_complete
+        and criteria_complete
+        and no_active_work
+        and no_known_incomplete
+        and repository_clean
+    ) else "INCOMPLETE"
+
+    return {
+        "result": result,
+        "current_objective": state.get("current_objective") or "",
+        "current_item": current or None,
+        "implementation": {
+            "repository_state_present": state["development_present"] and state["agents_present"],
+            "git_branch": git_state.get("branch") or "",
+            "working_tree_clean": repository_clean,
+            "recent_completed_tasks": task_summary["completed"],
+        },
+        "validation": {
+            "active_tasks": task_summary["active"],
+            "incomplete_tasks": task_summary["incomplete"],
+            "latest_swarm": latest_swarm,
+        },
+        "acceptance": {
+            "criteria_completed": current.get("criteria_completed", 0) if current else 0,
+            "criteria_total": current.get("criteria_total", 0) if current else 0,
+            "all_declared_criteria_complete": criteria_complete,
+            "ledger_status": current.get("status") if current else "",
+        },
+        "tasks": tasks,
+        "swarms": swarms,
+    }
