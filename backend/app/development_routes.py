@@ -165,3 +165,30 @@ def start_current_development_item(project_id: int, body: DevelopmentContinueReq
             )
         result["swarm"]["development_item_key"] = current["key"]
     return result
+
+
+
+@router.post("/projects/{project_id}/development-actions/merge/start")
+def merge_current_development_item(project_id: int):
+    project = _project(project_id)
+    mode = development_state.normalise_mode(project.get("development_mode") or "build")
+    if mode not in {"autonomous", "release"}:
+        raise HTTPException(409, "Merge execution requires Autonomous or Release development mode")
+    report = development_state.merge_report(project)
+    if not report.get("ready"):
+        raise HTTPException(
+            409,
+            "Release gate is blocked: " + "; ".join(report.get("blockers") or ["evidence incomplete"]),
+        )
+    linked = report.get("linked_swarm") or {}
+    swarm_id = int(linked.get("id") or 0)
+    if not swarm_id:
+        raise HTTPException(
+            409,
+            "No DEVELOPMENT.md-linked Advanced orchestration integration is available for deterministic promotion",
+        )
+    from .swarm_routes import SwarmPromotionRequest, promote_swarm_integration
+    return promote_swarm_integration(
+        swarm_id,
+        SwarmPromotionRequest(target_branch=report.get("target_branch") or "main"),
+    )
