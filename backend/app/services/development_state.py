@@ -212,27 +212,47 @@ def resolve_action(project: dict, action: str) -> dict:
     raise ValueError(f"Unsupported development action: {action}")
 
 
-def evidence_report(project: dict) -> dict:
+def evidence_report(project: dict, item_key: str = "") -> dict:
     from ..database import connect
     from . import git
 
     state = snapshot(project)
-    current = state.get("current_item") or {}
+    requested_key = str(item_key or "").strip()
+    current = next(
+        (item for item in state.get("items") or [] if item.get("key") == requested_key),
+        None,
+    ) if requested_key else state.get("current_item")
+    current = current or {}
     with connect() as conn:
-        tasks = [
-            dict(row) for row in conn.execute(
-                "SELECT id,title,status,source_kind,agent_role,completion_evidence,worktree_branch,completed_at "
-                "FROM background_tasks WHERE project_id=? ORDER BY id DESC LIMIT 50",
-                (project["id"],),
-            )
-        ]
-        swarms = [
-            dict(row) for row in conn.execute(
-                "SELECT id,title,status,integration_branch,integration_check_status,promotion_status,promoted_commit,completed_at "
-                "FROM swarm_runs WHERE project_id=? ORDER BY id DESC LIMIT 20",
-                (project["id"],),
-            )
-        ]
+        linked_swarm = None
+        if requested_key:
+            linked_swarm = conn.execute(
+                "SELECT * FROM swarm_runs WHERE project_id=? AND development_item_key=? ORDER BY id DESC LIMIT 1",
+                (project["id"], requested_key),
+            ).fetchone()
+        if linked_swarm:
+            tasks = [
+                dict(row) for row in conn.execute(
+                    "SELECT id,title,status,source_kind,agent_role,completion_evidence,worktree_branch,completed_at "
+                    "FROM background_tasks WHERE swarm_id=? ORDER BY id",
+                    (linked_swarm["id"],),
+                )
+            ]
+            swarms = [dict(linked_swarm)]
+        else:
+            tasks = [
+                dict(row) for row in conn.execute(
+                    "SELECT id,title,status,source_kind,agent_role,completion_evidence,worktree_branch,completed_at "
+                    "FROM background_tasks WHERE project_id=? ORDER BY id DESC LIMIT 50",
+                    (project["id"],),
+                )
+            ]
+            swarms = [
+                dict(row) for row in conn.execute(
+                    "SELECT * FROM swarm_runs WHERE project_id=? ORDER BY id DESC LIMIT 20",
+                    (project["id"],),
+                )
+            ]
 
     active_statuses = {"queued", "running", "waiting_for_input", "waiting_for_approval", "coordinating"}
     incomplete_statuses = {"budget_exhausted", "interrupted", "no_progress", "incomplete", "dependency_failed", "failed"}
@@ -430,17 +450,21 @@ def merge_report(project: dict) -> dict:
     }
 
 
-def sync_development(project: dict) -> dict:
+def sync_development(project: dict, item_key: str = "") -> dict:
     from datetime import UTC, datetime
 
     state = snapshot(project)
-    current = state.get("current_item")
+    requested_key = str(item_key or "").strip()
+    current = next(
+        (item for item in state.get("items") or [] if item.get("key") == requested_key),
+        None,
+    ) if requested_key else state.get("current_item")
     if not state["development_present"]:
         raise ValueError("DEVELOPMENT.md is not present")
     if not current:
-        return {"changed": False, "reason": "No incomplete development item is available to synchronise", "current_item": None}
+        return {"changed": False, "reason": "No matching development item is available to synchronise", "current_item": None}
 
-    report = evidence_report(project)
+    report = evidence_report(project, requested_key)
     markdown = state["development_markdown"]
     today = datetime.now(UTC).date().isoformat()
     updated = re.sub(
