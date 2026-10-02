@@ -1015,21 +1015,25 @@ def _coding_completion_evidence(task: dict, result: str, starting_head: str) -> 
     validation_required = bool(task.get("_validation_required"))
     validation_present = bool(activity["validation_commands"])
     no_progress = not meaningful_change
+    missing_handoff = meaningful_change and not bool(response)
     missing_validation = meaningful_change and validation_required and not validation_present
     reason = (
         "Coding task completed without a committed or working-tree change. "
         "A final response, tool call, or validation command alone is not implementation evidence."
         if no_progress else
+        "Coding task changed the repository but returned no final hand-off describing the outcome and evidence."
+        if missing_handoff else
         "Coding task changed the repository but did not run the validation requested by the task."
         if missing_validation else ""
     )
-    failure_status = "no_progress" if no_progress else "incomplete" if missing_validation else ""
+    failure_status = "no_progress" if no_progress else "incomplete" if (missing_handoff or missing_validation) else ""
     return {
         "required": True,
-        "ok": not (no_progress or missing_validation),
+        "ok": not (no_progress or missing_handoff or missing_validation),
         "failure_status": failure_status,
         "reason": reason,
         "response_nonempty": bool(response),
+        "handoff_present": bool(response),
         "meaningful_change": meaningful_change,
         "validation_required": validation_required,
         "validation_present": validation_present,
