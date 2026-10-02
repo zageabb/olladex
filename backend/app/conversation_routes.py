@@ -43,6 +43,39 @@ def development_action(session_id: int, body: Turn):
         report = development_state.action_report(project, action)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
+
+    if action == "continue" and development_state.normalise_mode(project.get("development_mode") or "build") == "autonomous":
+        with connect() as conn:
+            profile = conn.execute(
+                "SELECT id FROM swarm_profiles WHERE enabled=1 ORDER BY CASE WHEN name='Development' THEN 0 ELSE 1 END,is_builtin DESC,name LIMIT 1"
+            ).fetchone()
+        if profile:
+            try:
+                from .development_routes import DevelopmentContinueRequest, start_current_development_item
+                started = start_current_development_item(
+                    int(session["project_id"]),
+                    DevelopmentContinueRequest(profile_id=int(profile["id"])),
+                )
+                report["execution_started"] = {
+                    "kind": "advanced_orchestration",
+                    "swarm_id": int((started.get("swarm") or {}).get("id") or 0),
+                }
+            except HTTPException as exc:
+                report["execution_error"] = str(exc.detail)
+        else:
+            report["execution_error"] = "No enabled Advanced orchestration profile is available."
+    elif action == "merge" and development_state.normalise_mode(project.get("development_mode") or "build") in {"autonomous", "release"}:
+        try:
+            from .development_routes import merge_current_development_item
+            merged = merge_current_development_item(int(session["project_id"]))
+            report["execution_started"] = {
+                "kind": "merge",
+                "status": merged.get("status") or "",
+                "commit": str((merged.get("promotion") or {}).get("main_commit") or ""),
+            }
+        except HTTPException as exc:
+            report["execution_error"] = str(exc.detail)
+
     content = development_state.format_action_report(report)
     stamp = now()
     with connect() as conn:
