@@ -40,7 +40,8 @@ type SwarmModelSelfTest = { ready:boolean; models:{model:string;roles:string[];o
 type SwarmIntegrationPlan = { task_ids?:number[]; branches:string[]; overlaps:{path:string;branches:string[]}[]; files_by_branch?:Record<string,string[]>; path?:string; branch?:string; check_status?:string; check_output?:string };
 type DevelopmentItem = { key:string; title:string; status:string; priority:string; body:string };
 type DevelopmentState = { project_id:number; current_objective:string; current_item?:DevelopmentItem|null; items:DevelopmentItem[]; agents_present:boolean; development_present:boolean; development_mode:string; available_modes:Record<string,string>; git:{repository:boolean;branch:string;changes:{status:string;path:string}[];ahead:number;behind:number} };
-type DevelopmentAction = { action:string; current_objective:string; current_item?:DevelopmentItem|null; execution:{mode:string;objective:string;dev_item:string} };
+type DevelopmentEvidence = { result:string; current_objective:string; current_item?:DevelopmentItem|null; implementation:{repository_state_present:boolean;git_branch:string;working_tree_clean:boolean;recent_completed_tasks:number}; validation:{active_tasks:number;incomplete_tasks:number;latest_swarm?:{id:number;title:string;status:string;integration_check_status:string;promotion_status:string;promoted_commit:string}|null}; acceptance:{criteria_completed:number;criteria_total:number;all_declared_criteria_complete:boolean;ledger_status:string} };
+type DevelopmentAction = { action:string; current_objective:string; current_item?:DevelopmentItem|null; execution:{mode:string;objective:string;dev_item:string}; evidence?:DevelopmentEvidence };
 
 export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversation }: { projectId:number; onCreated:()=>void; onOpenConversation?:(sessionId:number)=>void }) {
   const [graph,setGraph]=useState<Graph>({project_id:projectId,nodes:[]});
@@ -80,6 +81,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
   const [budgetGrantAmounts,setBudgetGrantAmounts]=useState<Record<number,string>>({});
   const swarmCursors=useRef({event:0,coordinator_event:0,blackboard:0});
   const [developmentState,setDevelopmentState]=useState<DevelopmentState|null>(null);
+  const [developmentEvidence,setDevelopmentEvidence]=useState<DevelopmentEvidence|null>(null);
 
   useEffect(()=>{
     swarmCursors.current={event:0,coordinator_event:0,blackboard:0};
@@ -184,6 +186,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
         setSwarmTitle(`${result.current_item.key}: ${result.current_item.title}`);
       }
       if(action==="verify"||action==="evidence"){
+        setDevelopmentEvidence(result.evidence||null);
         setNotice(result.current_item
           ? `${action==="verify"?"Verification":"Evidence"} target: ${result.current_item.key} — ${result.current_item.title}`
           : "No incomplete development item was found.");
