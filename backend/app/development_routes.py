@@ -35,17 +35,26 @@ def _response(project: dict, action: str) -> dict:
         **resolved,
         "git": git.summary(project),
         "execution": {
-            "mode": (
-                "verify" if action in {"verify", "evidence"}
-                else "autonomous" if action == "continue"
-                else "plan"
-            ),
+            "mode": resolved.get("mode") or "plan",
             "objective": current.get("title") or resolved.get("current_objective") or "",
             "dev_item": current.get("key") or "",
         },
     }
     if action in {"verify", "evidence"}:
         response["evidence"] = development_state.evidence_report(project)
+    elif action == "ci":
+        response["ci"] = development_state.ci_report(project)
+    elif action == "review":
+        response["review"] = development_state.review_report(project)
+    elif action == "recover":
+        response["recovery"] = development_state.recovery_report(project)
+    elif action == "merge":
+        response["merge"] = development_state.merge_report(project)
+    elif action == "sync-state":
+        response["sync"] = development_state.sync_development(project)
+        refreshed = development_state.snapshot(project)
+        response["current_objective"] = refreshed.get("current_objective") or ""
+        response["current_item"] = refreshed.get("current_item")
     return response
 
 
