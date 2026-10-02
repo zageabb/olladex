@@ -26,6 +26,19 @@ DEVELOPMENT_MODES = {
     "release": "Run pre-merge review, delivery checks and post-merge verification.",
 }
 
+DEVELOPMENT_ACTIONS = {
+    "status": "plan",
+    "continue": "autonomous",
+    "verify": "verify",
+    "evidence": "verify",
+    "ci": "verify",
+    "review": "verify",
+    "recover": "recover",
+    "next": "plan",
+    "merge": "release",
+    "sync-state": "plan",
+}
+
 
 def normalise_mode(value: str) -> str:
     mode = str(value or "build").strip().lower()
@@ -187,9 +200,10 @@ def resolve_action(project: dict, action: str) -> dict:
     state = snapshot(project)
     action = action.strip().lower().lstrip("/")
     current = state.get("current_item")
-    if action in {"status", "next", "continue", "verify", "evidence", "sync-state"}:
+    if action in DEVELOPMENT_ACTIONS:
         return {
             "action": action,
+            "mode": DEVELOPMENT_ACTIONS[action],
             "current_objective": state.get("current_objective") or "",
             "current_item": current,
             "agents_present": state["agents_present"],
