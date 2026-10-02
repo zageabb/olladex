@@ -771,13 +771,34 @@ def _dependency_context(task: dict) -> str:
         return ""
     placeholders = ",".join("?" for _ in dependency_ids)
     with connect() as conn:
-        rows = [dict(row) for row in conn.execute(f"SELECT id,title,agent_role,status,result,error,worktree_branch,pull_request_number,pull_request_state FROM background_tasks WHERE id IN ({placeholders}) ORDER BY id", dependency_ids)]
+        rows = [dict(row) for row in conn.execute(
+            f"SELECT id,title,agent_role,status,result,error,worktree_branch,pull_request_number,pull_request_state,"
+            f"acceptance_criteria,completion_evidence FROM background_tasks WHERE id IN ({placeholders}) ORDER BY id",
+            dependency_ids,
+        )]
     parts = ["Dependency hand-offs from completed specialist tasks:"]
     for item in rows:
+        try:
+            criteria = json.loads(item.get("acceptance_criteria") or "[]")
+        except (TypeError, json.JSONDecodeError):
+            criteria = []
+        try:
+            evidence = json.loads(item.get("completion_evidence") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            evidence = {}
+        criteria_text = (
+            "\nAcceptance criteria:\n- " + "\n- ".join(str(value) for value in criteria)
+            if criteria else ""
+        )
+        evidence_text = (
+            "\nCompletion evidence: " + json.dumps(evidence, default=str)[:6000]
+            if evidence else ""
+        )
         parts.append(
             f"\nTask #{item['id']} — {item['title']} ({item.get('agent_role') or 'worker'}, {item['status']})\n"
             f"Branch: {item.get('worktree_branch') or 'none'} | PR: {item.get('pull_request_number') or 'none'} {item.get('pull_request_state') or ''}\n"
             f"Result:\n{(item.get('result') or item.get('error') or 'No result')[:12000]}"
+            f"{criteria_text}{evidence_text}"
         )
     return "\n".join(parts)
 
