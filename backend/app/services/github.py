@@ -69,6 +69,39 @@ def issue(project: dict, number: int) -> dict:
     return _json_output(code, output, f"Could not load GitHub issue #{number}")  # type: ignore[return-value]
 
 
+def commit_checks(project: dict, sha: str = "") -> list[dict]:
+    slug = repository_slug(project)
+    commit = str(sha or "").strip()
+    if not commit:
+        code, output = git._git(project, "rev-parse", "HEAD")
+        if code:
+            raise ValueError(output.strip() or "Could not resolve current Git HEAD")
+        commit = output.strip()
+    code, output = _gh(
+        project,
+        [
+            "api",
+            "-H", "Accept: application/vnd.github+json",
+            f"repos/{slug}/commits/{commit}/check-runs",
+        ],
+        timeout=60,
+    )
+    payload = _json_output(code, output, f"Could not load GitHub checks for {commit[:12]}")
+    if not isinstance(payload, dict):
+        return []
+    result: list[dict] = []
+    for item in payload.get("check_runs") or []:
+        if not isinstance(item, dict):
+            continue
+        result.append({
+            "name": str(item.get("name") or "check"),
+            "status": str(item.get("status") or ""),
+            "conclusion": str(item.get("conclusion") or ""),
+            "url": str(item.get("html_url") or item.get("details_url") or ""),
+        })
+    return result
+
+
 def pull_requests(project: dict, state: str = "open") -> list[dict]:
     if state not in {"open", "closed", "merged", "all"}:
         raise ValueError("Unsupported pull-request state")
