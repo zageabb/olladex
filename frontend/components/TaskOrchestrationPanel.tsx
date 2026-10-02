@@ -184,7 +184,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
         ].filter(Boolean).join("\n\n");
         if(
           action==="continue"
-          && developmentState?.development_mode==="autonomous"
+          && ["build","autonomous","recover","release"].includes(developmentState?.development_mode||"")
           && swarmSkill?.enabled
           && swarmProfileId
         ){
@@ -255,7 +255,7 @@ export function TaskOrchestrationPanel({ projectId, onCreated, onOpenConversatio
           ? `${result.current_item.key} · ${result.current_item.status} · ${result.current_item.priority}`
           : "No incomplete development item was found.");
       }else if(action==="continue"||action==="next"){
-        if(!(action==="continue"&&developmentState?.development_mode==="autonomous"&&swarmSkill?.enabled&&swarmProfileId)){
+        if(!(action==="continue"&&["build","autonomous","recover","release"].includes(developmentState?.development_mode||"")&&swarmSkill?.enabled&&swarmProfileId)){
           setNotice(result.current_item
             ? `Loaded ${result.current_item.key} into Advanced orchestration.`
             : "No incomplete development item was found.");
